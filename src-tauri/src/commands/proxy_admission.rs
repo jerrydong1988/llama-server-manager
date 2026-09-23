@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 const MAX_WAITERS: usize = 4096;
+const MAX_KEY_WAITERS: usize = 256;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +19,40 @@ pub struct AdmissionKeySnapshot {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn saturated_key_cannot_fill_shared_waiters_or_block_another_key() {
+        let a = Arc::new(Admission::default());
+        a.configure(&ProxyConfig {
+            max_concurrent_requests: 2,
+            api_keys: vec![ProxyApiKey {
+                id: "a".into(),
+                max_concurrent_requests: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let hold = a.acquire("a", Duration::from_secs(1)).await.unwrap();
+        let mut tasks = Vec::new();
+        for _ in 0..MAX_KEY_WAITERS {
+            let a = a.clone();
+            tasks.push(tokio::spawn(async move {
+                a.acquire("a", Duration::from_secs(20)).await
+            }));
+        }
+        queued(&a, MAX_KEY_WAITERS).await;
+        assert!(a.acquire("a", Duration::from_millis(10)).await.is_none());
+        let other = a.acquire("b", Duration::from_millis(100)).await;
+        assert!(other.is_some());
+        drop(other);
+        drop(hold);
+        for task in tasks {
+            task.abort();
+            let _ = task.await;
+        }
+        assert_eq!(a.snapshot().queued, 0);
+    }
+
     use super::*;
     use crate::models::ProxyApiKey;
 
@@ -300,7 +335,29 @@ impl Admission {
     ) -> Option<AdmissionPermit> {
         let waiter = {
             let mut state = self.state.lock().unwrap();
-            if state.waiting.len() >= MAX_WAITERS {
+            if state.active.len() < state.limit
+                && state.available(key)
+                && state.selected().is_none()
+            {
+                let id = state.next;
+                state.next = state.next.wrapping_add(1);
+                *state.key_active.entry(key.to_string()).or_default() += 1;
+                state
+                    .active
+                    .insert(id, (key.to_string(), String::new(), String::new()));
+                return Some(AdmissionPermit {
+                    admission: self.clone(),
+                    id,
+                });
+            }
+            if state.waiting.len() >= MAX_WAITERS
+                || state
+                    .waiting
+                    .iter()
+                    .filter(|(_, waiting_key)| waiting_key == key)
+                    .count()
+                    >= MAX_KEY_WAITERS
+            {
                 return None;
             }
             let id = state.next;

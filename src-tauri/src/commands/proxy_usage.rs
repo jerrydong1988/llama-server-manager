@@ -176,13 +176,9 @@ impl UsageHandle {
     pub fn request(&self, body: &[u8]) {
         if let Ok(value) = serde_json::from_slice::<Value>(body) {
             let mut s = self.0.lock().unwrap();
-            s.record.model = value
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(512)
-                .collect();
+            // Client selectors become a metric dimension only after resolving
+            // an actual configured target. Rejected arbitrary names share one bucket.
+            s.record.model.clear();
             let items = if s.parser.protocol == UsageProtocol::Embedding {
                 value.get("input").or_else(|| value.get("content"))
             } else if s.parser.protocol == UsageProtocol::Rerank {
@@ -379,6 +375,20 @@ pub(crate) fn is_usage_only_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn arbitrary_rejected_selectors_cannot_create_persistent_model_groups() {
+        let key = uuid::Uuid::new_v4().to_string();
+        for i in 0..100 {
+            let handle = UsageHandle::new("/v1/chat/completions").unwrap();
+            handle.identity(&key, "group-test");
+            handle.request(format!("{{\"model\":\"unknown-{i}\"}}").as_bytes());
+            handle.finish(404, false);
+        }
+        let records = super::super::usage_store::TEST_RECORDS.lock().unwrap();
+        let matching: Vec<_> = records.iter().filter(|r| r.key_id == key).collect();
+        assert_eq!(matching.len(), 100);
+        assert!(matching.iter().all(|r| r.model.is_empty()));
+    }
     #[test]
     fn cancellation_retains_partial_usage_and_identity_once() {
         let key = uuid::Uuid::new_v4().to_string();

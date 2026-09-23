@@ -48,6 +48,20 @@ static PATH_AUTHORITY: LazyLock<Mutex<PathAuthority>> = LazyLock::new(|| {
     Mutex::new(normalize_authority(authority))
 });
 
+fn read_authority_at(path: &Path) -> Result<Option<PathAuthority>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(normalize_authority)
+            .map(Some)
+            .map_err(|error| format!("目录授权文件损坏，拒绝自动恢复授权: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("无法读取目录授权: {error}")),
+    }
+}
+fn fresh_authority() -> Result<PathAuthority, String> {
+    Ok(read_authority_at(&path_authority_path())?.unwrap_or_default())
+}
+
 fn path_authority_path() -> PathBuf {
     crate::utils::get_data_dir()
         .join("configs")
@@ -106,7 +120,7 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     let root = canonical_directory(root)?;
     let key = normalized_authority_key(&root);
     let mut authority = PATH_AUTHORITY.lock().unwrap();
-    let mut updated = authority.clone();
+    let mut updated = fresh_authority()?;
     match purpose {
         "engine" => {
             updated.engine_roots.insert(key);
@@ -157,7 +171,7 @@ pub async fn list_authorized_directories() -> Vec<AuthorizedDirectory> {
 }
 
 pub(crate) fn authorized_directories_snapshot() -> Vec<AuthorizedDirectory> {
-    let authority = PATH_AUTHORITY.lock().unwrap();
+    let authority = fresh_authority().unwrap_or_default();
     let mut directories = Vec::with_capacity(
         authority.engine_roots.len() + authority.model_roots.len() + authority.download_roots.len(),
     );
@@ -180,7 +194,7 @@ pub async fn revoke_authorized_directory(
     root: String,
 ) -> crate::error::AppResult<bool> {
     let mut authority = PATH_AUTHORITY.lock().unwrap();
-    let mut updated = authority.clone();
+    let mut updated = fresh_authority()?;
     let removed = revoke_authorized_root(&mut updated, &purpose, Path::new(root.trim()))
         .map_err(crate::error::AppError::from)?;
     if !removed {
@@ -199,6 +213,11 @@ pub fn initialize_path_authority(
 ) -> Result<(), String> {
     let app_data_root = crate::utils::get_data_dir();
     let mut authority = PATH_AUTHORITY.lock().unwrap();
+    // Existing grants (including an empty set after revocation) are authoritative.
+    if let Some(existing) = read_authority_at(&path_authority_path())? {
+        *authority = existing;
+        return Ok(());
+    }
     for root in legacy_engine_roots {
         let root = PathBuf::from(root);
         if let Ok(canonical) = canonical_directory(&root) {
@@ -230,12 +249,33 @@ pub fn require_authorized_engine_root(path: &Path) -> Result<PathBuf, String> {
         return Ok(canonical);
     }
 
-    let authority = PATH_AUTHORITY.lock().unwrap();
+    let authority = fresh_authority()?;
     if is_authorized_by_roots(&canonical, &authority.engine_roots) {
         Ok(canonical)
     } else {
         Err("引擎目录未获授权；请使用应用内的目录选择按钮重新选择。".to_string())
     }
+}
+
+pub(crate) fn executable_sha256(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hash = Sha256::new();
+    std::io::copy(&mut file, &mut hash).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+pub(crate) fn validate_runtime_executable(executable: &str, expected: &str) -> Result<(), String> {
+    let path = Path::new(executable);
+    if !path.is_absolute() || expected.is_empty() {
+        return Err("后台启动缺少引擎身份，请在应用内重新启动实例".into());
+    }
+    let root = require_authorized_engine_root(path.parent().ok_or("引擎路径无父目录")?)?;
+    let canonical = require_path_within_root(path, &root)?;
+    if executable_sha256(&canonical)? != expected {
+        return Err("引擎文件已更改，请在应用内重新确认并启动实例".into());
+    }
+    Ok(())
 }
 
 pub fn require_authorized_model_root(path: &Path) -> Result<PathBuf, String> {
@@ -247,7 +287,7 @@ pub fn require_authorized_model_root(path: &Path) -> Result<PathBuf, String> {
         return Ok(canonical);
     }
 
-    let authority = PATH_AUTHORITY.lock().unwrap();
+    let authority = fresh_authority()?;
     if is_authorized_by_roots(&canonical, &authority.model_roots) {
         Ok(canonical)
     } else {
@@ -271,7 +311,7 @@ pub fn require_authorized_model_path(path: &Path) -> Result<PathBuf, String> {
         return Ok(canonical);
     }
 
-    let authority = PATH_AUTHORITY.lock().unwrap();
+    let authority = fresh_authority()?;
     if is_authorized_by_roots(&canonical, &authority.model_roots) {
         Ok(canonical)
     } else {
@@ -321,7 +361,7 @@ pub fn resolve_authorized_download_root(
         canonical_directory(app_data_root).unwrap_or_else(|_| app_data_root.to_path_buf());
     validate_download_root_boundary(&requested, &canonical_app_data_root)?;
 
-    let authority = PATH_AUTHORITY.lock().unwrap();
+    let authority = fresh_authority()?;
     if authority
         .download_roots
         .iter()
@@ -366,77 +406,6 @@ pub fn ensure_existing_download_ancestors_within_root(
     }
 }
 
-pub fn create_download_directory_within_root(
-    root: &Path,
-    destination: &Path,
-) -> Result<PathBuf, String> {
-    ensure_download_path_within_root(destination, root)?;
-    let canonical_root = canonical_directory(root)?;
-    let relative = destination.strip_prefix(root).map_err(|_| {
-        format!(
-            "下载目录 {} 无法相对于授权根 {} 解析",
-            destination.display(),
-            root.display()
-        )
-    })?;
-    let mut current = canonical_root.clone();
-    for component in relative.components() {
-        let Component::Normal(segment) = component else {
-            continue;
-        };
-        current.push(segment);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(format!(
-                        "下载目录包含不允许的符号链接: {}",
-                        current.display()
-                    ));
-                }
-                let canonical = std::fs::canonicalize(&current)
-                    .map_err(|error| format!("无法解析下载目录 {}: {error}", current.display()))?;
-                if !path_is_within(&canonical, &canonical_root) {
-                    return Err(format!(
-                        "下载目录 {} 越过了已授权目录 {}",
-                        canonical.display(),
-                        canonical_root.display()
-                    ));
-                }
-                if !std::fs::metadata(&canonical)
-                    .map_err(|error| format!("无法访问下载目录 {}: {error}", canonical.display()))?
-                    .is_dir()
-                {
-                    return Err(format!("下载路径不是目录: {}", canonical.display()));
-                }
-                current = canonical;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&current).map_err(|create_error| {
-                    format!("无法创建下载目录 {}: {create_error}", current.display())
-                })?;
-                let canonical = std::fs::canonicalize(&current).map_err(|canonical_error| {
-                    format!(
-                        "无法解析新建下载目录 {}: {canonical_error}",
-                        current.display()
-                    )
-                })?;
-                if !path_is_within(&canonical, &canonical_root) {
-                    return Err(format!(
-                        "新建下载目录 {} 越过了已授权目录 {}",
-                        canonical.display(),
-                        canonical_root.display()
-                    ));
-                }
-                current = canonical;
-            }
-            Err(error) => {
-                return Err(format!("无法检查下载目录 {}: {error}", current.display()));
-            }
-        }
-    }
-    Ok(current)
-}
-
 #[tauri::command]
 pub async fn pick_authorized_directory(
     purpose: String,
@@ -464,6 +433,25 @@ pub async fn pick_authorized_directory(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn authority_presence_is_distinct_from_missing_empty_and_corrupt() {
+        let dir = std::env::temp_dir().join(format!("authority-policy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("grants.json");
+        assert!(read_authority_at(&file).unwrap().is_none());
+        std::fs::write(&file, b"{}").unwrap();
+        assert!(read_authority_at(&file)
+            .unwrap()
+            .unwrap()
+            .engine_roots
+            .is_empty());
+        std::fs::write(&file, b"broken").unwrap();
+        assert!(read_authority_at(&file).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(validate_runtime_executable("relative-server", "digest").is_err());
+    }
+
     use super::*;
 
     #[test]

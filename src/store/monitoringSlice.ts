@@ -73,6 +73,7 @@ export function createMonitoringSlice(set: AppStoreSet): Pick<
       const nextFrames = { ...state.monitoringFramesByInstance }
       const nextCurrent = { ...state.monitoringCurrentByInstance }
       for (const frame of frames) {
+        if (state.instancesHydrated && !state.instances.some(instance => instance.id === frame.instanceId)) continue
         const timeline = appendMonitoringFrame(nextFrames[frame.instanceId] || [], frame)
         nextFrames[frame.instanceId] = timeline
         const current = timeline[timeline.length - 1]
@@ -95,6 +96,7 @@ export function createMonitoringSlice(set: AppStoreSet): Pick<
       const nextCurrent = { ...state.monitoringCurrentByInstance }
       const grouped = new Map<string, MonitoringFrame[]>()
       for (const frame of frames) {
+        if (state.instancesHydrated && !state.instances.some(instance => instance.id === frame.instanceId)) continue
         const instanceFrames = grouped.get(frame.instanceId) || []
         instanceFrames.push(frame)
         grouped.set(frame.instanceId, instanceFrames)
@@ -114,7 +116,7 @@ export function createMonitoringSlice(set: AppStoreSet): Pick<
         monitoringCurrentByInstance: nextCurrent,
       }
     }),
-    applyPerfUpdate: (event: PerfUpdateEvent) => set((state) => ({
+    applyPerfUpdate: (event: PerfUpdateEvent) => set((state) => (!state.instancesHydrated || state.instances.some(instance => instance.id === event.instanceId)) ? ({
       runningTasksByInstance: {
         ...state.runningTasksByInstance,
         [event.instanceId]: event.tasks,
@@ -123,6 +125,6 @@ export function createMonitoringSlice(set: AppStoreSet): Pick<
         ...state.lastCompletedTaskByInstance,
         [event.instanceId]: event.lastCompleted,
       } : state.lastCompletedTaskByInstance,
-    })),
+    }) : state),
   }
 }

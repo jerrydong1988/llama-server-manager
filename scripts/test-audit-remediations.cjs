@@ -118,7 +118,7 @@ assert.match(downloadSource, /MAX_HUGGINGFACE_TREE_PAGES/, 'Hugging Face browse 
 assert.match(downloadSource, /read_bounded_json/, 'repository browse responses must be bounded')
 assert.match(downloadSource, /tokio::fs::File::from_std/, 'download writes must use Tokio file IO')
 assert.match(downloadSource, /INFLIGHT_SNAPSHOT_WORKER\.schedule/, 'hot-path inflight snapshots must be delegated to the background writer')
-assert.match(downloadSource, /let resume_from = temp_path\s*\.metadata\(\)/, 'resume offsets must use the real partial file length')
+assert.match(downloadSource, /let resume_from = save_path\s*\.metadata\(&temp_path\)/, 'resume offsets must use the real partial file length')
 assert.match(downloadSource, /has_non_retryable_error\.store\(true, Ordering::SeqCst\);[\s\S]*"retryable": false/, 'disk write failures must not be retried')
 assert.match(downloadSource, /let \(generation, inflight\)[\s\S]*download_active_entries\.lock[\s\S]*INFLIGHT_SNAPSHOT_GENERATION\.fetch_add/, 'inflight snapshot state and generation must be captured under one lock')
 assert.match(downloadBrowseSource, /'check_local_files'/, 'local file discovery must use one batched IPC request')

@@ -43,6 +43,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   models: [],
   engines: [],
   instances: [],
+  instancesHydrated: false,
   instanceLifecycle: {},
   checkpointStatuses: {},
   logs: {},

@@ -145,6 +145,7 @@ function testLaunchSpec(dataDir, backendPort) {
     engine_backend: 'test',
     command,
     command_display: command.join(' '),
+    executable_sha256: crypto.createHash('sha256').update(fs.readFileSync(command[0])).digest('hex'),
     workload: 'inference',
     working_directory: dataDir,
   }
@@ -158,6 +159,7 @@ function crashingLaunchSpec(dataDir, backendPort) {
     ...testLaunchSpec(dataDir, backendPort),
     command,
     command_display: command.join(' '),
+    executable_sha256: crypto.createHash('sha256').update(fs.readFileSync(command[0])).digest('hex'),
   }
 }
 
@@ -331,6 +333,7 @@ http.createServer((request, response) => {
     command: [process.execPath, fixturePath, String(port), eventsPath, '--slot-save-path', scratch],
     checkpoint: { eligibility_revision: 2, eligibility: { eligible: true, reason_code: 'none', reasons: [] }, fingerprint },
   }
+  spec.executable_sha256 = crypto.createHash('sha256').update(fs.readFileSync(spec.command[0])).digest('hex')
   spec.command_display = spec.command.join(' ')
   const started = await request(endpoint, token, { command: 'start_instance', payload: { spec } }, 'checkpoint-start')
   assert.equal(started.reply?.result, 'instance', JSON.stringify(started))
@@ -401,6 +404,10 @@ async function main() {
       }
     })
   })
+  const grantDir = path.join(dataDir, 'configs')
+  fs.mkdirSync(grantDir, { recursive: true })
+  const engineRoots = [path.dirname(process.execPath), process.platform === 'win32' ? path.dirname(process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe') : '/bin'].map(p => fs.realpathSync(p))
+  fs.writeFileSync(path.join(grantDir, 'authorized-paths.json'), JSON.stringify({ engine_roots: engineRoots }))
   const backendPort = await listen(backend)
   const proxyPort = await reserveLoopbackPort()
   const proxyBlocker = net.createServer()
@@ -431,7 +438,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
       || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v2')
       || !status.reply.payload?.capabilities?.includes('router_usage_v6')
-      || !status.reply.payload?.capabilities?.includes('router_listener_no_inherit_v1')
+      || !status.reply.payload?.capabilities?.includes('router_listener_no_inherit_v2_authorized_replay')
       || typeof status.reply.payload?.checkpoints !== 'object') {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }

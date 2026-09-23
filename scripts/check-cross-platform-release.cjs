@@ -25,7 +25,6 @@ const reviewedActionPins = new Map([
   ['Swatinem/rust-cache', new Set(['6323deb102c322ba6fcbdcafc7e3dddab59af2b6'])],
 ])
 const approvedRustsecAdvisories = [
-  'RUSTSEC-2024-0370',
   'RUSTSEC-2024-0411',
   'RUSTSEC-2024-0412',
   'RUSTSEC-2024-0413',
@@ -37,11 +36,6 @@ const approvedRustsecAdvisories = [
   'RUSTSEC-2024-0419',
   'RUSTSEC-2024-0420',
   'RUSTSEC-2024-0429',
-  'RUSTSEC-2025-0075',
-  'RUSTSEC-2025-0080',
-  'RUSTSEC-2025-0081',
-  'RUSTSEC-2025-0098',
-  'RUSTSEC-2025-0100',
 ]
 
 function jobBody(name) {
@@ -134,7 +128,7 @@ const configuredAdvisories = rustsecIgnoreMatch
 const uniqueConfiguredAdvisories = [...new Set(configuredAdvisories)].sort()
 const expectedAdvisories = [...approvedRustsecAdvisories].sort()
 if (JSON.stringify(uniqueConfiguredAdvisories) !== JSON.stringify(expectedAdvisories)) {
-  failures.push('RustSec audit exceptions do not exactly match the 17 approved upstream advisories')
+  failures.push('RustSec audit exceptions do not exactly match the 11 reviewed GTK3 advisories (including the verified GLib backport)')
 }
 if (configuredAdvisories.length !== uniqueConfiguredAdvisories.length) {
   failures.push('RustSec audit exceptions contain duplicate advisory IDs')

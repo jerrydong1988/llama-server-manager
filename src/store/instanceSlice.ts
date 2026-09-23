@@ -119,11 +119,22 @@ export function createInstanceSlice(
       }),
     })),
     deleteInstance: (id) => set((state) => {
-      const checkpointStatuses = { ...state.checkpointStatuses }
-      delete checkpointStatuses[id]
+      const withoutInstance = <T,>(items: Record<string, T>) => {
+        const next = { ...items }
+        delete next[id]
+        return next
+      }
       return {
         instances: state.instances.filter((instance) => instance.id !== id),
-        checkpointStatuses,
+        instancesHydrated: true,
+        checkpointStatuses: withoutInstance(state.checkpointStatuses),
+        logs: withoutInstance(state.logs),
+        recentLogs: state.recentLogs.filter(entry => entry.instanceId !== id),
+        monitoringFramesByInstance: withoutInstance(state.monitoringFramesByInstance),
+        monitoringCurrentByInstance: withoutInstance(state.monitoringCurrentByInstance),
+        runningTasksByInstance: withoutInstance(state.runningTasksByInstance),
+        lastCompletedTaskByInstance: withoutInstance(state.lastCompletedTaskByInstance),
+        instanceLifecycle: withoutInstance(state.instanceLifecycle),
       }
     }),
     moveInstance: (id, direction, orderedIds) => {
@@ -160,7 +171,8 @@ export function createInstanceSlice(
     addLog: (entry: LogEntry) => get().addLogs([entry]),
     addLogs: (entries: LogEntry[]) => set((state) => {
       if (entries.length === 0) return state
-      const normalizedEntries = entries.map(entry => ({
+      const activeIds = new Set(state.instances.map(instance => instance.id))
+      const normalizedEntries = entries.filter(entry => !state.instancesHydrated || activeIds.has(entry.instanceId)).map(entry => ({
         ...entry,
         timestamp: entry.timestamp || Date.now(),
       }))
@@ -184,14 +196,15 @@ export function createInstanceSlice(
       logs: { ...state.logs, [instanceId]: [] },
       recentLogs: state.recentLogs.filter(entry => entry.instanceId !== instanceId),
     })),
-    setCheckpointStatus: (status: CheckpointStatus) => set(state => ({
+    setCheckpointStatus: (status: CheckpointStatus) => set(state => (!state.instancesHydrated || state.instances.some(instance => instance.id === status.instance_id)) ? ({
       checkpointStatuses: {
         ...state.checkpointStatuses,
         [status.instance_id]: status,
       },
-    })),
+    }) : state),
     hydrateCheckpointStatuses: (statuses: Record<string, CheckpointStatus>) => set(state => ({
-      checkpointStatuses: { ...state.checkpointStatuses, ...statuses },
+      checkpointStatuses: { ...state.checkpointStatuses, ...Object.fromEntries(Object.entries(statuses)
+        .filter(([id]) => !state.instancesHydrated || state.instances.some(instance => instance.id === id))) },
     })),
     clearCheckpoint: async (instanceId: string) => {
       const status = await invoke<CheckpointStatus>('clear_checkpoint', { instanceId })

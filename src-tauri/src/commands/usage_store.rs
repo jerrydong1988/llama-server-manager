@@ -188,6 +188,25 @@ pub(crate) struct UsageReport {
 }
 
 pub(super) fn schema(conn: &Connection) -> Result<(), String> {
+    const VERSION: i64 = 2;
+    let version = || {
+        conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .map_err(|e| e.to_string())
+    };
+    if version()? == VERSION {
+        return Ok(());
+    }
+    if version()? > VERSION {
+        return Err("Router usage database was created by a newer application".into());
+    }
+    // Initialization is serialized across GUI/runtime processes. Ordinary reads
+    // only inspect the version and never compete for SQLite's writer lock.
+    let transaction =
+        rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+    if version()? == VERSION {
+        return transaction.commit().map_err(|e| e.to_string());
+    }
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS usage_events (
         id TEXT PRIMARY KEY, day INTEGER NOT NULL, completed INTEGER NOT NULL,
@@ -196,6 +215,9 @@ pub(super) fn schema(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS usage_events_completed ON usage_events(completed);
         CREATE INDEX IF NOT EXISTS usage_events_page ON usage_events(completed DESC,id DESC);
         CREATE INDEX IF NOT EXISTS usage_events_failure ON usage_events(json_extract(record,'$.failure.code'),completed DESC,id DESC);
+        CREATE INDEX IF NOT EXISTS usage_events_response_id ON usage_events(json_extract(record,'$.responseRequestId'));
+        CREATE INDEX IF NOT EXISTS usage_events_response_x_id ON usage_events(json_extract(record,'$.responseXRequestId'));
+        CREATE INDEX IF NOT EXISTS usage_events_upstream_id ON usage_events(json_extract(record,'$.upstreamRequestId'));
         CREATE TABLE IF NOT EXISTS usage_daily (
         id TEXT PRIMARY KEY, day INTEGER NOT NULL, key_id TEXT NOT NULL, key_name TEXT NOT NULL,
         model TEXT NOT NULL, instance_id TEXT NOT NULL, endpoint TEXT NOT NULL, kind TEXT NOT NULL,
@@ -206,11 +228,14 @@ pub(super) fn schema(conn: &Connection) -> Result<(), String> {
         id TEXT PRIMARY KEY, updated INTEGER NOT NULL, dropped INTEGER NOT NULL,
         errors INTEGER NOT NULL, last_error TEXT);
         CREATE TABLE IF NOT EXISTS usage_deletions (from_day INTEGER NOT NULL, to_day INTEGER NOT NULL, cleared_at INTEGER NOT NULL);
-        PRAGMA user_version=1;",
+        ",
     )
     .map_err(|e| e.to_string())?;
     super::usage_performance::schema(conn)?;
-    super::usage_health::schema(conn)
+    super::usage_health::schema(conn)?;
+    conn.pragma_update(None, "user_version", VERSION)
+        .map_err(|e| e.to_string())?;
+    transaction.commit().map_err(|e| e.to_string())
 }
 
 pub(super) fn open() -> Result<Connection, String> {
@@ -225,8 +250,13 @@ fn open_path(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     conn.busy_timeout(Duration::from_secs(3))
         .map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "journal_mode", "WAL")
+    let journal: String = conn
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
         .map_err(|e| e.to_string())?;
+    if !journal.eq_ignore_ascii_case("wal") {
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| e.to_string())?;
+    }
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|e| e.to_string())?;
     schema(&conn)?;
@@ -577,7 +607,10 @@ fn query(conn: &Connection, q: &UsageQuery) -> Result<UsageReport, String> {
             },
         )
         .map_err(|e| e.to_string())?;
-    for row in rows {
+    for (row_index, row) in rows.enumerate() {
+        if row_index >= 100_000 {
+            return Err("用量查询数据过多，请缩小时间范围或增加筛选条件".into());
+        }
         let (day, key, name, model, instance, endpoint, json) = row.map_err(|e| e.to_string())?;
         let summary: UsageSummary = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         total.add(&summary);
@@ -591,6 +624,9 @@ fn query(conn: &Connection, q: &UsageQuery) -> Result<UsageReport, String> {
         .into_iter()
         .enumerate()
         {
+            if groups[i].len() >= 4096 && !groups[i].contains_key(&id) {
+                return Err("用量分组过多，请增加筛选条件".into());
+            }
             let group = groups[i].entry(id.clone()).or_insert_with(|| UsageGroup {
                 id,
                 name: name.clone(),
@@ -720,6 +756,25 @@ pub(crate) static TEST_RECORDS: Mutex<Vec<UsageRecord>> = Mutex::new(Vec::new())
 mod tests {
     use super::*;
     use crate::commands::usage_protocol::TokenUsage;
+    #[test]
+    fn initialized_read_connection_does_not_wait_for_writer() {
+        let dir = std::env::temp_dir().join(format!("usage-read-lock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("usage.db");
+        let writer = open_path(&path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = std::time::Instant::now();
+        let reader = open_path(&path).unwrap();
+        let count: i64 = reader
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        writer.execute_batch("ROLLBACK").unwrap();
+        drop(reader);
+        drop(writer);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     fn request() -> UsageRecord {
         UsageRecord {
             request_id: "once".into(),

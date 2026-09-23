@@ -1,8 +1,13 @@
+#[path = "download_directory.rs"]
+mod directory;
+#[path = "download_ownership.rs"]
+mod ownership;
 use crate::models::{AppState, DownloadArtifactState, MsFileEntry, PersistedQueueEntry};
 #[cfg(test)]
 use crate::path_utils::paths_equal;
 use crate::path_utils::{path_identity_key, path_is_within};
 use crate::utils;
+use directory::DownloadDirectory;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE, LINK};
 use serde::de::DeserializeOwned;
@@ -546,6 +551,7 @@ fn validate_download_file_candidate(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 fn validate_download_artifact_paths(
     save_dir: &Path,
     final_path: &Path,
@@ -576,44 +582,14 @@ fn validate_download_artifact_paths(
     Ok(())
 }
 
-fn open_download_temp_file(
-    save_dir: &Path,
-    final_path: &Path,
-    temp_path: &Path,
-    metadata_path: &Path,
-    append: bool,
-) -> Result<std::fs::File, String> {
-    validate_download_artifact_paths(save_dir, final_path, temp_path, metadata_path)?;
-    let mut options = std::fs::OpenOptions::new();
-    options
-        .create(true)
-        .append(append)
-        .truncate(!append)
-        .write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    options
-        .open(temp_path)
-        .map_err(|error| format!("File create/write failed: {error}"))
-}
-
 fn replace_download_artifact(
-    save_dir: &Path,
+    state: &AppState,
+    task: &str,
+    dir: &DownloadDirectory,
     source: &Path,
     destination: &Path,
 ) -> Result<(), String> {
-    let metadata_path = artifact_state_path(source);
-    validate_download_artifact_paths(save_dir, destination, source, &metadata_path)?;
-    crate::persistence::replace_artifact_file(source, destination)
+    ownership::replace(state, task, dir, source, destination)
 }
 
 fn artifact_state_path(temp_path: &Path) -> PathBuf {
@@ -624,10 +600,6 @@ fn write_string_atomic(path: &Path, contents: &str) -> Result<(), String> {
     crate::persistence::atomic_write(path, contents.as_bytes(), None)
 }
 
-fn write_artifact_state_atomic(path: &Path, contents: &str) -> Result<(), String> {
-    crate::persistence::atomic_write_artifact_state(path, contents.as_bytes())
-}
-
 fn load_artifact_state(temp_path: &Path) -> Option<DownloadArtifactState> {
     let metadata_path = artifact_state_path(temp_path);
     std::fs::read_to_string(&metadata_path)
@@ -635,15 +607,22 @@ fn load_artifact_state(temp_path: &Path) -> Option<DownloadArtifactState> {
         .and_then(|s| serde_json::from_str::<DownloadArtifactState>(&s).ok())
 }
 
-async fn load_artifact_state_async(temp_path: &Path) -> Option<DownloadArtifactState> {
+async fn load_artifact_state_async(
+    dir: &DownloadDirectory,
+    temp_path: &Path,
+) -> Option<DownloadArtifactState> {
     let metadata_path = artifact_state_path(temp_path);
-    tokio::fs::read_to_string(&metadata_path)
-        .await
+    dir.read(&metadata_path)
         .ok()
         .and_then(|contents| serde_json::from_str::<DownloadArtifactState>(&contents).ok())
 }
 
-async fn save_artifact_state(state: &DownloadArtifactState, temp_path: &Path) {
+async fn save_artifact_state(
+    shared: &AppState,
+    dir: &DownloadDirectory,
+    state: &DownloadArtifactState,
+    temp_path: &Path,
+) {
     let metadata_path = artifact_state_path(temp_path);
     let json = match serde_json::to_string(state) {
         Ok(json) => json,
@@ -652,19 +631,24 @@ async fn save_artifact_state(state: &DownloadArtifactState, temp_path: &Path) {
             return;
         }
     };
-    match tokio::task::spawn_blocking(move || write_artifact_state_atomic(&metadata_path, &json))
-        .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("Failed to persist download artifact state: {error}"),
-        Err(error) => eprintln!("Download artifact state writer failed: {error}"),
+    // The private ledger is durable before the new metadata inode is published.
+    match dir.stage_write(json.as_bytes()) {
+        Ok(scratch) => {
+            if let Err(error) =
+                ownership::replace(shared, &state.task_id, dir, &scratch, &metadata_path)
+            {
+                let _ = dir.remove(&scratch);
+                eprintln!("Failed to persist download metadata: {error}");
+            }
+        }
+        Err(error) => eprintln!("Failed to stage download metadata: {error}"),
     }
 }
 
-fn cleanup_artifact_state(temp_path: &Path) {
+fn cleanup_artifact_state(state: &AppState, task: &str, dir: &DownloadDirectory, temp_path: &Path) {
     let metadata_path = artifact_state_path(temp_path);
-    let _ = std::fs::remove_file(temp_path);
-    let _ = std::fs::remove_file(&metadata_path);
+    let _ = ownership::remove_in_directory(state, task, dir, temp_path);
+    let _ = ownership::remove_in_directory(state, task, dir, &metadata_path);
 }
 
 fn now_secs() -> u64 {
@@ -938,24 +922,17 @@ fn resolve_repo_save_path(
     app: &tauri::AppHandle,
     save_dir: &str,
     repo_id: &str,
-) -> Result<PathBuf, String> {
+) -> Result<DownloadDirectory, String> {
     let managed = app.state::<AppState>();
     let config_dir = managed.config_dir.lock().unwrap();
     let app_data_root = config_dir.parent().unwrap_or(Path::new("."));
     let base_path = crate::security::resolve_authorized_download_root(app_data_root, save_dir)?;
-    let base_path = if Path::new(save_dir.trim()).is_relative() {
-        let canonical_app_data = std::fs::canonicalize(app_data_root)
-            .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
-        let canonical_base = canonical_app_data.join(save_dir.trim());
-        crate::security::create_download_directory_within_root(
-            &canonical_app_data,
-            &canonical_base,
-        )?
-    } else {
-        base_path
-    };
-    let save_path = base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
-    crate::security::create_download_directory_within_root(&base_path, &save_path)
+    let root = DownloadDirectory::open(&base_path, true).map_err(|e| e.to_string())?;
+    root.descend(
+        &base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR)),
+        true,
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn clear_control_flags_for_files(state: &AppState, files: &[MsFileEntry]) {
@@ -981,7 +958,7 @@ fn is_retryable_error(status_code: Option<u16>) -> bool {
 async fn download_single_file(
     ctx: DownloadTaskContext,
     url: String,
-    save_path: PathBuf,
+    save_path: DownloadDirectory,
     file_size: u64,
     app: tauri::AppHandle,
     has_error: Arc<AtomicBool>,
@@ -1003,20 +980,8 @@ async fn download_single_file(
             return;
         }
     };
-    let (final_path, temp_path, _metadata_path) = build_download_paths(&save_path, &file_name);
+    let (final_path, temp_path, _metadata_path) = build_download_paths(&save_path.path, &file_name);
     let metadata_path = artifact_state_path(&temp_path);
-    if let Err(error) =
-        validate_download_artifact_paths(&save_path, &final_path, &temp_path, &metadata_path)
-    {
-        has_error.store(true, Ordering::SeqCst);
-        has_non_retryable_error.store(true, Ordering::SeqCst);
-        ctx.emit(
-            &app,
-            "download-error",
-            serde_json::json!({ "error": error, "retryable": false }),
-        );
-        return;
-    }
     let shared = app.state::<AppState>();
     let path_key = normalized_destination_key(&final_path);
 
@@ -1046,20 +1011,37 @@ async fn download_single_file(
         run_id: ctx.run_id.clone(),
         path_key,
     };
+    if let Err(error) = ownership::claim(
+        &shared,
+        &ctx.task_id,
+        &save_path,
+        &final_path,
+        &temp_path,
+        &metadata_path,
+    ) {
+        has_error.store(true, Ordering::SeqCst);
+        has_non_retryable_error.store(true, Ordering::SeqCst);
+        ctx.emit(
+            &app,
+            "download-error",
+            serde_json::json!({ "error": error, "retryable": false }),
+        );
+        return;
+    }
     let task_id = ctx.task_id.clone();
     let run_id = ctx.run_id.clone();
     let repo_id = ctx.repo_id.clone();
     let source = ctx.source.clone();
     let remote_path = ctx.remote_path.clone();
 
-    let artifact = load_artifact_state_async(&temp_path).await;
+    let artifact = load_artifact_state_async(&save_path, &temp_path).await;
     let mut save_etag = artifact.as_ref().and_then(|a| a.etag.clone());
     let mut save_lm = artifact.as_ref().and_then(|a| a.last_modified.clone());
     // The partial file is the source of truth. A process crash or a failed `write_all` can leave
     // more (or fewer) bytes on disk than the last artifact checkpoint recorded. Resuming from the
     // checkpoint while appending to the real file would otherwise create a gap or duplicate data.
-    let resume_from = temp_path
-        .metadata()
+    let resume_from = save_path
+        .metadata(&temp_path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
 
@@ -1079,8 +1061,10 @@ async fn download_single_file(
             .copied()
             .unwrap_or(false);
         if !paused {
-            cleanup_artifact_state(&temp_path);
+            cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
             save_artifact_state(
+                &shared,
+                &save_path,
                 &DownloadArtifactState {
                     task_id: task_id.clone(),
                     run_id: run_id.clone(),
@@ -1098,7 +1082,7 @@ async fn download_single_file(
                 &temp_path,
             )
             .await;
-            cleanup_artifact_state(&temp_path);
+            cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
             update_manager_file_state(
                 &shared,
                 &task_id,
@@ -1153,6 +1137,8 @@ async fn download_single_file(
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             save_artifact_state(
+                &shared,
+                &save_path,
                 &DownloadArtifactState {
                     task_id: task_id.clone(),
                     run_id: run_id.clone(),
@@ -1226,6 +1212,8 @@ async fn download_single_file(
     save_lm = resp_last_modified.clone();
     // A1-06: Persist updated artifact state immediately after reading headers
     save_artifact_state(
+        &shared,
+        &save_path,
         &DownloadArtifactState {
             task_id: task_id.clone(),
             run_id: run_id.clone(),
@@ -1246,11 +1234,17 @@ async fn download_single_file(
 
     // A 416 is only a completion signal when local and remote sizes agree exactly.
     if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-        let part_size = temp_path.metadata().map(|m| m.len()).unwrap_or(0);
+        let part_size = save_path.metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
         let remote_size = response_content_range(resp.headers()).and_then(|range| range.total);
         let exact_size = unsatisfied_range_is_complete(part_size, file_size, remote_size);
         if exact_size {
-            if let Err(error) = replace_download_artifact(&save_path, &temp_path, &final_path) {
+            if let Err(error) = replace_download_artifact(
+                &shared,
+                &ctx.task_id,
+                &save_path,
+                &temp_path,
+                &final_path,
+            ) {
                 has_error.store(true, Ordering::SeqCst);
                 update_manager_file_state(
                     &shared,
@@ -1270,7 +1264,7 @@ async fn download_single_file(
                 );
                 return;
             }
-            cleanup_artifact_state(&temp_path);
+            cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
             update_manager_file_state(
                 &shared,
                 &task_id,
@@ -1295,8 +1289,8 @@ async fn download_single_file(
             .map(|remote| remote != file_size)
             .unwrap_or(false);
         if part_size > file_size || remote_changed {
-            let _ = std::fs::remove_file(&temp_path);
-            cleanup_artifact_state(&temp_path);
+            let _ = save_path.remove(&temp_path);
+            cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
             has_error.store(true, Ordering::SeqCst);
             let message = if let Some(remote) = remote_size.filter(|remote| *remote != file_size) {
                 format!("Remote object size changed from {file_size} to {remote} bytes")
@@ -1322,6 +1316,8 @@ async fn download_single_file(
             return;
         }
         save_artifact_state(
+            &shared,
+            &save_path,
             &DownloadArtifactState {
                 task_id: task_id.clone(),
                 run_id: run_id.clone(),
@@ -1375,6 +1371,8 @@ async fn download_single_file(
             has_non_retryable_error.store(true, Ordering::SeqCst);
         }
         save_artifact_state(
+            &shared,
+            &save_path,
             &DownloadArtifactState {
                 task_id: task_id.clone(),
                 run_id: run_id.clone(),
@@ -1415,8 +1413,8 @@ async fn download_single_file(
     let is_partial = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     if is_partial {
         if let Err(error) = validate_partial_response(resp.headers(), resume_from, file_size) {
-            let _ = std::fs::remove_file(&temp_path);
-            cleanup_artifact_state(&temp_path);
+            let _ = save_path.remove(&temp_path);
+            cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
             has_error.store(true, Ordering::SeqCst);
             update_manager_file_state(
                 &shared,
@@ -1440,7 +1438,7 @@ async fn download_single_file(
     let mut resume_from = if is_partial { resume_from } else { 0 };
 
     // A1-05: 200 OK with .part file means server ignored Range header, so restart.
-    if !is_partial && temp_path.exists() {
+    if !is_partial && save_path.metadata(&temp_path).is_ok() {
         update_manager_file_state(
             &shared,
             &task_id,
@@ -1466,7 +1464,7 @@ async fn download_single_file(
         let lm_changed = resp_last_modified.is_some()
             && old_state.last_modified.is_some()
             && resp_last_modified != old_state.last_modified;
-        if (etag_changed || lm_changed) && temp_path.exists() {
+        if (etag_changed || lm_changed) && save_path.metadata(&temp_path).is_ok() {
             update_manager_file_state(
                 &shared,
                 &task_id,
@@ -1482,7 +1480,7 @@ async fn download_single_file(
                 "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
                 "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
             }));
-            cleanup_artifact_state(&temp_path);
+            cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
             has_error.store(true, Ordering::SeqCst);
             let error = "Remote object changed during resume; restarting from byte zero";
             update_manager_file_state(
@@ -1512,15 +1510,16 @@ async fn download_single_file(
     let mut last_artifact_save = std::time::Instant::now() - std::time::Duration::from_secs(2);
 
     let open_save_path = save_path.clone();
-    let open_final_path = final_path.clone();
+    let open_app = app.clone();
+    let open_task_id = task_id.clone();
     let open_temp_path = temp_path.clone();
-    let open_metadata_path = metadata_path.clone();
+
     let file = match tokio::task::spawn_blocking(move || {
-        open_download_temp_file(
+        ownership::open_partial(
+            &open_app.state::<AppState>(),
+            &open_task_id,
             &open_save_path,
-            &open_final_path,
             &open_temp_path,
-            &open_metadata_path,
             is_partial,
         )
     })
@@ -1531,6 +1530,8 @@ async fn download_single_file(
         Ok(f) => f,
         Err(e) => {
             save_artifact_state(
+                &shared,
+                &save_path,
                 &DownloadArtifactState {
                     task_id: task_id.clone(),
                     run_id: run_id.clone(),
@@ -1591,7 +1592,7 @@ async fn download_single_file(
                 .unwrap_or(false)
             {
                 drop(file);
-                cleanup_artifact_state(&temp_path);
+                cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
                 update_manager_file_state(
                     &shared,
                     &task_id,
@@ -1609,6 +1610,8 @@ async fn download_single_file(
                 }));
             } else {
                 save_artifact_state(
+                    &shared,
+                    &save_path,
                     &DownloadArtifactState {
                         task_id: task_id.clone(),
                         run_id: run_id.clone(),
@@ -1682,11 +1685,13 @@ async fn download_single_file(
                 let len = bytes.len() as u64;
                 throttle_download_bytes(&shared, len).await;
                 if let Err(e) = file.write_all(&bytes).await {
-                    let persisted_downloaded = tokio::fs::metadata(&temp_path)
-                        .await
+                    let persisted_downloaded = save_path
+                        .metadata(&temp_path)
                         .map(|metadata| metadata.len())
                         .unwrap_or(downloaded);
                     save_artifact_state(
+                        &shared,
+                        &save_path,
                         &DownloadArtifactState {
                             task_id: task_id.clone(),
                             run_id: run_id.clone(),
@@ -1760,6 +1765,8 @@ async fn download_single_file(
                     if last_artifact_save.elapsed() >= std::time::Duration::from_secs(2) {
                         last_artifact_save = now;
                         save_artifact_state(
+                            &shared,
+                            &save_path,
                             &DownloadArtifactState {
                                 task_id: task_id.clone(),
                                 run_id: run_id.clone(),
@@ -1782,6 +1789,8 @@ async fn download_single_file(
             }
             Err(e) => {
                 save_artifact_state(
+                    &shared,
+                    &save_path,
                     &DownloadArtifactState {
                         task_id: task_id.clone(),
                         run_id: run_id.clone(),
@@ -1850,8 +1859,8 @@ async fn download_single_file(
     }
     drop(file);
 
-    let actual_size = temp_path
-        .metadata()
+    let actual_size = save_path
+        .metadata(&temp_path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     // Response metadata describes the object that was actually transferred. The catalog size is
@@ -1862,6 +1871,8 @@ async fn download_single_file(
             format!("Download ended at {actual_size} bytes, expected {authoritative_size} bytes");
         has_error.store(true, Ordering::SeqCst);
         save_artifact_state(
+            &shared,
+            &save_path,
             &DownloadArtifactState {
                 task_id: task_id.clone(),
                 run_id: run_id.clone(),
@@ -1899,8 +1910,12 @@ async fn download_single_file(
         return;
     }
 
-    if let Err(e) = replace_download_artifact(&save_path, &temp_path, &final_path) {
+    if let Err(e) =
+        replace_download_artifact(&shared, &ctx.task_id, &save_path, &temp_path, &final_path)
+    {
         save_artifact_state(
+            &shared,
+            &save_path,
             &DownloadArtifactState {
                 task_id: task_id.clone(),
                 run_id: run_id.clone(),
@@ -1939,7 +1954,7 @@ async fn download_single_file(
         }));
         return;
     }
-    cleanup_artifact_state(&temp_path);
+    cleanup_artifact_state(&shared, &task_id, &save_path, &temp_path);
     update_manager_file_state(
         &shared,
         &task_id,
@@ -2059,9 +2074,10 @@ pub async fn download_modelscope_files(
             "https://modelscope.cn/models/{}/resolve/master/{}",
             repo_id, encoded_path
         );
-        let dest_dir = remote_parent_dir(&save_path, &file.path)?;
-        let dest_dir =
-            crate::security::create_download_directory_within_root(&save_path, &dest_dir)?;
+        let dest_dir = remote_parent_dir(&save_path.path, &file.path)?;
+        let dest_dir = save_path
+            .descend(&dest_dir, true)
+            .map_err(|e| e.to_string())?;
         let ctx = build_task_context(&file, &repo_id, "modelscope");
         let has_error = Arc::clone(&has_error);
         let has_non_retryable_error = Arc::clone(&has_non_retryable_error);
@@ -2182,7 +2198,7 @@ pub async fn cancel_and_cleanup_download(
         .lock()
         .map_err(|_| "download scheduler lock is poisoned".to_string())?;
     for path in [&cpath, &ctemp, &cmetadata] {
-        match std::fs::remove_file(path) {
+        match ownership::remove(&state, &task_id, &root, path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("Failed to remove {}: {error}", path.display())),
@@ -2318,9 +2334,10 @@ pub async fn download_huggingface_files(
             "https://huggingface.co/{}/resolve/main/{}",
             repo_id, encoded_path
         );
-        let dest_dir = remote_parent_dir(&save_path, &file.path)?;
-        let dest_dir =
-            crate::security::create_download_directory_within_root(&save_path, &dest_dir)?;
+        let dest_dir = remote_parent_dir(&save_path.path, &file.path)?;
+        let dest_dir = save_path
+            .descend(&dest_dir, true)
+            .map_err(|e| e.to_string())?;
         let ctx = build_task_context(&file, &repo_id, "huggingface");
         let has_error = Arc::clone(&has_error);
         let has_non_retryable_error = Arc::clone(&has_non_retryable_error);
@@ -2407,7 +2424,10 @@ pub async fn delete_managed_local_file(
     let (root, final_path, _, _) =
         registered_download_paths_for_task(&entries, &base_dir, &task_id)?;
     let verified = verified_managed_cleanup_path(&root, &final_path)?;
-    match std::fs::remove_file(&verified) {
+    if !ownership::owns(&state, &task_id, &verified)? {
+        return Err("此文件没有后端下载所有权记录，请使用模型管理界面的删除操作".into());
+    }
+    match ownership::remove(&state, &task_id, &root, &verified) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(format!("Failed to remove {}: {error}", verified.display())),
@@ -3708,32 +3728,20 @@ pub async fn remove_download_queue_entry(
 }
 
 fn prune_empty_managed_download_dirs(root: &Path, start: &Path) {
-    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+    let Ok(dir) = DownloadDirectory::open(root, false) else {
         return;
     };
-    // Windows can canonicalize one side through an 8.3 path alias (for example
-    // RUNNER~1) while the caller still holds the long path. Normalize both
-    // identities before the containment walk so safe empty descendants are not
-    // silently retained just because the two spellings differ.
-    let Ok(mut current) = std::fs::canonicalize(start) else {
-        return;
-    };
-    while current != canonical_root && path_is_within(&current, &canonical_root) {
-        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
-            break;
-        };
-        if metadata_is_link_like(&metadata) || !metadata.is_dir() {
-            break;
-        }
-        let Ok(mut entries) = std::fs::read_dir(&current) else {
-            break;
-        };
-        if entries.next().is_some() || std::fs::remove_dir(&current).is_err() {
-            break;
-        }
+    let mut current = start.to_path_buf();
+    while current != root && current.starts_with(root) {
         let Some(parent) = current.parent() else {
             break;
         };
+        let Ok(parent_dir) = dir.descend(parent, false) else {
+            break;
+        };
+        if parent_dir.remove_empty_directory(&current).is_err() {
+            break;
+        }
         current = parent.to_path_buf();
     }
 }
@@ -3776,7 +3784,11 @@ fn cleanup_partial_download_artifacts(
                 let verified = verified_managed_cleanup_path(&root, &path)?;
                 let key = path_identity_key(&verified);
                 if seen.insert(key) {
-                    candidates.push((root.clone(), verified));
+                    candidates.push((
+                        root.clone(),
+                        verified,
+                        file.task_id.clone().unwrap_or_default(),
+                    ));
                 }
             }
         }
@@ -3784,8 +3796,8 @@ fn cleanup_partial_download_artifacts(
 
     let mut removed = 0;
     let mut parents = Vec::new();
-    for (root, path) in candidates {
-        match std::fs::remove_file(&path) {
+    for (root, path, task_id) in candidates {
+        match ownership::remove(state, &task_id, &root, &path) {
             Ok(()) => {
                 removed += 1;
                 if let Some(parent) = path.parent() {
@@ -5425,7 +5437,12 @@ pub async fn cancel_all_downloads(
                     continue;
                 };
                 for path in [&temp_path, &metadata_path] {
-                    match std::fs::remove_file(path) {
+                    match ownership::remove(
+                        &state,
+                        file.task_id.as_deref().unwrap_or_default(),
+                        &managed_root,
+                        path,
+                    ) {
                         Ok(()) => {}
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => {
@@ -5559,7 +5576,7 @@ pub async fn reset_download_for_redownload(
     let temp_path = verified_managed_cleanup_path(&root, &temp_path)?;
     let metadata_path = verified_managed_cleanup_path(&root, &metadata_path)?;
     for path in [&temp_path, &metadata_path] {
-        match std::fs::remove_file(path) {
+        match ownership::remove(&state, &task_id, &root, path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("Failed to remove {}: {error}", path.display())),

@@ -240,11 +240,25 @@ async function processConfig(
   ))
 
   startTransition(() => {
-    set({
-      instances,
-      modelDirs: dedupePaths(global.model_dirs || []),
-      engineDirs: dedupePaths(global.engine_dirs || []),
-      defaultEngineId: global.default_engine_id || null,
+    set(state => {
+      const ids = new Set(instances.map(instance => instance.id))
+      const retained = <T,>(items: Record<string, T>) => Object.fromEntries(
+        Object.entries(items).filter(([id]) => ids.has(id)),
+      )
+      return {
+        instances,
+        instancesHydrated: true,
+        logs: retained(state.logs),
+        recentLogs: state.recentLogs.filter(entry => ids.has(entry.instanceId)),
+        checkpointStatuses: retained(state.checkpointStatuses),
+        monitoringFramesByInstance: retained(state.monitoringFramesByInstance),
+        monitoringCurrentByInstance: retained(state.monitoringCurrentByInstance),
+        runningTasksByInstance: retained(state.runningTasksByInstance),
+        lastCompletedTaskByInstance: retained(state.lastCompletedTaskByInstance),
+        modelDirs: dedupePaths(global.model_dirs || []),
+        engineDirs: dedupePaths(global.engine_dirs || []),
+        defaultEngineId: global.default_engine_id || null,
+      }
     })
   })
 

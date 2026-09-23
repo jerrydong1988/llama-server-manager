@@ -15,12 +15,58 @@ fn append_ssh_destination(command: &mut Command, ssh_user: &str, host: &str) {
     command.arg("--").arg(format!("{}@{}", ssh_user, host));
 }
 
-fn detect_remote_os(
+async fn bounded_probe_output(
+    command: Command,
+    timeout: Duration,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+    let mut command = tokio::process::Command::from(command);
+    command
+        .kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().ok_or("SSH stdout unavailable")?;
+    let stderr = child.stderr.take().ok_or("SSH stderr unavailable")?;
+    async fn read<R: tokio::io::AsyncRead + Unpin>(pipe: R, limit: u64) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        pipe.take(limit + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > limit {
+            return Err("SSH probe output exceeded limit".into());
+        }
+        Ok(bytes)
+    }
+    let result = tokio::time::timeout(timeout, async {
+        tokio::try_join!(read(stdout, limit), read(stderr, limit), async {
+            child.wait().await.map_err(|e| e.to_string())
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok((stdout, _, status))) if status.success() => Ok(stdout),
+        outcome => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(match outcome {
+                Err(_) => "SSH probe timed out".into(),
+                Ok(Err(error)) => error,
+                Ok(Ok((_, _, status))) => format!("SSH probe failed: {status}"),
+            })
+        }
+    }
+}
+
+async fn detect_remote_os(
     host: &str,
     ssh_user: &str,
     ssh_key_path: Option<&str>,
     ssh_port: u16,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     let mut c = Command::new("ssh");
     // #1: Use accept-new instead of no so the first connection is trusted and later ones are verified.
     c.arg("-o")
@@ -39,8 +85,14 @@ fn detect_remote_os(
     append_ssh_destination(&mut c, ssh_user, host);
     c.arg("uname -s 2>/dev/null || ver 2>NUL");
 
-    c.output().ok().and_then(|o| {
-        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x08000000);
+    }
+    let stdout = bounded_probe_output(c, Duration::from_secs(10), 32 * 1024).await?;
+    Ok({
+        let s = String::from_utf8_lossy(&stdout).trim().to_string();
         if s.contains("Linux") {
             Some("linux".into())
         } else if s.contains("Darwin") {
@@ -172,10 +224,12 @@ pub async fn ssh_launch_rpc(
         .unwrap_or_else(|| "rpc-server".to_string());
 
     // Auto-detect the remote OS, or use the user-specified value.
-    let os = remote_os
-        .filter(|o| !o.is_empty() && o != "auto")
-        .or_else(|| detect_remote_os(&host, &ssh_user, ssh_key_path.as_deref(), ssh_port))
-        .unwrap_or_else(|| "linux".to_string());
+    let os = match remote_os.filter(|o| !o.is_empty() && o != "auto") {
+        Some(os) => os,
+        None => detect_remote_os(&host, &ssh_user, ssh_key_path.as_deref(), ssh_port)
+            .await?
+            .unwrap_or_else(|| "linux".to_string()),
+    };
 
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let key_path = ssh_key_path
@@ -246,6 +300,52 @@ pub async fn ssh_launch_rpc(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn probe_fixture() {
+        match std::env::var("LSM_PROBE_TEST_MODE").as_deref() {
+            Ok("wait") => std::thread::sleep(Duration::from_secs(10)),
+            Ok("flood") => print!("{}", "x".repeat(65536)),
+            Ok("ready") => print!("probe-ready"),
+            _ => {}
+        }
+    }
+    #[tokio::test]
+    async fn probes_bound_time_output_and_preserve_normal_results() {
+        fn fixture(mode: &str) -> Command {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "commands::cluster_ssh::tests::probe_fixture",
+                    "--nocapture",
+                ])
+                .env("LSM_PROBE_TEST_MODE", mode);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000);
+            }
+            command
+        }
+        let normal = bounded_probe_output(fixture("ready"), Duration::from_secs(5), 4096)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&normal).contains("probe-ready"));
+        assert!(
+            bounded_probe_output(fixture("flood"), Duration::from_secs(5), 4096)
+                .await
+                .unwrap_err()
+                .contains("limit")
+        );
+        assert!(
+            bounded_probe_output(fixture("wait"), Duration::from_millis(200), 4096)
+                .await
+                .unwrap_err()
+                .contains("timed out")
+        );
+    }
+
     use super::*;
 
     fn ssh_args_for_destination(ssh_user: &str, host: &str) -> Vec<String> {
