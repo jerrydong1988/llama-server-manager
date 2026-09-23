@@ -163,7 +163,7 @@ const docsModels: ModelInfo[] = [
   },
 ]
 
-const models = IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
+const models = BROWSER_SCENARIO === 'guide-assets-only' ? [qwenProjector, { ...model, file_type: 'imatrix' }] : BROWSER_SCENARIO === 'guide-empty' ? [] : IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
 
 const engine: EngineInfo = {
   id: ENGINE_ID,
@@ -237,7 +237,7 @@ const batchProbeEngines: EngineInfo[] = [
   rocmEngine,
 ]
 
-const engines = IS_DOCS_SCENARIO
+const engines = BROWSER_SCENARIO === 'guide-empty' ? [] : IS_DOCS_SCENARIO
   ? [engine, vulkanEngine]
   : BROWSER_SCENARIO?.startsWith('engine-probe-batch')
     ? batchProbeEngines
@@ -327,6 +327,10 @@ if (IS_DOCS_SCENARIO) {
   }
   state.instance_order = [INSTANCE_ID, STOPPED_INSTANCE_ID, EMBEDDING_INSTANCE_ID]
   state.last_tab = 'dashboard'
+}
+if (BROWSER_SCENARIO === 'guide-empty' || BROWSER_SCENARIO === 'guide-no-instances') {
+  state.instances = {}
+  state.instance_order = []
 }
 if (BROWSER_SCENARIO === 'checkpoint-requirements') {
   Object.assign(state.instances[INSTANCE_ID], {
@@ -1349,7 +1353,9 @@ mockIPC((command, payload) => {
         return new Promise<boolean>((resolve) => pendingPortChecks.push({ port, resolve }))
       }
       return true
-    case 'test_connection': return 'HTTP 200'
+    case 'test_connection':
+      if (new URLSearchParams(window.location.search).get('connection') === 'fail') throw new Error('Connection refused')
+      return 'HTTP 200'
     case 'process_download_queue': return null
     case 'get_proxy_config': return clone(proxyConfig)
     case 'get_router_performance': return routerPerformanceMock((args.query || {}) as Record<string, unknown>)

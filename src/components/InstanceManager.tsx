@@ -15,6 +15,8 @@ import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engi
 import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
 import { usePortAvailability } from './InstanceManager/usePortAvailability'
+import { useInstanceSelection } from './InstanceManager/useInstanceSelection'
+import { useGuideTourStore } from './guide/guideTourStore'
 import { CheckpointStatusCard } from './InstanceManager/CheckpointStatusCard'
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
@@ -57,7 +59,6 @@ const InstanceManager = () => {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all')
   const [engineFilter, setEngineFilter] = useState('all')
-  const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -126,13 +127,9 @@ const InstanceManager = () => {
   const erroredCount = instances.filter(inst => inst.status === 'error').length
   const autoStartCount = instances.filter(inst => inst.config.auto_start).length
   const missingEngineInstances = useMemo(() => instances.filter(engineMissingFor), [engineMissingFor, instances])
-  const selectedInstance = filteredInstances.find(inst => inst.id === selectedInstanceId) || filteredInstances[0] || null
+  const { selectedInstance, setSelectedInstanceId } = useInstanceSelection(instances, filteredInstances)
   const selectedIndex = selectedInstance ? filteredInstances.findIndex(inst => inst.id === selectedInstance.id) : -1
   const filteredInstanceIds = useMemo(() => filteredInstances.map(inst => inst.id), [filteredInstances])
-  useEffect(() => {
-    if (selectedInstanceId && filteredInstances.some(inst => inst.id === selectedInstanceId)) return
-    setSelectedInstanceId(filteredInstances[0]?.id || '')
-  }, [filteredInstances, selectedInstanceId])
 
   const handleCreate = async () => {
     const model = models.find(m => m.id === newInst.modelId)
@@ -173,6 +170,7 @@ const InstanceManager = () => {
       config: normalized.config,
     })
 
+    setSelectedInstanceId(id)
     setShowCreateModal(false)
     setNewInst({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: newInst.port + 1, engineId: newInst.engineId })
     setPortStatus('')
@@ -225,6 +223,7 @@ const InstanceManager = () => {
   }
 
   const handleTestConnection = async (inst: Instance) => {
+    const guideConnection = useGuideTourStore.getState().beginConnection(inst.id)
     setTestResults(state => ({ ...state, [inst.id]: 'checking' }))
     try {
       const result = await invoke('test_connection', {
@@ -232,6 +231,7 @@ const InstanceManager = () => {
       })
       if (!mountedRef.current) return
       setTestResults(state => ({ ...state, [inst.id]: `ok:${String(result)}` }))
+      useGuideTourStore.getState().recordConnection(guideConnection, inst)
     } catch (e: any) {
       if (!mountedRef.current) return
       setTestResults(state => ({ ...state, [inst.id]: `error:${e?.toString() || 'Failed'}` }))
@@ -670,7 +670,7 @@ const InstanceManager = () => {
 
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.primaryActions}</div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2" data-guide="instance-runtime">
                   {selectedInstance.status === 'running' ? (
                     <Button onClick={() => void stopInstance(selectedInstance.id).catch(() => {})} disabled={Boolean(instanceLifecycle[selectedInstance.id])}
                       variant="danger"
@@ -693,7 +693,7 @@ const InstanceManager = () => {
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.quickActions}</div>
                 <div className="grid grid-cols-2 gap-2">
-                  <Button onClick={() => handleTestConnection(selectedInstance)} disabled={selectedInstance.status !== 'running'} variant="secondary" icon={<Wifi className="h-4 w-4" />}>{t.instance.testConnection}</Button>
+                  <Button data-guide="instance-connection" onClick={() => handleTestConnection(selectedInstance)} disabled={selectedInstance.status !== 'running'} variant="secondary" icon={<Wifi className="h-4 w-4" />}>{t.instance.testConnection}</Button>
                   <Button onClick={() => handleShowCommand(selectedInstance.id)} variant="secondary" icon={<Terminal className="h-4 w-4" />}>{t.instance.genCommand}</Button>
                   <Button
                     onClick={() => { setActiveConfigInstanceId(selectedInstance.id); setActiveTab('config') }}
@@ -740,10 +740,10 @@ const InstanceManager = () => {
       </div>
 
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div data-guide-dialog="create-instance" role="dialog" aria-modal="true" aria-labelledby="create-instance-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <Surface className="w-full max-w-md overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-800 dark:bg-slate-950/90">
-              <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.instance.newInstance}</h3>
+              <h3 id="create-instance-title" className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.instance.newInstance}</h3>
               <Button onClick={() => setShowCreateModal(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-5 w-5" /></Button>
             </div>
             <div className="space-y-4 p-6">

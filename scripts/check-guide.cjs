@@ -268,8 +268,8 @@ if (!/export function Surface\([\s\S]*?\.\.\.elementProps[\s\S]*?<Component[^>]*
   errors.add('Surface must forward DOM attributes so data-guide tour targets are rendered')
 }
 
-if (!guidePage.includes('onDoneClick')) {
-  errors.add('Interactive guide must explicitly complete each single-step driver popover')
+if (!app.includes('guidePanel={<GuideTourPanel />}') || !appShell.includes('{guidePanel}')) {
+  errors.add('Interactive guide must stay mounted outside page content across navigation')
 }
 
 for (const [token, message] of [

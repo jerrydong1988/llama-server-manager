@@ -1,3 +1,6 @@
+import { selectLocalizedCopy } from '../../i18n'
+
+export type GuideTourMode = 'setup' | 'advanced'
 export type GuideTourStep = {
   id: string
   tab: string
@@ -16,18 +19,44 @@ export type LocalizedGuideTourStep = {
 
 export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
   {
-    id: 'dashboard',
-    tab: 'dashboard',
-    selector: '[data-guide="dashboard"]',
-    zh: { title: '系统总览', description: '查看系统资源、实例状态与整体运行健康度。' },
-    en: { title: 'Dashboard', description: 'Review system resources, instance state, and overall health.' },
+    id: 'models', tab: 'model-repo', selector: '[data-guide="model-directories"]',
+    zh: { title: '准备模型', description: '添加存放 GGUF 的目录并扫描。已有模型可以直接复用；尚未下载时，可从下方入口前往下载，再返回继续。' },
+    en: { title: 'Prepare a model', description: 'Add the directory containing your GGUF files and scan it. Reuse existing models, or open downloads below and return when ready.' },
   },
   {
-    id: 'models',
-    tab: 'model-repo',
-    selector: '[data-guide="model-search"]',
-    zh: { title: '模型仓库', description: '扫描和管理本地 GGUF 模型与投影器。' },
-    en: { title: 'Model Repository', description: 'Scan and manage local GGUF models and projectors.' },
+    id: 'engines', tab: 'engine', selector: '[data-guide="engine-scan"]',
+    zh: { title: '确认运行引擎', description: '添加 llama-server 所在目录并扫描，确认所需后端已识别。已有引擎可直接使用。' },
+    en: { title: 'Prepare an engine', description: 'Add the llama-server directory and scan it. Check that the backend you need is recognized, or reuse an existing engine.' },
+  },
+  {
+    id: 'instances', tab: 'instances', selector: '[data-guide="instance-create"]',
+    zh: { title: '创建或选择实例', description: '点击创建实例，选择模型、引擎和端口。也可以在下方选择已有实例；后续步骤会一直跟随该实例。' },
+    en: { title: 'Create or choose an instance', description: 'Create an instance with a model, engine and port, or select an existing one below. The remaining steps stay with that instance.' },
+  },
+  {
+    id: 'config', tab: 'config', selector: '[data-guide="config-actions"]',
+    zh: { title: '检查必要参数', description: '确认实例名称、模型、端口和硬件参数，按需调整。修改后请保存并处理校验提示，再继续启动。' },
+    en: { title: 'Review configuration', description: 'Check the instance, model, port and hardware settings. Save any changes and resolve validation messages before continuing.' },
+  },
+  {
+    id: 'start', tab: 'instances', selector: '[data-guide="instance-runtime"]',
+    zh: { title: '启动实例', description: '确认页面中当前操作的实例，然后点击启动。引导会等待运行状态；已经运行的实例可以直接继续。' },
+    en: { title: 'Start the instance', description: 'Confirm the selected instance, then click Start. Wait until it is running; an already running instance can continue immediately.' },
+  },
+  {
+    id: 'verify', tab: 'instances', selector: '[data-guide="instance-connection"]',
+    zh: { title: '验证连接', description: '点击测试连接并确认成功。之后可在浏览器中打开实例，或继续探索实例路由与监控。' },
+    en: { title: 'Verify the connection', description: 'Click Test Connection and confirm success. Then open the instance in your browser, or explore routing and monitoring.' },
+  },
+]
+
+const ADVANCED_TOUR_STEPS: GuideTourStep[] = [
+  {
+    id: 'dashboard',
+    tab: 'dashboard',
+    selector: '[data-guide="dashboard-overview"]',
+    zh: { title: '系统总览', description: '查看系统资源、实例状态与整体运行健康度。' },
+    en: { title: 'Dashboard', description: 'Review system resources, instance state, and overall health.' },
   },
   {
     id: 'downloads',
@@ -35,27 +64,6 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
     selector: '[data-guide="download-source"]',
     zh: { title: '下载管理', description: '浏览远程仓库并管理下载队列与恢复策略。' },
     en: { title: 'Downloads', description: 'Browse repositories and manage queues and resume policy.' },
-  },
-  {
-    id: 'engines',
-    tab: 'engine',
-    selector: '[data-guide="engine-scan"]',
-    zh: { title: '引擎管理', description: '扫描 llama-server 并选择默认运行引擎。' },
-    en: { title: 'Engines', description: 'Scan llama-server binaries and choose the default runtime.' },
-  },
-  {
-    id: 'instances',
-    tab: 'instances',
-    selector: '[data-guide="instance-create"]',
-    zh: { title: '实例管理', description: '创建、启动和维护独立服务实例。' },
-    en: { title: 'Instances', description: 'Create, start, and maintain server instances.' },
-  },
-  {
-    id: 'config',
-    tab: 'config',
-    selector: '[data-guide="config-save"]',
-    zh: { title: '参数配置', description: '按实例调整参数并查看分级校验提示。' },
-    en: { title: 'Configuration', description: 'Tune instance parameters and review validation findings.' },
   },
   {
     id: 'cluster',
@@ -81,7 +89,7 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
   {
     id: 'bigscreen',
     tab: 'bigscreen',
-    selector: '[data-guide="monitoring-wall"]',
+    selector: '[data-guide="monitoring-header"]',
     zh: { title: '监控大屏', description: '集中观察服务健康、吞吐、压力和告警。' },
     en: { title: 'Monitoring Wall', description: 'Watch service health, throughput, pressure, and alerts.' },
   },
@@ -94,8 +102,8 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
   },
 ]
 
-export function getGuideTourSteps(lang: string): LocalizedGuideTourStep[] {
-  return GUIDE_TOUR_STEPS.map((step) => {
+export function getGuideTourSteps(lang: string, mode: GuideTourMode = 'setup'): LocalizedGuideTourStep[] {
+  return (mode === 'setup' ? GUIDE_TOUR_STEPS : ADVANCED_TOUR_STEPS).map((step) => {
     const copy = selectLocalizedCopy(lang, step.zh, step.en)
     return {
       id: step.id,
@@ -106,4 +114,3 @@ export function getGuideTourSteps(lang: string): LocalizedGuideTourStep[] {
     }
   })
 }
-import { selectLocalizedCopy } from '../../i18n'

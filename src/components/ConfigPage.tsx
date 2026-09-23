@@ -33,6 +33,7 @@ import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
 import { useConfigSaveShortcut } from './ConfigPage/useConfigSaveShortcut'
 import { CheckpointPanel } from './ConfigPage/CheckpointPanel'
 import { useConfigDraft } from './ConfigPage/useConfigDraft'
+import { useGuideTourStore } from './guide/guideTourStore'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -52,6 +53,7 @@ const ConfigPage = () => {
 
   const { local, setLocal, baseline, setBaseline, committedModelPathRef, editRevisionRef, saveInFlightRef, saving, saveStage, setSaveStage } = useConfigDraft(configInstanceId)
   const [saved, setSaved] = useState(false)
+  const [saveFailedFor, setSaveFailedFor] = useState<string | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<ModelAssetPickerTarget>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -130,6 +132,20 @@ const ConfigPage = () => {
     : null, [committedModelPathRef, currentModel, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
   const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, commandPreviewKey, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local: compatibilityConfig, currentEngine, trustedEngineId })
+  const savedBaseline = baseline ?? defaultInstanceConfig()
+  const vectorCleanupKeys = new Set(
+    vectorCleanupChanges
+      .filter(change => local && isEqualValue(local[change.key], change.after))
+      .map(change => change.key),
+  )
+  const configChanges = local ? getConfigChanges(local, savedBaseline, t, labels)
+    .filter(change => !vectorCleanupKeys.has(change.key)) : []
+  const guideConfigPending = saving || configChanges.length > 0
+  useEffect(() => {
+    useGuideTourStore.setState({ configPending: guideConfigPending })
+    return () => { useGuideTourStore.setState({ configPending: false }) }
+  }, [guideConfigPending])
+
   saveShortcutRef.current = async () => {}
   if (!local) return <div className="space-y-5"><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
 
@@ -187,6 +203,7 @@ const ConfigPage = () => {
 
     saveInFlightRef.current = true
     setSaved(false)
+    setSaveFailedFor(null)
     setSaveStage('validating')
     const timing = beginOperationTiming('config.save')
     let outcome: OperationOutcome = 'failure'
@@ -271,6 +288,7 @@ const ConfigPage = () => {
       }, 6000)
       outcome = 'success'
     } catch (error) {
+      if (targetIsActive()) setSaveFailedFor(targetInstanceId)
       updateInstance(targetInstanceId, { config: previousSave.config })
       if (saveIsCurrent()) { committedModelPathRef.current = previousSave.committedModelPath; setLocal(localSnapshot) }
       if (manualMode) {
@@ -303,14 +321,6 @@ const ConfigPage = () => {
     }))
     .filter(group => group.count > 0)
 
-  const savedBaseline = baseline ?? defaultInstanceConfig()
-  const vectorCleanupKeys = new Set(
-    vectorCleanupChanges
-      .filter(change => isEqualValue(local[change.key], change.after))
-      .map(change => change.key),
-  )
-  const configChanges = getConfigChanges(local, savedBaseline, t, labels)
-    .filter(change => !vectorCleanupKeys.has(change.key))
   const changedParams = new Set<keyof InstanceConfig>(configChanges.map(change => change.key))
   const baselineOverrideKeys = canonicalConfigFields(explicitOverrideKeys(savedBaseline))
   const statusLabels = {
@@ -778,6 +788,8 @@ const ConfigPage = () => {
         saving={saving}
         saved={saved}
         disabled={saveDisabled}
+        hasChanges={configChanges.length > 0}
+        error={saveFailedFor === configInstanceId ? labels.saveFailed : null}
         onSave={save}
       />
 

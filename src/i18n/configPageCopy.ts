@@ -22,6 +22,7 @@ export function getConfigPageLabels(lang: string) {
     unsavedChanges: zh ? '本次改动' : 'Unsaved Changes',
     emittedParams: zh ? '将发射参数' : 'Emitted Parameters',
     floatingSave: zh ? '保存当前配置' : 'Save current config',
+    saveFailed: zh ? '保存失败，修改已保留。请重试，或返回顶部查看提示。' : 'Save failed. Your changes are retained. Retry, or check the notice at the top.',
     backToTop: zh ? '回到顶部' : 'Back to top',
     changedShort: zh ? '改' : 'Changed',
     emittedShort: zh ? '传' : 'Emit',

@@ -396,7 +396,7 @@ const ModelRepo = () => {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3" data-guide="model-directories">
           <Button
             onClick={handleScan}
             disabled={modelScanLoading}

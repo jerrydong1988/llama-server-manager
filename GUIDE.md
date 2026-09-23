@@ -59,6 +59,20 @@ The app checks the project's Cloudflare R2 update service at startup. When an up
 
 `v2.9.35` and earlier do not contain Tauri Updater, so `v2.9.36` or later must first be installed manually before Windows and macOS can use in-app updates. Linux currently ships only DEB packages and does not provide in-app updates; install updates manually from the Download Center or GitHub Releases.
 
+### 交互式引导 / Interactive Guide
+
+应用内“使用说明 → 开始交互式引导”提供六步基础流程：准备模型、确认引擎、创建或选择实例、检查参数、启动、测试连接。底部引导栏显示真实进度，支持上一步、稍后继续和退出；页面和表单仍可正常操作。已有模型、引擎和运行实例可以复用，下载是可选分支。引导不会自动保存配置或启动服务，只有连接测试成功后才会显示基础流程完成。
+
+Use Guide → Start Interactive Tour for six steps: model, engine, instance, configuration, startup, and connection testing. The bottom guide bar preserves progress across pages and supports Previous, Pause, and Exit without blocking forms. Reuse existing resources or take the optional download branch. The guide never automatically saves configuration or starts a service; completion requires a successful connection test.
+
+检查参数时，底部引导栏整合保存、返回顶部和步骤导航，滚动页面也能直接操作。收起引导只隐藏详细说明；保存成功后可点击“已检查配置，继续”。后续步骤显示当前实例名称，需要更换时点击“切换实例”；存在未保存修改时需先保存或撤销。
+
+During configuration review, the bottom guide bar combines Save, Back to top, and step navigation so actions remain available while scrolling. Collapsing the guide hides the detailed instructions. After saving, select Configuration reviewed, continue. Later steps show the current instance with a Switch instance action; save or revert pending edits before switching.
+
+“进阶功能导览”单独介绍总览、下载、集群、实例路由和监控。暂停进度只保留在本次应用会话内；退出会恢复进入引导前的上下文。如果正在填写创建表单或有未保存的配置，退出只关闭引导并保留编辑页面。
+
+Explore Advanced Features separately covers the dashboard, downloads, clusters, routing, and monitoring. Paused progress lasts for the current application session. Exit restores the original context, except when a creation form or unsaved configuration needs to stay open to preserve your input.
+
 ### 首次运行的五个步骤 / Five First-Run Steps
 
 1. 在“模型仓库”添加 GGUF 模型目录并完成扫描。
