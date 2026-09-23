@@ -135,7 +135,24 @@ impl DownloadDirectory {
             if metadata.nlink() != 1 {
                 return Err(io::Error::other("hard-linked download artifact"));
             }
-            Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+            // An unlinked inode can be immediately recycled, including an old
+            // identity retained while an atomic replacement is being committed.
+            // Birth time stays stable across writes and renames, unlike ctime.
+            // Without it, fail closed rather than claiming a reused inode.
+            let created = metadata.created().map_err(|error| {
+                io::Error::other(format!(
+                    "filesystem cannot prove download artifact birth time: {error}"
+                ))
+            })?;
+            let created = created
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(io::Error::other)?;
+            Ok(format!(
+                "{}:{}:{}",
+                metadata.dev(),
+                metadata.ino(),
+                created.as_nanos()
+            ))
         }
         #[cfg(windows)]
         {
@@ -263,6 +280,34 @@ mod tests {
             dir.remove(&target).unwrap();
             assert_eq!(std::fs::read(&target).unwrap(), b"victim");
         } // Windows may pin the original directory against rename.
+        drop(dir);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn artifact_identity_survives_content_updates_and_rename() {
+        use std::io::Write;
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-stable-identity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = DownloadDirectory::open(&base, false).unwrap();
+        let partial = base.join("model.part");
+        let final_path = base.join("model.gguf");
+        dir.atomic_write(&partial, b"first").unwrap();
+        let original = dir.identity(&partial).unwrap();
+        {
+            let mut file = dir
+                .open_owned_file(&partial, true, std::slice::from_ref(&original))
+                .unwrap();
+            file.write_all(b" second").unwrap();
+            file.sync_all().unwrap();
+        }
+        assert_eq!(dir.identity(&partial).unwrap(), original);
+        dir.rename(&partial, &final_path).unwrap();
+        assert_eq!(dir.identity(&final_path).unwrap(), original);
+        assert_eq!(dir.read(&final_path).unwrap(), "first second");
         drop(dir);
         std::fs::remove_dir_all(base).unwrap();
     }
