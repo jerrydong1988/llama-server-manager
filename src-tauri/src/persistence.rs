@@ -367,44 +367,4 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(directory);
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn artifact_writes_preserve_shared_directory_and_download_modes() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = test_dir("artifact-permissions");
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o750)).unwrap();
-        let source = directory.join("model.gguf.part");
-        let destination = directory.join("model.gguf");
-        let artifact_state = directory.join("model.gguf.part.json");
-        std::fs::write(&source, b"model").unwrap();
-        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
-
-        replace_artifact_file(&source, &destination).unwrap();
-        atomic_write_artifact_state(&artifact_state, b"{}").unwrap();
-
-        assert_eq!(
-            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
-            0o750
-        );
-        assert_eq!(
-            std::fs::metadata(&destination)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o640
-        );
-        assert_eq!(
-            std::fs::metadata(&artifact_state)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        let _ = std::fs::remove_dir_all(directory);
-    }
 }

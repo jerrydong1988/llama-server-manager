@@ -259,4 +259,47 @@ mod tests {
         drop(dir);
         std::fs::remove_dir_all(base).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_writes_preserve_shared_directory_and_download_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("download-permissions-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let source = directory.join("model.gguf.part");
+        let destination = directory.join("model.gguf");
+        let artifact_state = directory.join("model.gguf.part.json");
+        std::fs::write(&source, b"model").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        let dir = DownloadDirectory::open(&directory, false).unwrap();
+        dir.rename(&source, &destination).unwrap();
+        dir.atomic_write(&artifact_state, b"{}").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        assert_eq!(
+            std::fs::metadata(&artifact_state)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(dir);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
