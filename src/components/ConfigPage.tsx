@@ -134,7 +134,7 @@ const ConfigPage = () => {
   const savedBaseline = baseline ?? defaultInstanceConfig()
   const vectorCleanupKeys = new Set(
     vectorCleanupChanges
-      .filter(change => isEqualValue(local?.[change.key], change.after))
+      .filter(change => local && isEqualValue(local[change.key], change.after))
       .map(change => change.key),
   )
   const configChanges = local ? getConfigChanges(local, savedBaseline, t, labels)
