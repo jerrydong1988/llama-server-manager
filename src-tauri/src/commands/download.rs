@@ -5258,8 +5258,10 @@ mod audit_remediation_tests {
 
     #[test]
     fn failed_download_cleanup_prunes_only_empty_managed_descendants() {
-        let dir =
-            std::env::temp_dir().join(format!("lsm-download-empty-dir-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("lsm-download-empty-dir-{}", uuid::Uuid::new_v4()));
         let nested = dir.join("org").join("model").join("weights");
         std::fs::create_dir_all(&nested).unwrap();
         let sibling = dir.join("keep.txt");

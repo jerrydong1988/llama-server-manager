@@ -244,8 +244,10 @@ mod tests {
     use super::*;
     #[test]
     fn prepared_publication_recovers_before_and_after_rename_and_rejects_leaf_swap() {
-        let base =
-            std::env::temp_dir().join(format!("download-transaction-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-transaction-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&base).unwrap();
         let dir = DownloadDirectory::open(&base, false).unwrap();
         let target = base.join("model.part.json");
@@ -273,7 +275,10 @@ mod tests {
     }
     #[test]
     fn queue_identity_cannot_grant_ownership_or_follow_replaced_files() {
-        let base = std::env::temp_dir().join(format!("download-owner-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-owner-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&base).unwrap();
         let dir = DownloadDirectory::open(&base, false).unwrap();
         let file = base.join("model.gguf");

@@ -13,6 +13,8 @@ pub(super) struct DownloadDirectory {
     dir: Arc<Dir>,
 }
 impl DownloadDirectory {
+    // Callers pass the resolved authorized root. Do not canonicalize here: an
+    // attacker may have replaced an ancestor with a link since authorization.
     pub fn open(path: &Path, create: bool) -> io::Result<Self> {
         if !path.is_absolute() {
             return Err(io::Error::other("download directory must be absolute"));
@@ -204,7 +206,10 @@ impl DownloadDirectory {
         self.dir
             .rename(self.leaf(from)?, &self.dir, self.leaf(to)?)?;
         #[cfg(unix)]
-        self.dir.try_clone()?.into_std_file().sync_all()?;
+        // Directory capabilities may use O_PATH on Linux, which cannot be
+        // fsynced. Reopen "." relative to the pinned directory for a readable
+        // descriptor instead of reopening its replaceable ambient path.
+        self.dir.open(".")?.into_std().sync_all()?;
         Ok(())
     }
     #[cfg(test)]
@@ -240,8 +245,10 @@ mod tests {
     use super::*;
     #[test]
     fn pinned_directory_never_writes_or_removes_from_replacement() {
-        let base =
-            std::env::temp_dir().join(format!("download-capability-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-capability-{}", uuid::Uuid::new_v4()));
         let original = base.join("original");
         let moved = base.join("moved");
         std::fs::create_dir_all(&original).unwrap();
@@ -265,8 +272,10 @@ mod tests {
     fn artifact_writes_preserve_shared_directory_and_download_modes() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory =
-            std::env::temp_dir().join(format!("download-permissions-{}", uuid::Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-permissions-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o750)).unwrap();
         let source = directory.join("model.gguf.part");
@@ -301,5 +310,33 @@ mod tests {
         );
         drop(dir);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_root_and_descendants_remain_rejected_after_authorization() {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-links-{}", uuid::Uuid::new_v4()));
+        let original = base.join("authorized");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let dir = DownloadDirectory::open(&original, false).unwrap();
+        let alias = original.join("linked");
+        std::os::unix::fs::symlink(&outside, &alias).unwrap();
+        assert!(DownloadDirectory::open(&alias, false).is_err());
+        assert!(dir.descend(&alias, false).is_err());
+        assert!(dir.descend(&alias.join("new"), true).is_err());
+        assert!(!outside.join("new").exists());
+        let legitimate = original.join("real");
+        let child = dir.descend(&legitimate, true).unwrap();
+        child
+            .atomic_write(&legitimate.join("state.json"), b"{}")
+            .unwrap();
+        drop(child);
+        drop(dir);
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
