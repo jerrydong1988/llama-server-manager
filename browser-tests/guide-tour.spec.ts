@@ -37,6 +37,7 @@ test.afterEach(async ({ page }) => {
 })
 
 test('six continuous steps support backward navigation and require a successful connection', async ({ page }) => {
+  test.setTimeout(60_000)
   await openGuide(page)
   await startGuide(page)
   await expect(page.locator('[data-guide-progress]')).toHaveText('第 1 / 6 步')
@@ -48,10 +49,11 @@ test('six continuous steps support backward navigation and require a successful 
   await expect(page.locator('[data-nav-id="model-repo"]')).toHaveAttribute('aria-current', 'page')
   await next(page).click()
   await next(page).click()
-  await panel(page).getByLabel('本次引导的实例').selectOption('browser-test-instance')
+  await panel(page).getByLabel('本次引导的实例').selectOption('browser-stopped-instance')
   await next(page).click()
-  await expect(page.locator('#config-page-actions')).toContainText('Qwen3 8B Chat')
+  await expect(page.locator('#config-page-actions')).toContainText('Qwen3 VL 7B')
   await panel(page).getByRole('button', { name: '已检查配置，继续' }).click()
+  await page.locator('[data-guide="instance-runtime"]').getByRole('button', { name: '启动', exact: true }).click()
   await next(page).click()
   await expect(page.locator('[data-guide-progress]')).toHaveText('第 6 / 6 步')
   await expect(panel(page).getByRole('button', { name: '完成引导' })).toBeDisabled()
@@ -62,6 +64,7 @@ test('six continuous steps support backward navigation and require a successful 
   await expect(panel(page)).toHaveCount(0)
   await expect(page.locator('[data-nav-id="instances"]')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.guide-tour-target')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Qwen3 VL 7B', exact: true })).toBeVisible()
 })
 
 for (const exit of ['escape', 'close', 'during-navigation']) {
@@ -117,6 +120,8 @@ test('a new instance can be created through its model picker without any tour ov
   await page.locator('[data-guide="instance-connection"]').click()
   await panel(page).getByRole('button', { name: '完成引导' }).click()
   await expect(panel(page).getByRole('heading', { name: '实例已通过连接测试' })).toBeVisible()
+  await panel(page).getByRole('button', { name: '留在当前页面' }).click()
+  await expect(page.getByRole('heading', { name: 'Guided instance', exact: true })).toBeVisible()
 })
 
 test('Escape while filling a creation form exits only the guide and preserves the form', async ({ page }) => {
