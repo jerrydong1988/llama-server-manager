@@ -426,7 +426,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4" data-guide="dashboard">
-      <Surface as="section" data-testid="dashboard-header">
+      <Surface as="section" data-testid="dashboard-header" data-guide="dashboard-overview">
         <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">

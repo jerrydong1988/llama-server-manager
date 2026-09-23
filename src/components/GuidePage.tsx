@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { marked } from 'marked'
-import { driver } from 'driver.js'
-import 'driver.js/dist/driver.css'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { ArrowUp, BookOpen, CheckCircle2, ChevronDown, Circle, Compass, PlayCircle } from 'lucide-react'
 import { version } from '../../package.json'
@@ -9,7 +7,8 @@ import { useAppStore } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getGuideLabels } from '../i18n/pageLabels'
 import { Button, InsetSurface, Surface } from './ui'
-import { getGuideTourSteps } from './guide/guideTour'
+import { guideReadingPosition, useGuideTourStore } from './guide/guideTourStore'
+import { getGuideTourCopy } from '../i18n/guideTourCopy'
 
 import guideMd from '../../GUIDE.md?raw'
 
@@ -103,39 +102,6 @@ function sanitize(html: string): string {
   return template.innerHTML
 }
 
-type StableRect = Pick<DOMRect, 'x' | 'y' | 'width' | 'height'>
-
-const rectIsStable = (left: StableRect, right: StableRect) => (
-  Math.abs(left.x - right.x) < 0.5
-  && Math.abs(left.y - right.y) < 0.5
-  && Math.abs(left.width - right.width) < 0.5
-  && Math.abs(left.height - right.height) < 0.5
-)
-
-function waitDOM(selector: string, timeout: number): Promise<Element> {
-  return new Promise((resolve, reject) => {
-    const start = Date.now()
-    let previousRect: StableRect | null = null
-    let stableFrames = 0
-    const check = () => {
-      const element = document.querySelector(selector)
-      const rect = element?.getBoundingClientRect()
-      if (element && rect && rect.width > 0 && rect.height > 0) {
-        const nextRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-        stableFrames = previousRect && rectIsStable(previousRect, nextRect) ? stableFrames + 1 : 0
-        previousRect = nextRect
-        if (stableFrames >= 2) return resolve(element)
-      } else {
-        previousRect = null
-        stableFrames = 0
-      }
-      if (Date.now() - start > timeout) return reject(new Error(`timeout: ${selector}`))
-      requestAnimationFrame(check)
-    }
-    check()
-  })
-}
-
 export default function GuidePage() {
   const { lang } = useI18n()
   const setActiveTab = useAppStore((state) => state.setActiveTab)
@@ -150,7 +116,7 @@ export default function GuidePage() {
   const [html, setHtml] = useState('')
   const [toc, setToc] = useState<{ id: string; title: string }[]>([])
   const [activeSectionId, setActiveSectionId] = useState('')
-  const [isChecklistOpen, setIsChecklistOpen] = useState(false)
+  const [isChecklistOpen, setIsChecklistOpen] = useState(guideReadingPosition.checklistOpen)
   const [showBackToTop, setShowBackToTop] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -165,6 +131,9 @@ export default function GuidePage() {
     [guideContent],
   )
   const labels = useMemo(() => getGuideLabels(lang), [lang])
+  const tourCopy = getGuideTourCopy(lang)
+  const { start: startTour, paused, resume } = useGuideTourStore()
+  useEffect(() => { guideReadingPosition.checklistOpen = isChecklistOpen }, [isChecklistOpen])
 
   const checklist = useMemo(() => {
     const hasRunningInstance = instances.some(instance => instance.status === 'running')
@@ -228,6 +197,8 @@ export default function GuidePage() {
     if (!container || headings.length === 0) return
 
     const updateScrollState = () => {
+      if (!container.isConnected) return
+      guideReadingPosition.scrollTop = container.scrollTop
       const activationLine = container.getBoundingClientRect().top + 96
       let currentId = headings[0].id
 
@@ -240,9 +211,12 @@ export default function GuidePage() {
       setShowBackToTop(container.scrollTop > 480)
     }
 
+    container.scrollTop = guideReadingPosition.scrollTop
     updateScrollState()
     container.addEventListener('scroll', updateScrollState, { passive: true })
-    return () => container.removeEventListener('scroll', updateScrollState)
+    return () => {
+      container.removeEventListener('scroll', updateScrollState)
+    }
   }, [html])
 
   useEffect(() => {
@@ -258,8 +232,6 @@ export default function GuidePage() {
       container.scrollTop += itemBounds.bottom - containerBounds.bottom + 4
     }
   }, [activeSectionId])
-
-  const tourSteps = useMemo(() => getGuideTourSteps(lang), [lang])
 
   const handleTocClick = (id: string) => {
     const container = scrollContainerRef.current
@@ -294,71 +266,6 @@ export default function GuidePage() {
     }
   }
 
-  const startTour = async () => {
-    let cancelled = false
-    try {
-      await document.fonts.ready
-      for (let index = 0; index < tourSteps.length; index += 1) {
-        const step = tourSteps[index]
-        if (step.tab === 'config') {
-          const store = useAppStore.getState()
-          if (store.instances.length === 0) {
-            continue
-          }
-          store.setActiveConfigInstanceId(store.instances[0].id)
-        }
-
-        setActiveTab(step.tab)
-        const element = await waitDOM(step.selector, 5000).catch((error) => {
-          console.warn(`Guide tour target unavailable: ${step.selector}`, error)
-          return null
-        })
-        if (!element) {
-          continue
-        }
-
-        const isLast = index === tourSteps.length - 1
-
-        await new Promise<void>((resolve) => {
-          let settled = false
-          const settle = () => {
-            if (settled) return
-            settled = true
-            resolve()
-          }
-          const walkthrough = driver({
-            animate: true,
-            showProgress: true,
-            steps: [{
-              element: element as HTMLElement,
-              popover: {
-                title: step.title,
-                description: step.description,
-                doneBtnText: isLast ? labels.done : labels.next,
-              },
-            }],
-            onCloseClick: () => {
-              cancelled = true
-              walkthrough.destroy()
-              settle()
-            },
-            onDoneClick: () => {
-              walkthrough.destroy()
-              settle()
-            },
-            onDestroyed: settle,
-          })
-          walkthrough.drive()
-          requestAnimationFrame(() => requestAnimationFrame(() => walkthrough.refresh()))
-        })
-
-        if (cancelled) break
-      }
-    } finally {
-      setActiveTab('guide')
-    }
-  }
-
   const completedChecklistCount = checklist.filter(item => item.done).length
 
   return (
@@ -376,13 +283,15 @@ export default function GuidePage() {
           </div>
 
           <Button
-            onClick={() => void startTour()}
+            onClick={() => startTour('setup')}
             variant="primary"
-            className="mb-4 shrink-0"
+            className="mb-2 shrink-0"
             icon={<PlayCircle className="h-4 w-4" />}
           >
             {labels.startTour}
           </Button>
+          {paused && <Button className="mb-2 shrink-0" onClick={resume}>{tourCopy.resume}</Button>}
+          <Button className="mb-4 shrink-0" variant="subtle" onClick={() => startTour('advanced')}>{tourCopy.advanced}</Button>
 
           <InsetSurface
             className={`flex min-h-0 flex-1 flex-col p-3 ${isChecklistOpen ? 'overflow-y-auto' : 'overflow-hidden'}`}

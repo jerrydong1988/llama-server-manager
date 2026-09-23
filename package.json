@@ -39,7 +39,6 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.10.1",
-    "driver.js": "^1.4.0",
     "lucide-react": "^0.453.0",
     "marked": "^18.0.5",
     "react": "^18.2.0",

@@ -50,6 +50,7 @@ export function AppShell({
   wideContent = false,
   immersiveContent = false,
   constrainContent = false,
+  guidePanel,
   children,
 }: {
   appTitle: string
@@ -82,6 +83,7 @@ export function AppShell({
   wideContent?: boolean
   immersiveContent?: boolean
   constrainContent?: boolean
+  guidePanel?: ReactNode
   children: ReactNode
 }) {
   const activeItem = navigation.find(item => item.id === activeId) || navigation[0]
@@ -302,6 +304,8 @@ export function AppShell({
               {children}
             </div>
           </div>
+
+          {guidePanel}
 
           {!immersiveContent && (
             <footer className="hidden h-9 shrink-0 items-center justify-between border-t border-slate-200 bg-white/85 px-4 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/85 dark:text-slate-400 sm:flex">
