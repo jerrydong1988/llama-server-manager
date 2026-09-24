@@ -31,6 +31,7 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
   const updateRef = useRef<Update | null>(null)
   const checkInFlightRef = useRef(false)
   const installingRef = useRef(false)
+  const downloadedUpdateRef = useRef<Update | null>(null)
   const disposedRef = useRef(false)
 
   const checkForUpdate = useCallback(async () => {
@@ -103,6 +104,7 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
     if (!update || updateInfo?.busy || installingRef.current || checkInFlightRef.current) return
     installingRef.current = true
     setUpdateInfo(current => current ? { ...current, busy: true } : current)
+    let preparingRuntime = false
     try {
       const proxyStatus = await invoke<{ running: boolean }>('get_proxy_status').catch(() => null)
       const hasActiveWorkloads = hasRunningInstances || proxyStatus?.running === true
@@ -144,12 +146,27 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
       }
 
       setUpdateInfo(current => current ? { ...current, progress: 0, busy: true } : current)
-      await update.downloadAndInstall(onDownloadEvent, { timeout: 15 * 60_000 })
+      if (downloadedUpdateRef.current !== update) {
+        await update.download(onDownloadEvent, { timeout: 15 * 60_000 })
+        downloadedUpdateRef.current = update
+      }
+      preparingRuntime = true
+      await invoke('prepare_app_update')
+      await update.install()
+      downloadedUpdateRef.current = null
       await relaunch()
     } catch (error) {
+      let failure = String(error)
+      if (preparingRuntime) {
+        try {
+          await invoke('resume_app_after_update')
+        } catch (resumeError) {
+          failure += `\n\n${String(resumeError)}`
+        }
+      }
       installingRef.current = false
       setUpdateInfo(current => current ? { ...current, progress: null, busy: false } : current)
-      await message(`${copy.updateFailedDescription}\n\n${String(error)}`, {
+      await message(`${copy.updateFailedDescription}\n\n${failure}`, {
         title: copy.updateFailedTitle,
         kind: 'error',
       })

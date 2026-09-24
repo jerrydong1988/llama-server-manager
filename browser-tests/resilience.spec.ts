@@ -140,17 +140,21 @@ test('a transient updater failure is visible and a manual retry discovers the up
   await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.updaterCheckCount)).toBe(2)
 })
 
-test('available updater completes installation and requests a relaunch', async ({ page }) => {
+test('updater downloads before quiescing the runtime and installs before relaunch', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
   await page.goto('/?scenario=updater-install')
 
   await page.getByRole('button', { name: '安装可用更新' }).click()
   await expect.poll(() => page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'plugin:updater|download_and_install')
-  ))).toBe(true)
-  await expect.poll(() => page.evaluate(() => (
     window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'plugin:process|restart')
   ))).toBe(true)
+  const commands = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.map(call => call.command))
+  expect(commands.filter(command => [
+    'plugin:updater|download', 'prepare_app_update', 'plugin:updater|install', 'plugin:process|restart',
+  ].includes(command))).toEqual([
+    'plugin:updater|download', 'prepare_app_update', 'plugin:updater|install', 'plugin:process|restart',
+  ])
+  expect(commands).not.toContain('resume_app_after_update')
 })
 
 test('updater installation failure remains recoverable and reports the error', async ({ page }) => {
@@ -166,7 +170,32 @@ test('updater installation failure remains recoverable and reports the error', a
     ))
   ))).toBe(true)
   await expect(install).toBeEnabled()
+  const commands = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.map(call => call.command))
+  expect(commands).not.toContain('prepare_app_update')
+  expect(commands).not.toContain('plugin:updater|install')
+  expect(commands).not.toContain('plugin:process|restart')
 })
+
+for (const scenario of ['updater-prepare-failure', 'updater-installer-failure']) {
+  test(`${scenario} resumes runtime operations and allows a safe retry`, async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
+    await page.goto(`/?scenario=${scenario}`)
+    const install = page.getByRole('button', { name: '安装可用更新' })
+    await install.click()
+    await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls
+      .filter(call => call.command === 'resume_app_after_update').length)).toBe(1)
+    await expect(install).toBeEnabled()
+    await install.click()
+    await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls
+      .filter(call => call.command === 'resume_app_after_update').length)).toBe(2)
+    const commands = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.map(call => call.command))
+    expect(commands.filter(command => command === 'plugin:updater|download')).toHaveLength(1)
+    expect(commands.filter(command => command === 'prepare_app_update')).toHaveLength(2)
+    expect(commands.filter(command => command === 'plugin:updater|install'))
+      .toHaveLength(scenario === 'updater-prepare-failure' ? 0 : 2)
+    expect(commands).not.toContain('plugin:process|restart')
+  })
+}
 
 test('paused downloads restore from the backend snapshot and can resume', async ({ page }) => {
   await page.addInitScript(() => {

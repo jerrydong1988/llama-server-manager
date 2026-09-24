@@ -736,6 +736,8 @@ fn main() {
             stop_background_runtime,
             crate::runtime_service::get_runtime_service_status,
             crate::runtime_service::clear_runtime_service_error,
+            crate::runtime_service::update::prepare_app_update,
+            crate::runtime_service::update::resume_app_after_update,
             crate::security::pick_authorized_directory,
             crate::security::list_authorized_directories,
             crate::security::revoke_authorized_directory,

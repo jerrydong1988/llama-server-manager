@@ -434,15 +434,17 @@ pub async fn wait_until_ready(control_token: &str, timeout: Duration) -> bool {
     false
 }
 
-pub async fn wait_until_stopped(control_token: &str, timeout: Duration) -> bool {
+pub async fn wait_for_runtime_lock(timeout: Duration) -> Result<File, String> {
     let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        if connect(control_token).await.is_err() {
-            return true;
+    loop {
+        if let Some(lock) = acquire_runtime_lock()? {
+            return Ok(lock);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("runtime service did not release its lock after shutdown".into());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    false
 }
 
 #[cfg(test)]

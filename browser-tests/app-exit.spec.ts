@@ -4,6 +4,33 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('runtime recovery clears bridge warnings while retaining workload failures', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
+  await page.goto('/')
+  const connectionError = 'runtime lock is held but the authenticated service is unavailable'
+  const workloadError = 'instance test exited unexpectedly (code 1)'
+  await page.evaluate(({ connectionError, workloadError }) => {
+    window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-status', { running: {}, lastError: workloadError })
+    window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-error', { error: connectionError })
+  }, { connectionError, workloadError })
+  await expect(page.getByText(`background runtime: ${connectionError}`, { exact: true })).toBeVisible()
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent(
+    'runtime-service-status', { running: {}, lastError: null },
+  ))
+  await expect(page.getByText(`background runtime: ${connectionError}`, { exact: true })).toHaveCount(0)
+  await expect(page.getByText(`background runtime: ${workloadError}`, { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.some(
+    call => call.command === 'clear_runtime_service_error',
+  ))).toBe(false)
+
+  // A new outage must still be visible; matching active errors must not vanish.
+  await page.evaluate(({ connectionError }) => {
+    window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-error', { error: connectionError })
+    window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-status', { running: {}, lastError: connectionError })
+  }, { connectionError })
+  await expect(page.getByText(`background runtime: ${connectionError}`, { exact: true })).toBeVisible()
+})
+
 test('cleared runtime exit warnings stay dismissed until a new failure occurs', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
