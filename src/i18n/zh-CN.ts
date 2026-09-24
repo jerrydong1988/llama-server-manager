@@ -21,6 +21,7 @@
     description: '按分组核对启动参数，复制完整命令可在终端中运行。',
     executable: '引擎程序', arguments: '参数值',
     fullCommand: '完整命令', copyCommand: '复制完整命令',
+    parameterCount: '共 {count} 项参数', expandAll: '全部展开', collapseAll: '全部收起',
     groups: { model: '模型', context: '上下文与缓存', performance: '性能与内存', reasoning: '推理与生成', sampling: '采样', speculative: '推测解码', network: '网络与服务', other: '其他参数' },
   },
   modelRepo: {

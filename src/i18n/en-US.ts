@@ -21,6 +21,7 @@ export const enUS = {
     description: 'Review startup parameters by group. Copy the full command to run it in a terminal.',
     executable: 'Engine executable', arguments: 'Arguments',
     fullCommand: 'Full command', copyCommand: 'Copy full command',
+    parameterCount: '{count} parameters', expandAll: 'Expand all', collapseAll: 'Collapse all',
     groups: { model: 'Model', context: 'Context and cache', performance: 'Performance and memory', reasoning: 'Reasoning and generation', sampling: 'Sampling', speculative: 'Speculative decoding', network: 'Network and service', other: 'Other parameters' },
   },
   modelRepo: {
