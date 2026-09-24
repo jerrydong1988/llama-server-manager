@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-09-16",
+  "verifiedAt": "2026-09-24",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.4.1",
-  "upstreamCommit": "b29c606e28a01b1bc8c1351026a0fa6e616bf6c4",
-  "upstreamMasterChecked": "7ceed8737fdb4eb09b4760e77bd12d38012de5a8",
+  "upstreamRelease": "v0.5.0",
+  "upstreamCommit": "7fe450e19305b828c199d602c23a8337aaa1f03b",
+  "upstreamMasterChecked": "53ed051ce5e8193652e449f43216ca3859454f49",
   "releaseSnapshot": {
-    "ref": "v0.4.1",
-    "commit": "b29c606e28a01b1bc8c1351026a0fa6e616bf6c4",
+    "ref": "v0.5.0",
+    "commit": "7fe450e19305b828c199d602c23a8337aaa1f03b",
     "parameterCount": 255,
-    "snapshotHash": "b68470379cedd4c6323ec07767a7e034ce2bdb20c8ce7ba0189bfbafe2d3cfed",
+    "snapshotHash": "fe6bf44ea0bd1130edf9cebef83c9e4a4480d043dc3b28cd30650074e4590208",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -589,7 +589,7 @@
           "--frequency-penalty"
         ],
         "synopsisHash": "f60b587ec069c294a2a7679d2e3ec3fe3c85bde5826cfcadc35ee2ac68d8fa3f",
-        "descriptionHash": "6abef117f634e6b1c2fb4f165fb85b1224cbe19e8ae6c4e14baee66bec94023c"
+        "descriptionHash": "520c3a09772f124a02c8265a5e512346f34b89653d7dcbdb992cc9fa987111f9"
       },
       {
         "canonical": "--gpt-oss-120b-default",
@@ -677,7 +677,7 @@
           "--host"
         ],
         "synopsisHash": "d3d5a2b096085d848cda3965719831c0322f1295d847055a0a08f94e3a4532b9",
-        "descriptionHash": "545c6c64a212045bbf4656ad4c3446431d644991e763a20e82ca63fd260099e3"
+        "descriptionHash": "29c9a1aa5d22b47fe31a00a5d26c3fa8666642b3efcb93171056781eac3b6c61"
       },
       {
         "canonical": "--ignore-eos",
@@ -951,7 +951,7 @@
           "--min-p"
         ],
         "synopsisHash": "fce32715c61d0816b88fc70241bdb384eaf030b9c66f44ee32a65b52d53652e7",
-        "descriptionHash": "956cc86507be9ea4e69df4f24de1600795ddd8b1e3c81a8579db82df3a431f63"
+        "descriptionHash": "1d214c3a4166d4b85890a0f672bafcc81b43d54a80dc4d3ce147dcdfc18a0bc6"
       },
       {
         "canonical": "--mirostat",
@@ -1233,7 +1233,7 @@
           "--presence-penalty"
         ],
         "synopsisHash": "e04137c9e4edf9058eee9559e02b2711cc9c231299556cd66b95fae915bb3966",
-        "descriptionHash": "5a1b5d57686cb4560a3517c10111520e1df7f3c957b0a46106705de6eaa836d3"
+        "descriptionHash": "425558323f2d42e1fdcaf30354d2c6bba3819ebb6640208425c554dfe052e83c"
       },
       {
         "canonical": "--prio",
@@ -1333,7 +1333,7 @@
           "--repeat-penalty"
         ],
         "synopsisHash": "85502723fa9ce34f88809967ba0c8af52f67c635e5bb0b03147bf337816c8e26",
-        "descriptionHash": "f9794d2b18c0d8025c5e791db1634e538e2e8cdbd48ab0a766dea9a1fdc3e266"
+        "descriptionHash": "d76653bd84b38de8eb38ad954b7762e2404934097381ebaebef11c94a5c88071"
       },
       {
         "canonical": "--rerank",
@@ -1935,7 +1935,7 @@
           "--temperature"
         ],
         "synopsisHash": "c027ff93b09e9334da85c55ac2e8d130a39fcecdedaf75bf03a6e28ea3a4fca2",
-        "descriptionHash": "79f0d53ec460b62b9fef0c91bf3d2d68182cba3d2777cf70eb978fdac0b58c5a"
+        "descriptionHash": "9ec9d3bc954b7d0fb5fc22b3866f26541399ee02f3817aed7cc6b2ce224cbc4b"
       },
       {
         "canonical": "--tensor-split",
@@ -2020,7 +2020,7 @@
           "--top-p"
         ],
         "synopsisHash": "b3bacf3c5ef9eb05088e8cefe2282e7de327fd78e2ef57fe6993cc83c871fe87",
-        "descriptionHash": "8d9ade7ab494eefae0aba7ccab451a6f3e51a02099dee4e243f32432540e7aa4"
+        "descriptionHash": "7c05b7557aadcb7714a7314473b69c403c271e24b211a194600483471a280d2e"
       },
       {
         "canonical": "--typical",
@@ -2246,9 +2246,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "7ceed8737fdb4eb09b4760e77bd12d38012de5a8",
+    "commit": "53ed051ce5e8193652e449f43216ca3859454f49",
     "parameterCount": 255,
-    "snapshotHash": "b68470379cedd4c6323ec07767a7e034ce2bdb20c8ce7ba0189bfbafe2d3cfed",
+    "snapshotHash": "fe6bf44ea0bd1130edf9cebef83c9e4a4480d043dc3b28cd30650074e4590208",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2823,7 +2823,7 @@
           "--frequency-penalty"
         ],
         "synopsisHash": "f60b587ec069c294a2a7679d2e3ec3fe3c85bde5826cfcadc35ee2ac68d8fa3f",
-        "descriptionHash": "6abef117f634e6b1c2fb4f165fb85b1224cbe19e8ae6c4e14baee66bec94023c"
+        "descriptionHash": "520c3a09772f124a02c8265a5e512346f34b89653d7dcbdb992cc9fa987111f9"
       },
       {
         "canonical": "--gpt-oss-120b-default",
@@ -2911,7 +2911,7 @@
           "--host"
         ],
         "synopsisHash": "d3d5a2b096085d848cda3965719831c0322f1295d847055a0a08f94e3a4532b9",
-        "descriptionHash": "545c6c64a212045bbf4656ad4c3446431d644991e763a20e82ca63fd260099e3"
+        "descriptionHash": "29c9a1aa5d22b47fe31a00a5d26c3fa8666642b3efcb93171056781eac3b6c61"
       },
       {
         "canonical": "--ignore-eos",
@@ -3185,7 +3185,7 @@
           "--min-p"
         ],
         "synopsisHash": "fce32715c61d0816b88fc70241bdb384eaf030b9c66f44ee32a65b52d53652e7",
-        "descriptionHash": "956cc86507be9ea4e69df4f24de1600795ddd8b1e3c81a8579db82df3a431f63"
+        "descriptionHash": "1d214c3a4166d4b85890a0f672bafcc81b43d54a80dc4d3ce147dcdfc18a0bc6"
       },
       {
         "canonical": "--mirostat",
@@ -3467,7 +3467,7 @@
           "--presence-penalty"
         ],
         "synopsisHash": "e04137c9e4edf9058eee9559e02b2711cc9c231299556cd66b95fae915bb3966",
-        "descriptionHash": "5a1b5d57686cb4560a3517c10111520e1df7f3c957b0a46106705de6eaa836d3"
+        "descriptionHash": "425558323f2d42e1fdcaf30354d2c6bba3819ebb6640208425c554dfe052e83c"
       },
       {
         "canonical": "--prio",
@@ -3567,7 +3567,7 @@
           "--repeat-penalty"
         ],
         "synopsisHash": "85502723fa9ce34f88809967ba0c8af52f67c635e5bb0b03147bf337816c8e26",
-        "descriptionHash": "f9794d2b18c0d8025c5e791db1634e538e2e8cdbd48ab0a766dea9a1fdc3e266"
+        "descriptionHash": "d76653bd84b38de8eb38ad954b7762e2404934097381ebaebef11c94a5c88071"
       },
       {
         "canonical": "--rerank",
@@ -4169,7 +4169,7 @@
           "--temperature"
         ],
         "synopsisHash": "c027ff93b09e9334da85c55ac2e8d130a39fcecdedaf75bf03a6e28ea3a4fca2",
-        "descriptionHash": "79f0d53ec460b62b9fef0c91bf3d2d68182cba3d2777cf70eb978fdac0b58c5a"
+        "descriptionHash": "9ec9d3bc954b7d0fb5fc22b3866f26541399ee02f3817aed7cc6b2ce224cbc4b"
       },
       {
         "canonical": "--tensor-split",
@@ -4254,7 +4254,7 @@
           "--top-p"
         ],
         "synopsisHash": "b3bacf3c5ef9eb05088e8cefe2282e7de327fd78e2ef57fe6993cc83c871fe87",
-        "descriptionHash": "8d9ade7ab494eefae0aba7ccab451a6f3e51a02099dee4e243f32432540e7aa4"
+        "descriptionHash": "7c05b7557aadcb7714a7314473b69c403c271e24b211a194600483471a280d2e"
       },
       {
         "canonical": "--typical",

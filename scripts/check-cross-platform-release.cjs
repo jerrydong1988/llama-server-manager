@@ -162,6 +162,12 @@ if (!finalizeJob.includes('needs: [build-windows, build-macos, build-linux, buil
 }
 
 const updaterJob = jobBody('publish-updater')
+if (!updaterJob.includes('--verify-tag --draft --title')) {
+  failures.push('release must remain a draft while packages and updater assets are being uploaded')
+}
+if (!finalizeJob.includes('--draft=false --latest')) {
+  failures.push('release finalizer must publish the completed release before website synchronization')
+}
 for (const token of [
   'environment: release-r2',
   'Validate protected updater secrets',
