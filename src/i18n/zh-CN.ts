@@ -12,10 +12,16 @@
     noInstances: '\u6682\u65E0\u5B9E\u4F8B\uFF0C\u8BF7\u70B9\u51FB\u300C\u521B\u5EFA\u5B9E\u4F8B\u300D',
     uptime: '\u5DF2\u8FD0\u884C', genCommand: '\u751F\u6210\u547D\u4EE4', genCommandTitle: '\u751F\u6210\u7684\u547D\u4EE4\u884C',
     copyClipboard: '\u590D\u5236\u5230\u526A\u8D34\u677F', directStart: '\u76F4\u63A5\u542F\u52A8',
-    commandSecretWarning: '\u9884\u89c8\u4e2d\u5df2\u9690\u85cf API \u5bc6\u94a5\u3002\u590d\u5236\u5b8c\u6574\u547d\u4ee4\u65f6\u4f1a\u5305\u542b\u5bc6\u94a5\uff0c\u8bf7\u59a5\u5584\u4fdd\u7ba1\u3002',
+    commandSecretWarning: '两种预览均已隐藏 API 密钥和访问令牌。复制完整命令会包含真实值，请妥善保管。',
     configParams: '\u914D\u7F6E\u53C2\u6570', openBrowser: '\u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00', testConnection: '\u6D4B\u8BD5\u8FDE\u63A5',
     sysPath: '\u7CFB\u7EDF PATH', cancelCreate: '\u53D6\u6D88',
     autoStart: '\u7A0B\u5E8F\u542F\u52A8\u65F6\u81EA\u52A8\u8FD0\u884C\u6B64\u5B9E\u4F8B',
+  },
+  commandPreview: {
+    description: '按分组核对启动参数，复制完整命令可在终端中运行。',
+    executable: '引擎程序', arguments: '参数值',
+    fullCommand: '完整命令', copyCommand: '复制完整命令',
+    groups: { model: '模型', context: '上下文与缓存', performance: '性能与内存', reasoning: '推理与生成', sampling: '采样', speculative: '推测解码', network: '网络与服务', other: '其他参数' },
   },
   modelRepo: {
     searchPlaceholder: '\u641C\u7D22\u6A21\u578B...', scan: '\u626B\u63CF\u6A21\u578B', addDir: '\u6DFB\u52A0\u6A21\u578B\u76EE\u5F55',

@@ -12,10 +12,16 @@ export const enUS = {
     noInstances: 'No instances. Click "Create Instance" to add one.',
     uptime: 'Running for', genCommand: 'Cmd', genCommandTitle: 'Generated Command',
     copyClipboard: 'Copy to Clipboard', directStart: 'Start Directly',
-    commandSecretWarning: 'The API key is hidden in the preview. Copying the full command includes the key; handle it securely.',
+    commandSecretWarning: 'API keys and access tokens are hidden in both previews. Copying the full command includes their actual values; handle it securely.',
     configParams: 'Configure', openBrowser: 'Open in Browser', testConnection: 'Test Connection',
     sysPath: 'System PATH', cancelCreate: 'Cancel',
     autoStart: 'Auto-start when program launches',
+  },
+  commandPreview: {
+    description: 'Review startup parameters by group. Copy the full command to run it in a terminal.',
+    executable: 'Engine executable', arguments: 'Arguments',
+    fullCommand: 'Full command', copyCommand: 'Copy full command',
+    groups: { model: 'Model', context: 'Context and cache', performance: 'Performance and memory', reasoning: 'Reasoning and generation', sampling: 'Sampling', speculative: 'Speculative decoding', network: 'Network and service', other: 'Other parameters' },
   },
   modelRepo: {
     searchPlaceholder: 'Search models...', scan: 'Scan Models', addDir: 'Add Directory',

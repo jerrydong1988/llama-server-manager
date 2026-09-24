@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal, LoaderCircle } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal, LoaderCircle } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
-import { exportShellCommand, maskCommandArguments } from '../store/commandFormatting'
+import { exportShellCommand } from '../store/commandFormatting'
 import { invokeApp as invoke } from '../lib/ipc'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { formatMessage, useI18n } from '../i18n'
@@ -18,6 +18,7 @@ import { usePortAvailability } from './InstanceManager/usePortAvailability'
 import { useInstanceSelection } from './InstanceManager/useInstanceSelection'
 import { useGuideTourStore } from './guide/guideTourStore'
 import { CheckpointStatusCard } from './InstanceManager/CheckpointStatusCard'
+import { CommandPreviewModal } from './InstanceManager/CommandPreviewModal'
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
 const InstanceManager = () => {
@@ -43,10 +44,9 @@ const InstanceManager = () => {
 
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
-  const [cmdText, setCmdText] = useState('')
+  const [cmdArgs, setCmdArgs] = useState<string[]>([])
   const [cmdRaw, setCmdRaw] = useState('')
   const exportShell = /win/i.test(navigator.platform) ? 'powershell' : 'posix'
-  const [cmdIncludesSecrets, setCmdIncludesSecrets] = useState(false)
   const [commandError, setCommandError] = useState<CommandErrorState | null>(null)
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -210,10 +210,9 @@ const InstanceManager = () => {
     try {
       const { command: cmd } = await generateCommand(inst.config, engine.exe)
       const raw = exportShellCommand(cmd, exportShell)
-      const masked = maskCommandArguments(cmd)
       setCmdRaw(raw)
-      setCmdIncludesSecrets(cmd.some((arg, index) => arg !== masked[index]))
-      setCmdText(exportShellCommand(masked, exportShell))
+      setCmdArgs(cmd)
+      setCopyFeedback(false)
       setShowCmdModal(id)
     } catch (e) {
       console.error(e)
@@ -828,28 +827,12 @@ const InstanceManager = () => {
         />
       )}
 
-      {showCmdModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <Surface className="w-full max-w-3xl p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.instance.genCommandTitle}</h3>
-              <Button onClick={() => setShowCmdModal('')} variant="subtle" size="icon" aria-label="Close"><X className="h-5 w-5" /></Button>
-            </div>
-            <p className="mb-2 text-xs text-slate-500">{exportShell === 'powershell' ? 'PowerShell 7.3+' : 'POSIX shell (sh / bash / zsh)'}</p>
-            <pre className="max-h-80 overflow-y-auto overflow-x-auto rounded-lg bg-slate-950 p-4 text-sm text-slate-200">{cmdText}</pre>
-            {cmdIncludesSecrets && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-                {t.instance.commandSecretWarning}
-              </div>
-            )}
-            {copyFeedback && <div className="mt-3 text-center text-xs font-medium text-emerald-500">{t.common.copySuccess}</div>}
-            <div className="mt-4 flex gap-2">
-              <Button onClick={() => handleCopyCommand(cmdRaw)} variant="primary" icon={<Copy className="h-4 w-4" />}>{t.instance.copyClipboard}</Button>
-              <Button onClick={() => { const inst = instances.find(x => x.id === showCmdModal); if (inst) void startInstance(inst.id).catch(() => {}); setShowCmdModal('') }} variant="success">{t.instance.directStart}</Button>
-            </div>
-          </Surface>
-        </div>
-      )}
+      {showCmdModal && <CommandPreviewModal
+        command={cmdArgs} shell={exportShell} copied={copyFeedback}
+        onCopy={() => { void handleCopyCommand(cmdRaw) }}
+        onClose={() => setShowCmdModal('')}
+        onStart={() => { const inst = instances.find(x => x.id === showCmdModal); if (inst) void startInstance(inst.id).catch(() => {}); setShowCmdModal('') }}
+      />}
 
       {commandError && <CommandFeedbackModal
         title={labels.commandErrorTitle} message={commandError.message} closeLabel={t.appShell.close}
