@@ -179,6 +179,8 @@ export function registerGlobalStoreListeners(
   store: StoreLike,
   startupTimings: { name: string; ms: number }[],
 ) {
+  let checkpointSnapshotReceived = false
+  let checkpointHydrationWarning: string | null = null
   const classifyLogLevel = (text: string): 'info' | 'warning' | 'error' => {
     const normalized = text.trim().toLowerCase()
     if (/\b(?:no errors?|errors?\s*[=:]\s*0|failed\s*[=:]\s*0)\b/.test(normalized)
@@ -201,6 +203,9 @@ export function registerGlobalStoreListeners(
   }>(store, 'runtime-service-status', (event) => {
     const nextRuntimeError = event.payload.lastError?.trim() || null
     const activeRuntimeWarning = nextRuntimeError ? `background runtime: ${nextRuntimeError}` : null
+    const hasCheckpointSnapshot = event.payload.checkpoints != null
+    const recoveredCheckpointWarning = hasCheckpointSnapshot ? checkpointHydrationWarning : null
+    if (hasCheckpointSnapshot) checkpointSnapshotReceived = true
     const running = event.payload.running || {}
     const nextManagedIds = new Set(Object.keys(running))
     const previousManagedIds = new Set([
@@ -209,9 +214,10 @@ export function registerGlobalStoreListeners(
     ])
     runtimeManagedIds = nextManagedIds
     store.setState(state => ({
-      runtimeWarnings: runtimeBridgeWarnings.size > 0
+      runtimeWarnings: runtimeBridgeWarnings.size > 0 || recoveredCheckpointWarning !== null
         ? state.runtimeWarnings.filter(warning => (
-          !runtimeBridgeWarnings.has(warning) || warning === activeRuntimeWarning
+          warning !== recoveredCheckpointWarning
+          && (!runtimeBridgeWarnings.has(warning) || warning === activeRuntimeWarning)
         ))
         : state.runtimeWarnings,
       instances: state.instances.map(instance => {
@@ -238,6 +244,7 @@ export function registerGlobalStoreListeners(
       },
     }))
     runtimeBridgeWarnings.clear()
+    if (hasCheckpointSnapshot) checkpointHydrationWarning = null
     if (nextRuntimeError && nextRuntimeError !== lastReportedRuntimeStatusError) {
       store.getState().addRuntimeWarning(`background runtime: ${nextRuntimeError}`)
     }
@@ -256,11 +263,15 @@ export function registerGlobalStoreListeners(
   })
 
   invoke<Record<string, CheckpointStatus>>('list_checkpoint_statuses')
-    .then(statuses => store.getState().hydrateCheckpointStatuses(statuses))
+    .then(statuses => {
+      if (!checkpointSnapshotReceived) store.getState().hydrateCheckpointStatuses(statuses)
+    })
     .catch(error => {
-      store.getState().addRuntimeWarning(
-        `checkpoint status hydration failed: ${error?.message || String(error)}`,
-      )
+      // A full authenticated snapshot may arrive before this older request
+      // settles. Do not reintroduce an already recovered startup warning.
+      if (checkpointSnapshotReceived) return
+      checkpointHydrationWarning = `checkpoint status hydration failed: ${error?.message || String(error)}`
+      store.getState().addRuntimeWarning(checkpointHydrationWarning)
     })
 
   registerListener<{ instanceId: string; text: string }>(store, 'server-log', (event) => {

@@ -129,6 +129,13 @@ pub async fn stop_instance(instance_id: String) -> Result<(), String> {
     }
 }
 
+pub async fn checkpoint_statuses(
+) -> Result<std::collections::HashMap<String, crate::checkpoint::CheckpointStatus>, String> {
+    // Startup hydration must join the same authenticated handoff as the bridge,
+    // rather than racing an old daemon while the installer replaces it.
+    Ok(ensure_runtime_service().await?.checkpoints)
+}
+
 pub async fn clear_checkpoint(
     instance_id: String,
 ) -> Result<crate::checkpoint::CheckpointStatus, String> {
