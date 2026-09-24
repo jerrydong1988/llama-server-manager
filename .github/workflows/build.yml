@@ -547,7 +547,7 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "GitHub Release already exists."
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --notes ''
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$GITHUB_REF_NAME" --notes ''
           fi
       - name: Ensure release notes are present before manifest generation
         env:
@@ -688,6 +688,11 @@ jobs:
             --jq '.body' > generated-release-notes.md
           test -s generated-release-notes.md
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file generated-release-notes.md
+
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
   sync-website:
     if: startsWith(github.ref, 'refs/tags/v')

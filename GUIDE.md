@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.48 · Windows / macOS / Linux
+> v2.9.49 · Windows / macOS / Linux
 
 本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
 
@@ -285,9 +285,9 @@ When startup fails, inspect the instance state and server logs instead of repeat
 
 ## 参数配置 / Parameter Configuration
 
-参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.4.1 基线跟踪 255 个参数条目。
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.5.0 基线跟踪 255 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
 
-Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.4.1 baseline tracks 255 parameter entries.
+Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.5.0 baseline tracks 255 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
 
 ![参数搜索、预设、分组和校验提示 / Configuration search, presets, groups, and validation](public/docs/guide/06-configuration.png)
 
