@@ -3966,7 +3966,7 @@ mod tests {
         payload: Vec<u8>,
         health_delay: Duration,
         save_delay: Duration,
-        restore_delay: Duration,
+        restore_gate: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
         restore_applies: bool,
         malformed_action: Option<String>,
         erase_count: u32,
@@ -3983,7 +3983,7 @@ mod tests {
                 payload: Vec::new(),
                 health_delay: Duration::ZERO,
                 save_delay: Duration::ZERO,
-                restore_delay: Duration::ZERO,
+                restore_gate: None,
                 restore_applies: true,
                 malformed_action: None,
                 erase_count: 0,
@@ -4115,16 +4115,30 @@ mod tests {
     ) -> Response {
         let _action_guard = context.action_lock.lock().await;
         let action = query.get("action").map(String::as_str).unwrap_or_default();
-        let (delay, malformed) = {
+        let (delay, malformed, restore_gate) = {
             let mut state = context.state.lock().unwrap();
             state.events.push(action.to_string());
             let delay = match action {
                 "save" => state.save_delay,
-                "restore" => state.restore_delay,
                 _ => Duration::ZERO,
             };
-            (delay, state.malformed_action.as_deref() == Some(action))
+            let restore_gate = if action == "restore" {
+                state.restore_gate.take()
+            } else {
+                None
+            };
+            (
+                delay,
+                state.malformed_action.as_deref() == Some(action),
+                restore_gate,
+            )
         };
+        if let Some((entered, release)) = restore_gate {
+            if entered.send(()).is_err() || release.await.is_err() {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "test restore cancelled")
+                    .into_response();
+            }
+        }
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
@@ -4320,10 +4334,12 @@ mod tests {
             PRIVATE_PAYLOAD.len() as u64
         );
 
+        let (restore_entered, entered_restore) = oneshot::channel();
+        let (release_restore, restore_released) = oneshot::channel();
         server.configure(|state| {
             state.prompt_tokens = 0;
             state.payload.clear();
-            state.restore_delay = Duration::from_millis(300);
+            state.restore_gate = Some((restore_entered, restore_released));
             state.events.clear();
         });
         let second = CheckpointCoordinator::new(store.clone());
@@ -4341,7 +4357,7 @@ mod tests {
         let restore_config = config.clone();
         let restore_fingerprint = fingerprint.clone();
         let restore = tokio::task::spawn_blocking(move || {
-            let client = LlamaSlotClient::new(&restore_config, Duration::from_secs(2)).unwrap();
+            let client = LlamaSlotClient::new(&restore_config, Duration::from_secs(30)).unwrap();
             restore_coordinator.restore_or_cold(
                 INSTANCE_ID,
                 902,
@@ -4350,20 +4366,19 @@ mod tests {
                 &client,
             )
         });
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if second
-                    .status(INSTANCE_ID)
-                    .is_some_and(|status| status.phase == CheckpointPhase::Restoring)
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        // Hold the HTTP response until the routing assertion has run. Polling
+        // a briefly delayed response can miss Restoring on a busy CI runner.
+        tokio::time::timeout(Duration::from_secs(30), entered_restore)
+            .await
+            .expect("restore request did not reach the fake server")
+            .expect("restore handler dropped its readiness signal");
+        assert_eq!(
+            second.status(INSTANCE_ID).unwrap().phase,
+            CheckpointPhase::Restoring
+        );
         assert!(!second.gate_allows_routing(INSTANCE_ID));
+        assert!(!restore.is_finished());
+        release_restore.send(()).unwrap();
         let restored = restore.await.unwrap().unwrap();
         assert_eq!(restored.phase, CheckpointPhase::Ready);
         assert_eq!(restored.last_outcome, CheckpointOutcome::Success);
@@ -4381,7 +4396,6 @@ mod tests {
         server.configure(|state| {
             state.prompt_tokens = 7;
             state.payload = b"unverified state".to_vec();
-            state.restore_delay = Duration::ZERO;
             state.restore_applies = false;
             state.erase_count = 0;
             state.events.clear();
