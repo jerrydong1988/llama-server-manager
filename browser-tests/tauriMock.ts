@@ -6,6 +6,7 @@ import { normalizeSpeculativeTypes } from '../src/speculativeTypes'
 import { routerUsageMock, clearUsageMock, routerUsageRequestsMock } from './routerUsageMock'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type {
+  CheckpointStatus,
   EngineInfo,
   GeneratedServerCommand,
   InstanceConfig,
@@ -347,7 +348,7 @@ if (BROWSER_SCENARIO === 'checkpoint-requirements') {
     },
   })
 }
-if (BROWSER_SCENARIO === 'checkpoint-observation') {
+if (['checkpoint-observation', 'checkpoint-hydration-delayed'].includes(BROWSER_SCENARIO ?? '')) {
   state.instances[INSTANCE_ID].kv_checkpoint.enabled = true
 }
 
@@ -656,6 +657,7 @@ type BrowserTestControl = {
   releaseStart: () => void
   releaseSave: (fail?: boolean) => void
   releaseWorkerScan: (workers: WorkerInfo[]) => void
+  releaseCheckpointHydration: (statuses: Record<string, CheckpointStatus>, error?: string) => void
 }
 
 declare global {
@@ -686,6 +688,10 @@ const storageGroups = [
 const pendingBrowses: Array<{ repoId: string; resolve: (files: MsFileEntry[]) => void }> = []
 const pendingPortChecks: Array<{ port: number; resolve: (available: boolean) => void }> = []
 const pendingWorkerScans: Array<(workers: WorkerInfo[]) => void> = []
+let pendingCheckpointHydration: {
+  resolve: (statuses: Record<string, CheckpointStatus>) => void
+  reject: (error: Error) => void
+} | null = null
 const clusterWorkers: WorkerInfo[] = BROWSER_SCENARIO === 'cluster-worker'
   ? [{
       id: 'browser-cluster-worker',
@@ -727,6 +733,13 @@ const control: BrowserTestControl = {
   },
   releaseStart: () => releasePendingStart?.(),
   releaseSave: fail => releasePendingSave?.(fail),
+  releaseCheckpointHydration: (statuses, error) => {
+    if (!pendingCheckpointHydration) throw new Error('No pending checkpoint hydration')
+    const pending = pendingCheckpointHydration
+    pendingCheckpointHydration = null
+    if (error) pending.reject(new Error(error))
+    else pending.resolve(clone(statuses))
+  },
   releaseWorkerScan: (workers) => {
     const resolve = pendingWorkerScans.shift()
     if (!resolve) throw new Error('No pending browser-test worker scan')
@@ -1026,7 +1039,13 @@ mockIPC((command, payload) => {
       }
       return [clone(models), clone(engines)]
     case 'load_config': return clone(control.state)
-    case 'list_checkpoint_statuses': return {}
+    case 'list_checkpoint_statuses':
+      if (BROWSER_SCENARIO === 'checkpoint-hydration-delayed') {
+        return new Promise<Record<string, CheckpointStatus>>((resolve, reject) => {
+          pendingCheckpointHydration = { resolve, reject }
+        })
+      }
+      return {}
     case 'get_checkpoint_status': return null
     case 'get_checkpoint_eligibility': {
       const config = args.config as InstanceConfig

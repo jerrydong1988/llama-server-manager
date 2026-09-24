@@ -69,10 +69,9 @@ pub async fn list_checkpoint_statuses(
     let mut statuses = state.checkpoint_coordinator.statuses();
     if crate::runtime_service::manages_instances() {
         statuses.extend(
-            crate::runtime_service::runtime_status()
+            crate::runtime_service::checkpoint_statuses()
                 .await
-                .map_err(|message| AppError::new("CHECKPOINT_STATUS_UNAVAILABLE", message, true))?
-                .checkpoints,
+                .map_err(|message| AppError::new("CHECKPOINT_STATUS_UNAVAILABLE", message, true))?,
         );
     }
     Ok(statuses)

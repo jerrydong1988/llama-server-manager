@@ -56,8 +56,19 @@ async fn coordinate(data: &Path) {
         .is_err());
     drop(unavailable);
 
+    // Checkpoint hydration during a GUI startup must join the bridge's startup
+    // transition instead of immediately querying an unavailable/retiring peer.
+    let transition = runtime::RUNTIME_START_LOCK.lock().await;
+    let hydration = tokio::spawn(runtime::checkpoint_statuses());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !hydration.is_finished(),
+        "hydration bypassed runtime startup"
+    );
     let mut service = child("runtime", data);
     service_ready().await;
+    drop(transition);
+    assert!(hydration.await.unwrap().unwrap().is_empty());
     runtime::heartbeat().await.unwrap();
     let original_pid = runtime::ensure_runtime_service().await.unwrap().service_pid;
     assert_eq!(original_pid, service.0.id());
@@ -72,6 +83,9 @@ async fn coordinate(data: &Path) {
     service.0.wait().unwrap();
     assert!(transport::acquire_runtime_lock().unwrap().is_none());
     assert!(is_update_pause(&runtime::heartbeat().await.unwrap_err()));
+    assert!(is_update_pause(
+        &runtime::checkpoint_statuses().await.unwrap_err()
+    ));
     assert!(is_update_pause(
         &runtime::ensure_runtime_service().await.unwrap_err()
     ));
