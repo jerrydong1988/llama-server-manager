@@ -2,6 +2,7 @@ pub mod autostart;
 pub mod protocol;
 mod supervisor;
 mod transport;
+pub mod update;
 
 use fs2::FileExt;
 use protocol::{
@@ -417,15 +418,21 @@ async fn call_with_token(token: String, command: RuntimeCommand) -> Result<Runti
 }
 
 pub async fn call(command: RuntimeCommand) -> Result<RuntimeReply, String> {
+    let _permit = update::request_permit().await?;
+    call_unchecked(command).await
+}
+
+async fn call_unchecked(command: RuntimeCommand) -> Result<RuntimeReply, String> {
     call_with_token(load_control_token()?, command).await
 }
 
 async fn call_recovering(command: RuntimeCommand) -> Result<RuntimeReply, String> {
+    let _permit = update::request_permit().await?;
     if !RUNTIME_READY.load(Ordering::Acquire) {
-        ensure_runtime_service().await?;
+        ensure_runtime_service_inner().await?;
     }
 
-    match call(command.clone()).await {
+    match call_unchecked(command.clone()).await {
         Ok(reply) => Ok(reply),
         Err(first_error) => {
             let service_is_reachable = match load_control_token() {
@@ -437,8 +444,8 @@ async fn call_recovering(command: RuntimeCommand) -> Result<RuntimeReply, String
             }
 
             RUNTIME_READY.store(false, Ordering::Release);
-            ensure_runtime_service().await?;
-            call(command).await.map_err(|retry_error| {
+            ensure_runtime_service_inner().await?;
+            call_unchecked(command).await.map_err(|retry_error| {
                 format!(
                     "runtime request failed ({first_error}); recovery retry failed: {retry_error}"
                 )
@@ -448,7 +455,12 @@ async fn call_recovering(command: RuntimeCommand) -> Result<RuntimeReply, String
 }
 
 pub async fn runtime_status() -> Result<RuntimeServiceStatus, String> {
-    match call(RuntimeCommand::GetStatus).await? {
+    let _permit = update::request_permit().await?;
+    runtime_status_unchecked().await
+}
+
+async fn runtime_status_unchecked() -> Result<RuntimeServiceStatus, String> {
+    match call_unchecked(RuntimeCommand::GetStatus).await? {
         RuntimeReply::Status(status) => Ok(*status),
         _ => Err("runtime service returned an unexpected status response".into()),
     }
@@ -553,9 +565,49 @@ fn append_runtime_startup_failure(error: &str) {
 }
 
 pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
+    let _permit = update::request_permit().await?;
+    ensure_runtime_service_inner().await
+}
+
+// A previous GUI/runtime can still be exiting after an MSI replacement. Recheck
+// the OS lock on every retry; endpoint failure alone never proves it is free.
+async fn wait_for_existing_runtime(
+    token: &mut String,
+    timeout: Duration,
+) -> Result<Option<std::fs::File>, String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(lock) = transport::acquire_runtime_lock()? {
+            return Ok(Some(lock));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let probe = tokio::time::timeout(
+            remaining.min(Duration::from_secs(3)),
+            call_with_token(token.clone(), RuntimeCommand::Ping),
+        )
+        .await;
+        if matches!(probe, Ok(Ok(RuntimeReply::Pong))) {
+            return Ok(None);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let detail = match probe {
+                Ok(Err(error)) => error,
+                Ok(Ok(_)) => "unexpected runtime ping response".into(),
+                Err(_) => "runtime ping timed out".into(),
+            };
+            return Err(format!(
+                "runtime lock is held but the authenticated service is unavailable: {detail}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        *token = load_control_token()?;
+    }
+}
+
+async fn ensure_runtime_service_inner() -> Result<RuntimeServiceStatus, String> {
     let _transition = RUNTIME_START_LOCK.lock().await;
     if RUNTIME_READY.load(Ordering::Acquire) {
-        match runtime_status().await {
+        match runtime_status_unchecked().await {
             Ok(status)
                 if status.service_version == env!("CARGO_PKG_VERSION")
                     && has_required_runtime_capabilities(&status) =>
@@ -566,22 +618,12 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
         }
     }
     let mut token = load_or_create_control_token()?;
-    let runtime_lock_probe = transport::acquire_runtime_lock()?;
+    let runtime_lock_probe = match transport::acquire_runtime_lock()? {
+        Some(lock) => Some(lock),
+        None => wait_for_existing_runtime(&mut token, Duration::from_secs(30)).await?,
+    };
     if runtime_lock_probe.is_none() {
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
-        loop {
-            if ping_with_token(token.clone()).await {
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(
-                    "runtime lock is held but the authenticated service is unavailable".into(),
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            token = load_control_token()?;
-        }
-        let status = runtime_status().await?;
+        let status = runtime_status_unchecked().await?;
         if status.service_version == env!("CARGO_PKG_VERSION")
             && has_required_runtime_capabilities(&status)
         {
@@ -589,14 +631,15 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
             return Ok(status);
         }
         RUNTIME_READY.store(false, Ordering::Release);
-        shutdown(false).await?;
-        if !transport::wait_until_stopped(&token, Duration::from_secs(6)).await {
-            return Err(format!(
-                "runtime service {} did not stop for upgrade to {}",
-                status.service_version,
-                env!("CARGO_PKG_VERSION")
-            ));
+        match call_unchecked(RuntimeCommand::Shutdown {
+            stop_instances: false,
+        })
+        .await?
+        {
+            RuntimeReply::Ack => {}
+            _ => return Err("runtime service returned an unexpected shutdown response".into()),
         }
+        drop(transport::wait_for_runtime_lock(Duration::from_secs(10)).await?);
     } else {
         drop(runtime_lock_probe);
     }
@@ -611,7 +654,7 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     if !ping_with_token(token).await {
         return Err("runtime service rejected the authenticated startup probe".into());
     }
-    let status = runtime_status().await?;
+    let status = runtime_status_unchecked().await?;
     if !has_required_runtime_capabilities(&status) {
         return Err("runtime service started without required capabilities".into());
     }
@@ -879,6 +922,7 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
             };
             match result {
                 Ok(status) => reconcile_app_runtime(&app, &status),
+                Err(error) if update::is_update_pause(&error) => {}
                 Err(error) => {
                     use tauri::Emitter;
                     let _ = app.emit(

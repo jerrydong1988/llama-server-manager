@@ -43,6 +43,7 @@ let sysMetricsTimer: ReturnType<typeof setTimeout> | null = null
 let sysMetricsInFlight = false
 let runtimeManagedIds = new Set<string>()
 let lastReportedRuntimeStatusError: string | null = null
+let runtimeBridgeWarnings = new Set<string>()
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -198,6 +199,8 @@ export function registerGlobalStoreListeners(
     lastError?: string | null
     checkpoints?: Record<string, CheckpointStatus>
   }>(store, 'runtime-service-status', (event) => {
+    const nextRuntimeError = event.payload.lastError?.trim() || null
+    const activeRuntimeWarning = nextRuntimeError ? `background runtime: ${nextRuntimeError}` : null
     const running = event.payload.running || {}
     const nextManagedIds = new Set(Object.keys(running))
     const previousManagedIds = new Set([
@@ -206,6 +209,11 @@ export function registerGlobalStoreListeners(
     ])
     runtimeManagedIds = nextManagedIds
     store.setState(state => ({
+      runtimeWarnings: runtimeBridgeWarnings.size > 0
+        ? state.runtimeWarnings.filter(warning => (
+          !runtimeBridgeWarnings.has(warning) || warning === activeRuntimeWarning
+        ))
+        : state.runtimeWarnings,
       instances: state.instances.map(instance => {
         const runtime = running[instance.id]
         if (runtime) {
@@ -229,7 +237,7 @@ export function registerGlobalStoreListeners(
         ...(event.payload.checkpoints || {}),
       },
     }))
-    const nextRuntimeError = event.payload.lastError?.trim() || null
+    runtimeBridgeWarnings.clear()
     if (nextRuntimeError && nextRuntimeError !== lastReportedRuntimeStatusError) {
       store.getState().addRuntimeWarning(`background runtime: ${nextRuntimeError}`)
     }
@@ -237,7 +245,10 @@ export function registerGlobalStoreListeners(
   })
 
   registerListener<{ error: string }>(store, 'runtime-service-error', (event) => {
-    store.getState().addRuntimeWarning(`background runtime: ${event.payload.error}`)
+    const warning = `background runtime: ${event.payload.error}`
+    runtimeBridgeWarnings.add(warning)
+    store.getState().addRuntimeWarning(warning)
+    runtimeBridgeWarnings = new Set(store.getState().runtimeWarnings.filter(item => runtimeBridgeWarnings.has(item)))
   })
 
   registerListener<CheckpointStatus>(store, 'checkpoint-status', (event) => {

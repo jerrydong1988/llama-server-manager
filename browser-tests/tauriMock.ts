@@ -978,7 +978,7 @@ mockIPC((command, payload) => {
       if (BROWSER_SCENARIO === 'updater-retry' && control.updaterCheckCount === 1) {
         throw new Error('browser test updater endpoint temporarily unavailable')
       }
-      if (['updater-retry', 'updater-install', 'updater-install-failure'].includes(BROWSER_SCENARIO ?? '')) {
+      if (['updater-retry', 'updater-install', 'updater-install-failure', 'updater-prepare-failure', 'updater-installer-failure'].includes(BROWSER_SCENARIO ?? '')) {
         return {
           rid: 42,
           currentVersion: '2.9.36',
@@ -989,9 +989,20 @@ mockIPC((command, payload) => {
         }
       }
       return null
-    case 'plugin:updater|download_and_install':
+    case 'plugin:updater|download':
       if (BROWSER_SCENARIO === 'updater-install-failure') {
         throw new Error('browser test updater download failed')
+      }
+      return 43
+    case 'prepare_app_update':
+      if (BROWSER_SCENARIO === 'updater-prepare-failure') {
+        throw new Error('browser test runtime lock was not released')
+      }
+      return null
+    case 'resume_app_after_update': return null
+    case 'plugin:updater|install':
+      if (BROWSER_SCENARIO === 'updater-installer-failure') {
+        throw new Error('browser test installer failed')
       }
       return null
     case 'plugin:resources|close': return null
