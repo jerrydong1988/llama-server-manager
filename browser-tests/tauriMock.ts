@@ -644,6 +644,7 @@ type BrowserTestControl = {
   unhandled: string[]
   saveCount: number
   lastGenerated: GeneratedServerCommand | null
+  commandOverride: string[] | null
   failProxyStatus: boolean
   failProxyTargets: boolean
   failRuntimeStatus: boolean
@@ -711,6 +712,7 @@ const control: BrowserTestControl = {
   unhandled: [],
   saveCount: 0,
   lastGenerated: null,
+  commandOverride: null,
   failProxyStatus: false,
   failProxyTargets: false,
   failRuntimeStatus: false,
@@ -1455,6 +1457,7 @@ mockIPC((command, payload) => {
       if (BROWSER_SCENARIO === 'command-error') throw new Error('Browser test command generation failed')
       const config = args.config as InstanceConfig
       const generated = generatedCommand(config)
+      if (control.commandOverride) generated.command = [...control.commandOverride]
       control.lastGenerated = clone(generated)
       syncAutomationProbe()
       return generated
