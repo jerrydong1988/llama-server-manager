@@ -20,7 +20,9 @@ use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::process::{Command, Stdio};
+#[cfg(any(windows, test))]
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
@@ -2840,7 +2842,7 @@ async fn start_server_impl(
     );
 
     let mut child = {
-        let mut c = Command::new(&cmd[0]);
+        let mut c = crate::process_environment::external_command(&cmd[0]);
         c.args(&cmd[1..])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -3538,7 +3540,7 @@ fn wait_for_recorded_process_exit(ri: &RunningInstance, timeout: std::time::Dura
 #[cfg(unix)]
 fn terminate_unix_process(ri: &RunningInstance) -> bool {
     let pid = ri.pid.to_string();
-    let term_sent = Command::new("kill")
+    let term_sent = crate::process_environment::external_command("kill")
         .args(["-TERM", &pid])
         .status()
         .map(|status| status.success())
@@ -3549,7 +3551,7 @@ fn terminate_unix_process(ri: &RunningInstance) -> bool {
     if !running_instance_matches_live_process(ri) {
         return true;
     }
-    let kill_sent = Command::new("kill")
+    let kill_sent = crate::process_environment::external_command("kill")
         .args(["-KILL", &pid])
         .status()
         .map(|status| status.success())
@@ -4208,7 +4210,7 @@ pub async fn open_browser(
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
+        crate::process_environment::external_command("xdg-open")
             .arg(&url)
             .spawn()
             .map_err(|e| format!("{}", e))?;

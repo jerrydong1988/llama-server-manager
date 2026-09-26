@@ -12,6 +12,7 @@ mod models;
 mod operation_timing;
 mod path_utils;
 mod persistence;
+mod process_environment;
 mod runtime_service;
 mod security;
 mod speculative;
