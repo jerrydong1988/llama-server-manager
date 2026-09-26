@@ -55,6 +55,7 @@ jobs:
             src-tauri
             .temp/appimage-tauri
           key: appimage-candidate-16062-${{ matrix.arch }}
+          cache-on-failure: true
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq

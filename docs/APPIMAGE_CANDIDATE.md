@@ -30,6 +30,6 @@ bash ./run-with-diagnostics.sh
 
 ## 验证边界
 
-CI 会从最终 AppImage 解包，检查架构、Wayland 库污染、GIO 模块、WebKit 辅助进程及依赖解析，并测试外部进程的环境隔离。这些检查不等同于 Ubuntu 桌面的实际渲染成功。必须收到实机反馈后才能决定恢复正式发布；本候选流程不创建 Release、更新器清单或网站下载入口。
+CI 会从最终 AppImage 解包，检查架构、已知冲突的 `libwayland-client` 是否已排除、GIO 模块、WebKit 辅助进程及依赖解析，并测试外部进程的环境隔离。上游产物仍携带 Wayland cursor/EGL/server 库，清单保存在 `build-info.json` 中；它们的存在本身不代表已复现故障，仍需结合实机测试判断。这些检查不等同于 Ubuntu 桌面的实际渲染成功。必须收到实机反馈后才能决定恢复正式发布；本候选流程不创建 Release、更新器清单或网站下载入口。
 
 外部引擎和系统工具会过滤指向当前 AppImage 挂载目录的库/模块路径，保留宿主机的 CUDA/ROCm 路径和桌面会话变量。应用自身及 WebKit 仍使用打包时配套的环境。

@@ -26,9 +26,13 @@ def sha256(path):
 
 def inspect(app_dir, arch):
     libraries = sorted(str(p.relative_to(app_dir)) for p in app_dir.rglob("*.so*"))
-    conflicts = [p for p in libraries if re.match(r"libwayland-.*\.so", Path(p).name)]
+    # linuxdeploy's upstream exclusion targets the client ABI used by host Mesa.
+    # Other Wayland libraries remain in the upstream bundle; inventory them for
+    # desktop testing rather than treating their presence alone as a proven bug.
+    wayland_libraries = [p for p in libraries if re.match(r"libwayland-.*\.so", Path(p).name)]
+    conflicts = [p for p in wayland_libraries if re.match(r"libwayland-client\.so", Path(p).name)]
     if conflicts:
-        raise RuntimeError(f"AppImage still shadows host Wayland libraries: {conflicts}")
+        raise RuntimeError(f"AppImage still shadows the host Wayland client: {conflicts}")
     hook = app_dir / "apprun-hooks/linuxdeploy-plugin-gtk.sh"
     hook_text = hook.read_text()
     if not re.search(r"^export GIO_MODULE_DIR=", hook_text, re.M):
@@ -56,7 +60,12 @@ def inspect(app_dir, arch):
         if "not found" in output:
             raise RuntimeError(f"Unresolved dependencies in {binary}:\n{output}")
         dependencies[str(binary.relative_to(app_dir))] = output.replace(str(app_dir), "$APPDIR")
-    return {"bundled_libraries": libraries, "dependencies": dependencies, "gtk_hook": hook_text}
+    return {
+        "bundled_libraries": libraries,
+        "remaining_wayland_libraries_for_runtime_review": wayland_libraries,
+        "dependencies": dependencies,
+        "gtk_hook": hook_text,
+    }
 
 
 def main():
