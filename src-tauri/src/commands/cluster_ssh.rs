@@ -67,7 +67,7 @@ async fn detect_remote_os(
     ssh_key_path: Option<&str>,
     ssh_port: u16,
 ) -> Result<Option<String>, String> {
-    let mut c = Command::new("ssh");
+    let mut c = crate::process_environment::external_command("ssh");
     // #1: Use accept-new instead of no so the first connection is trusted and later ones are verified.
     c.arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
@@ -238,7 +238,7 @@ pub async fn ssh_launch_rpc(
             .ok_or_else(|| "SSH key file is required.\n必须提供 SSH 密钥文件。".to_string())?;
         let local_port = available_loopback_port()?;
         let remote_command = build_remote_cmd(&rpc_binary, rpc_port, &os);
-        let mut tunnel = Command::new("ssh");
+        let mut tunnel = crate::process_environment::external_command("ssh");
         tunnel
             .arg("-T")
             .arg("-o")
@@ -349,7 +349,7 @@ mod tests {
     use super::*;
 
     fn ssh_args_for_destination(ssh_user: &str, host: &str) -> Vec<String> {
-        let mut command = Command::new("ssh");
+        let mut command = crate::process_environment::external_command("ssh");
         command.arg("-p").arg("22");
         append_ssh_destination(&mut command, ssh_user, host);
         command
