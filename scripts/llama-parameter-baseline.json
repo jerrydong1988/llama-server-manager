@@ -1,18 +1,18 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-09-24",
+  "verifiedAt": "2026-10-08",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.5.0",
-  "upstreamCommit": "7fe450e19305b828c199d602c23a8337aaa1f03b",
-  "upstreamMasterChecked": "53ed051ce5e8193652e449f43216ca3859454f49",
+  "upstreamRelease": "v0.6.0",
+  "upstreamCommit": "d81235049384534c167caea52b85a694f6103d14",
+  "upstreamMasterChecked": "9c2e0e491a822adae1f0b1c831adb4160057d24f",
   "releaseSnapshot": {
-    "ref": "v0.5.0",
-    "commit": "7fe450e19305b828c199d602c23a8337aaa1f03b",
+    "ref": "v0.6.0",
+    "commit": "d81235049384534c167caea52b85a694f6103d14",
     "parameterCount": 255,
     "snapshotHash": "fe6bf44ea0bd1130edf9cebef83c9e4a4480d043dc3b28cd30650074e4590208",
     "parameters": [
@@ -2219,6 +2219,7 @@
         "bailingmoe3",
         "deepseek4",
         "falcon-h1",
+        "glm5-next",
         "granitehybrid",
         "jamba",
         "kimi-k3",
@@ -2246,7 +2247,7 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "53ed051ce5e8193652e449f43216ca3859454f49",
+    "commit": "9c2e0e491a822adae1f0b1c831adb4160057d24f",
     "parameterCount": 255,
     "snapshotHash": "fe6bf44ea0bd1130edf9cebef83c9e4a4480d043dc3b28cd30650074e4590208",
     "parameters": [
@@ -4453,6 +4454,7 @@
         "bailingmoe3",
         "deepseek4",
         "falcon-h1",
+        "glm5-next",
         "granitehybrid",
         "jamba",
         "kimi-k3",

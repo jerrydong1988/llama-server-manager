@@ -327,6 +327,7 @@ fn is_known_hybrid_or_recurrent(architecture: &str) -> bool {
         "qwen35",
         "deepseek4",
         "minimax01",
+        "glm5next",
     ];
     UNSUPPORTED_HINTS
         .iter()
@@ -4514,6 +4515,8 @@ mod tests {
             "plamo2",
             "minimax_01",
             "qwen4exp",
+            "glm5-next",
+            "GLM5_NEXT",
         ] {
             for persistence in [false, true] {
                 let result = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
@@ -4538,6 +4541,14 @@ mod tests {
                     architecture == "qwen35" && persistence,
                     "{architecture}, persistence={persistence}"
                 );
+                if !result.eligible {
+                    assert!(
+                        result
+                            .reasons
+                            .contains(&CheckpointReasonCode::HybridRecurrentUnsupported),
+                        "{architecture}, persistence={persistence}"
+                    );
+                }
             }
         }
         config.ctx_checkpoints = 0;
