@@ -1827,7 +1827,7 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
+        crate::process_environment::external_command("xdg-open")
             .arg(parent)
             .spawn()
             .map_err(|e| format!("{}", e))?;
@@ -2869,7 +2869,7 @@ pub async fn open_engine_folder(dir: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
+        crate::process_environment::external_command("xdg-open")
             .arg(&dir)
             .spawn()
             .map_err(|e| format!("{}", e))?;

@@ -26,7 +26,7 @@ use crate::commands::server::{
 use crate::models::{ProxyStatus, RunningInstance};
 use crate::vector_policy::ModelWorkload;
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -949,7 +949,7 @@ impl RuntimeSupervisor {
                 .map_err(|error| format!("无法创建日志文件: {error}"))?,
         );
 
-        let mut command = Command::new(&spec.command[0]);
+        let mut command = crate::process_environment::external_command(&spec.command[0]);
         command
             .args(&spec.command[1..])
             .stdout(Stdio::piped())

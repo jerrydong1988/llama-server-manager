@@ -327,6 +327,15 @@ if (!Array.isArray(updaterTargets) || !updaterTargets.includes('app')) {
 if (tauriConfig.bundle?.targets?.includes('appimage') || tauriConfig.bundle?.linux?.appimage) {
   failures.push('ordinary Linux builds must not produce the suspended AppImage package')
 }
+const candidateConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.appimage-candidate.conf.json', 'utf8'))
+const candidateWorkflow = fs.readFileSync('.github/workflows/appimage-candidate.yml', 'utf8')
+if (candidateConfig.bundle?.createUpdaterArtifacts !== false || candidateConfig.bundle?.targets?.join(',') !== 'appimage') {
+  failures.push('AppImage candidates must use a separate package-only configuration without updater artifacts')
+}
+if (/^  (push|release|workflow_run|pull_request_target):/m.test(candidateWorkflow)
+    || /contents: write|secrets\.|gh release|publish-updater|release-r2/.test(candidateWorkflow)) {
+  failures.push('AppImage candidate workflow must not publish, access release secrets, or run on release events')
+}
 for (const staleGuideClaim of [
   'DEB 或 AppImage',
   'DEB or AppImage',
