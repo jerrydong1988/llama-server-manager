@@ -1,5 +1,6 @@
 //! Bound client-controlled receive/delivery lifetimes independently of inference.
 use super::*;
+use crate::commands::atomic_counter;
 use std::sync::atomic::AtomicUsize;
 
 pub(super) const UPLOAD_IDLE: Duration = Duration::from_secs(15);
@@ -44,14 +45,8 @@ impl ResponseReservation {
         Self::acquire_from(bytes, &RESPONSE_BYTES)
     }
     fn acquire_from(bytes: usize, counter: &Arc<AtomicUsize>) -> Option<Self> {
-        counter
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current
-                    .checked_add(bytes)
-                    .filter(|next| *next <= RESPONSE_BUDGET)
-            })
-            .ok()
-            .map(|_| Self(bytes, counter.clone()))
+        atomic_counter::reserve(counter, bytes, RESPONSE_BUDGET)
+            .then(|| Self(bytes, counter.clone()))
     }
     pub(super) fn resize(&mut self, bytes: usize) -> bool {
         if bytes <= self.0 {
@@ -60,13 +55,7 @@ impl ResponseReservation {
             return true;
         }
         let delta = bytes - self.0;
-        if self
-            .1
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                n.checked_add(delta).filter(|n| *n <= RESPONSE_BUDGET)
-            })
-            .is_err()
-        {
+        if !atomic_counter::reserve(&self.1, delta, RESPONSE_BUDGET) {
             return false;
         }
         self.0 = bytes;
