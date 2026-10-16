@@ -32,6 +32,7 @@ export const VECTOR_ALLOWED_FIELDS = new Set<keyof InstanceConfig>([
   'rope_scaling', 'rope_scale', 'rope_freq_base', 'rope_freq_scale',
   'yarn_ext_factor', 'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast',
   'yarn_orig_ctx', 'flash_attn', 'moe_cpu_layers', 'cpu_moe', 'load_mode', 'lazy_mode',
+  'moe_cache_mib',
   'no_repack', 'numa', 'numa_mode', 'perf', 'check_tensors',
   'fit', 'fit_mode', 'fit_target', 'fit_ctx', 'cache_type_k', 'cache_type_v',
   'kv_unified', 'kv_unified_mode', 'cache_idle_slots', 'no_kv_offload', 'device', 'split_mode',
@@ -64,6 +65,7 @@ const SPECULATIVE_FIELDS = new Set<keyof InstanceConfig>([
   'spec_draft_p_min', 'spec_draft_p_split', 'spec_draft_device',
   'lookup_cache_static', 'lookup_cache_dynamic', 'spec_default',
   'spec_draft_backend_sampling', 'spec_draft_threads', 'spec_draft_threads_batch',
+  'spec_draft_n_ubatch', 'spec_draft_sampling',
 ])
 
 const CHAT_FIELDS = new Set<keyof InstanceConfig>([

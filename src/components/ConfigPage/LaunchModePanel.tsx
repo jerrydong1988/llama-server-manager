@@ -3,6 +3,7 @@ import type { EngineInfo, InstanceConfig } from '../../store'
 import type { getConfigPageLabels } from '../../i18n/configPageCopy'
 import { getEngineCompatibilityMode } from '../../engineCapabilities'
 import { Badge, Button, InsetSurface, PathText, SectionHeader, Surface } from '../ui'
+import { Num } from './shared'
 
 type Labels = ReturnType<typeof getConfigPageLabels>
 
@@ -55,8 +56,9 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritK
             <PathText value={engine?.exe || '--'} maxLength={120} className="mt-2 text-slate-700 dark:text-slate-200" />
           </InsetSurface>
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-800 dark:text-slate-200">{labels.manualCommand}</label>
+            <label htmlFor="manual-launch-command" className="mb-2 block text-sm font-medium text-slate-800 dark:text-slate-200">{labels.manualCommand}</label>
             <textarea
+              id="manual-launch-command"
               value={config.manual_command}
               onChange={event => set('manual_command', event.target.value)}
               placeholder={labels.manualCommandPlaceholder}
@@ -65,6 +67,7 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritK
             />
             <p className="mt-2 text-sm leading-6 text-slate-500">{labels.manualCommandHint}</p>
           </div>
+          <Num label={labels.manualPort} value={config.port} onChange={value => set('port', value)} min={1} max={65535} title={labels.manualPortHint} fieldKey="port" />
           <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{labels.manualModeWarning}</span>

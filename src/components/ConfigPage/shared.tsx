@@ -818,6 +818,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     cache_type_draft_k: '', cache_type_draft_v: '',
     spec_default: false, spec_draft_backend_sampling: true,
     spec_draft_threads: 0, spec_draft_threads_batch: 0,
+    spec_draft_n_ubatch: 0, spec_draft_sampling: '',
   },
   advancedRope: {
     rope_scaling: '', rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
@@ -835,6 +836,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   },
   advancedHardware: {
     moe_cpu_layers: 0, cpu_moe: false, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
+    moe_cache_mib: 0,
     perf: false, check_tensors: false, fit: false, fit_mode: '', fit_target: '', fit_ctx: 4096,
     numa_mode: '',
     threads_http: -1,
