@@ -1,6 +1,8 @@
 import type { EngineCapabilities, InstanceConfig } from './store'
 import { engineBuildNumber, speculativeBackendSamplingSupport, type ParameterEngine } from './engineParameterSupport'
 import {
+  draftContextEnabled,
+  draftSamplingEnabled,
   ngramCacheEnabled,
   projectorEnabled,
   reasoningBudgetEnabled,
@@ -146,6 +148,9 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   spec_draft_backend_sampling: { flags: ['--spec-draft-backend-sampling', '--no-spec-draft-backend-sampling'], dependency: specEnabled },
   spec_draft_threads: { flags: ['--spec-draft-threads', '-td'], dependency: specEnabled },
   spec_draft_threads_batch: { flags: ['--spec-draft-threads-batch', '-tbd'], dependency: specEnabled },
+  spec_draft_n_ubatch: { flags: ['--spec-draft-n-ubatch'], dependency: draftContextEnabled },
+  spec_draft_sampling: { flags: ['--spec-draft-sampling'], dependency: draftSamplingEnabled },
+  moe_cache_mib: { flags: ['--moe-cache-mib'] },
   lookup_cache_static: { flags: ['--lookup-cache-static', '-lcs'], dependency: ngramCacheEnabled },
   lookup_cache_dynamic: { flags: ['--lookup-cache-dynamic', '-lcd'], dependency: ngramCacheEnabled },
 
@@ -207,6 +212,9 @@ const localizeReportedDefault = (value: string, lang: string) => {
     automatic: '自动',
     'read from model': '从模型读取',
     'same as --threads': '与 --threads 相同',
+    '0, disabled': '0，禁用',
+    '0 - same as --n-ubatch': '0，跟随主模型物理批大小',
+    '8192, 0 for decision models': '普通模型 8192 MiB；decision 模型 0（禁用）',
   }
   return common[normalized] ?? value
 }

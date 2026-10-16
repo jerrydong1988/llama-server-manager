@@ -1,6 +1,8 @@
 import type { InstanceConfig } from '../../store'
 import { VECTOR_ALLOWED_FIELDS } from '../../modelPolicy'
 import {
+  draftContextEnabled,
+  draftSamplingEnabled,
   effectiveMmprojMode,
   ngramCacheEnabled,
   projectorEnabled,
@@ -36,7 +38,10 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
       'lookup_cache_static', 'lookup_cache_dynamic', 'spec_default',
       'spec_draft_backend_sampling', 'spec_draft_threads', 'spec_draft_threads_batch',
       'cache_type_draft_k', 'cache_type_draft_v',
+      'spec_draft_n_ubatch', 'spec_draft_sampling',
     ])
+    if (!draftContextEnabled(config, isEmbedding)) remove(['spec_draft_n_ubatch', 'spec_draft_sampling'])
+    if (!config.spec_draft_sampling || !draftSamplingEnabled(config, isEmbedding)) a.delete('spec_draft_sampling')
     if (!ngramCacheEnabled(config, isEmbedding)) {
       remove(['lookup_cache_static', 'lookup_cache_dynamic'])
     }
@@ -131,6 +136,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
 
   // ── Memory & Loading ──
   if (config.moe_cpu_layers > 0) a.add('moe_cpu_layers')
+  if (config.moe_cache_mib > 0) a.add('moe_cache_mib')
   if (config.cpu_moe) a.add('cpu_moe')
   if (config.load_mode) a.add('load_mode')
   if (config.lazy_mode) a.add('lazy_mode')
@@ -176,6 +182,10 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (!config.spec_draft_backend_sampling) a.add('spec_draft_backend_sampling')
     if (config.spec_draft_threads > 0) a.add('spec_draft_threads')
     if (config.spec_draft_threads_batch > 0) a.add('spec_draft_threads_batch')
+    if (draftContextEnabled(config, e)) {
+      if (config.spec_draft_n_ubatch > 0) a.add('spec_draft_n_ubatch')
+      if (config.spec_draft_sampling && draftSamplingEnabled(config, e)) a.add('spec_draft_sampling')
+    }
   }
 
    // ── Network ──

@@ -285,9 +285,17 @@ When startup fails, inspect the instance state and server logs instead of repeat
 
 ## 参数配置 / Parameter Configuration
 
-参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.5.0 基线跟踪 255 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.7.0 基线跟踪 258 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
 
-Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.5.0 baseline tracks 255 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
+Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.7.0 baseline tracks 258 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
+
+v0.7.0 适配：在“硬件配置”设置 MoE 专家 GPU 缓存（`--moe-cache-mib`），在“推测解码”设置草稿物理批大小（`--spec-draft-n-ubatch`）和采样方式（`--spec-draft-sampling`）。新字段默认继承引擎；数值 0 分别表示禁用 MoE 缓存、草稿批大小跟随主模型。草稿批大小适用于草稿类或自动推测模式；采样方式仅用于 draft-simple、draft-mtp，以及 auto 选中这两种实现的情况。旧引擎不支持的显式参数会提示并阻止启动。`--cache-ram` 对 decision 模型默认禁用，保持继承即可遵循此策略。`--slot-save-path` 新增环境变量支持，显式路径优先；受管检查点仍使用管理器控制的目录。
+
+The v0.7.0 controls add MoE expert GPU cache under Hardware, and draft physical batch size and sampling under Speculative Decoding. All inherit engine defaults until pinned. Zero disables the MoE cache or makes the draft batch follow the main model. Draft batch size applies to draft or automatic speculation; sampling applies only to draft-simple, draft-mtp, or auto when it selects either implementation. Unsupported explicit flags are reported and block startup on older engines. Inherited cache RAM respects the new decision-model default of disabled. Slot save paths now support an upstream environment variable; explicit paths take priority and managed checkpoints retain manager-controlled directories.
+
+实例端口由管理器显式传入，新实例仍默认 8080。上游 v0.7.0 自身默认端口为 9931；手动命令省略 `--port` 时，管理器会补入参数页中的实例端口，确保监听与健康监测一致。命令中显式提供的端口优先。
+
+The manager passes the instance port explicitly; new instances still default to 8080. Upstream v0.7.0 itself defaults to 9931. When a manual command omits `--port`, the manager appends the instance port shown on the configuration page so listening and health monitoring agree. An explicit port in the command takes priority.
 
 ![参数搜索、预设、分组和校验提示 / Configuration search, presets, groups, and validation](public/docs/guide/06-configuration.png)
 

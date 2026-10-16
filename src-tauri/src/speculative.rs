@@ -83,6 +83,18 @@ pub(crate) fn checkpoint_uses_draft_state(value: &str) -> bool {
         .any(|candidate| CHECKPOINTED_DRAFT_TYPES.contains(&candidate.as_str()))
 }
 
+pub(crate) fn uses_draft_context(value: &str) -> bool {
+    parse_speculative_types(value)
+        .iter()
+        .any(|kind| kind == "auto" || kind.starts_with("draft-"))
+}
+
+pub(crate) fn uses_draft_sampling(value: &str) -> bool {
+    parse_speculative_types(value)
+        .iter()
+        .any(|kind| matches!(kind.as_str(), "auto" | "draft-simple" | "draft-mtp"))
+}
+
 pub(crate) fn checkpoint_speculative_types_supported(
     value: &str,
     engine_types: &[String],

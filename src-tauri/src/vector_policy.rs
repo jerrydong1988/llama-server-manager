@@ -51,6 +51,7 @@ const VECTOR_ALLOWED_FIELDS: &[&str] = &[
     "flash_attn",
     "moe_cpu_layers",
     "cpu_moe",
+    "moe_cache_mib",
     "load_mode",
     "lazy_mode",
     "no_repack",

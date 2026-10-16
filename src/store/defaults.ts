@@ -29,6 +29,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     lookup_cache_static: '', lookup_cache_dynamic: '',
     spec_default: false, spec_draft_backend_sampling: true,
     spec_draft_threads: 0, spec_draft_threads_batch: 0,
+    spec_draft_n_ubatch: 0, spec_draft_sampling: '', moe_cache_mib: 0,
     device: '', split_mode: '', tensor_split: '', main_gpu: 0,
     override_kv: '',
     host: '127.0.0.1', port: 8080, api_key: '', api_key_file: '',

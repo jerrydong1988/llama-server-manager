@@ -20,6 +20,93 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('v0.7.0 controls support search, zero overrides, save, inheritance, and draft dependencies', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  const moe = page.locator('[data-config-field="moe_cache_mib"]')
+  const batch = page.locator('[data-config-field="spec_draft_n_ubatch"]')
+  const sampling = page.locator('[data-config-field="spec_draft_sampling"]')
+  await search.fill('--moe-cache-mib')
+  await expect(moe).toHaveAttribute('data-config-search-match', 'true')
+  await expect(moe).toHaveAttribute('data-config-source', 'inherited')
+  await moe.locator('input').fill('1024')
+  await search.fill('--spec-draft-n-ubatch')
+  await batch.locator('input').fill('128')
+  await batch.locator('input').fill('0')
+  await search.fill('--spec-draft-sampling')
+  await sampling.getByRole('combobox').selectOption('probabilistic')
+  await expect(sampling).toHaveAttribute('data-config-source', 'explicit')
+  await expect(batch).toHaveAttribute('data-config-source', 'explicit')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command)).toContain('--spec-draft-sampling')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  const saved = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])
+  expect(saved).toMatchObject({ moe_cache_mib: 1024, spec_draft_n_ubatch: 0, spec_draft_sampling: 'probabilistic' })
+  expect(saved.explicit_overrides).toEqual(expect.arrayContaining(['moe_cache_mib', 'spec_draft_n_ubatch', 'spec_draft_sampling']))
+  await sampling.getByRole('button', { name: /参数说明/ }).click()
+  await page.getByRole('button', { name: '恢复引擎默认', exact: true }).click()
+  await expect(sampling).toHaveAttribute('data-config-source', 'inherited')
+  await expect(sampling.getByRole('combobox')).toHaveValue('')
+  await search.fill('--spec-type')
+  await page.locator('[data-config-field="spec_type"]').getByRole('button', { name: '推测解码类型 (--spec-type)', exact: true }).click()
+  await page.getByRole('listbox', { name: '推测解码类型 (--spec-type)', exact: true }).getByRole('button', { name: 'none', exact: true }).click()
+  await search.fill('--spec-draft-n-ubatch')
+  await expect(batch.locator('input')).toBeDisabled()
+  await expect(batch).toHaveAttribute('data-config-source', 'inactive')
+})
+
+test('v0.7.0 parameters expose unsupported values on older engines', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters-old')
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  for (const [field, flag, value] of [
+    ['moe_cache_mib', '--moe-cache-mib', '1024'],
+    ['spec_draft_n_ubatch', '--spec-draft-n-ubatch', '128'],
+    ['spec_draft_sampling', '--spec-draft-sampling', 'probabilistic'],
+  ]) {
+    await search.fill(flag)
+    const control = page.locator(`[data-config-field="${field}"]`)
+    if (field === 'spec_draft_sampling') await control.getByRole('combobox').selectOption(value)
+    else await control.locator('input').fill(value)
+    await expect(control).toHaveAttribute('data-config-source', 'unsupported')
+  }
+})
+
+test('manual mode explains and persists the fallback instance port', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  await page.getByRole('button', { name: /手动启动命令/ }).click()
+  await page.getByRole('textbox', { name: '完整启动命令或可执行文件后的参数' }).fill('-m model.gguf')
+  const port = page.locator('[data-config-field="port"] input')
+  await expect(port).toHaveValue('18081')
+  await port.fill('19091')
+  await expect(page.getByText(/省略 --port 时会补入下方实例端口/)).toBeVisible()
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])).toMatchObject({ launch_mode: 'manual', port: 19091, manual_command: '-m model.gguf' })
+})
+
+for (const english of [false, true]) {
+  test(`v0.7.0 parameter help and layout in ${english ? 'English' : 'Chinese'}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: english ? 1440 : 1024, height: 900 })
+    await openConfiguration(page, 'v070-parameters')
+    if (english) await page.getByRole('button', { name: 'EN', exact: true }).click()
+    const search = page.getByRole('textbox', { name: english ? 'Parameter Search' : '参数搜索' })
+    await search.fill('--spec-draft')
+    const sampling = page.locator('[data-config-field="spec_draft_sampling"]')
+    await expect(sampling).toContainText(english ? 'Draft Sampling' : '草稿采样方式')
+    await sampling.getByRole('button', { name: english ? /Parameter help/ : /参数说明/ }).click()
+    await expect(page.getByRole('tooltip')).toContainText('greedy')
+    await page.keyboard.press('Escape')
+    await sampling.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: testInfo.outputPath('v070-parameters.png') })
+    const overflow = await sampling.evaluate(element => element.scrollWidth > element.clientWidth + 1)
+    expect(overflow).toBe(false)
+    await search.fill('--cache-ram')
+    await page.locator('[data-config-field="cache_ram"]').getByRole('button', { name: english ? /Parameter help/ : /参数说明/ }).click()
+    await expect(page.getByRole('tooltip')).toContainText('decision')
+    await expect(page.getByRole('tooltip')).toContainText('8192')
+  })
+}
+
 test('opening an instance config keeps React hook order stable (issue #5)', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', error => pageErrors.push(error.message))

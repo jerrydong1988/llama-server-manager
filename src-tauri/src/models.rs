@@ -466,6 +466,8 @@ pub struct InstanceConfig {
     pub moe_cpu_layers: u32,
     #[serde(default)]
     pub cpu_moe: bool,
+    #[serde(default)]
+    pub moe_cache_mib: u32,
     /// Unified llama.cpp model loading mode. Empty means inherit the engine default.
     #[serde(default)]
     pub load_mode: String,
@@ -531,6 +533,10 @@ pub struct InstanceConfig {
     pub spec_draft_threads: u32,
     #[serde(default)]
     pub spec_draft_threads_batch: u32,
+    #[serde(default)]
+    pub spec_draft_n_ubatch: u32,
+    #[serde(default)]
+    pub spec_draft_sampling: String,
     // GPU & Device
     #[serde(default)]
     pub device: String,
@@ -855,6 +861,7 @@ impl Default for InstanceConfig {
             flash_attn: "auto".into(),
             moe_cpu_layers: 0,
             cpu_moe: false,
+            moe_cache_mib: 0,
             load_mode: String::new(),
             lazy_mode: String::new(),
             mlock: false,
@@ -892,6 +899,8 @@ impl Default for InstanceConfig {
             spec_draft_backend_sampling: true,
             spec_draft_threads: 0,
             spec_draft_threads_batch: 0,
+            spec_draft_n_ubatch: 0,
+            spec_draft_sampling: String::new(),
             device: String::new(),
             split_mode: String::new(),
             tensor_split: String::new(),

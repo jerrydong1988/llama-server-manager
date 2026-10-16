@@ -275,6 +275,20 @@ if (BROWSER_SCENARIO?.startsWith('parameter-compatibility')) {
   })
 }
 
+if (BROWSER_SCENARIO?.startsWith('v070-parameters')) {
+  const current = !BROWSER_SCENARIO.endsWith('-old');
+  engine.version = current ? 'version: 0.7.0 (build 11669)' : 'version: 0.6.0 (build 11300)';
+  if (current && engine.capabilities) {
+    engine.capabilities.supportedFlags.push('--moe-cache-mib', '--spec-draft-n-ubatch', '--spec-draft-sampling');
+    Object.assign(engine.capabilities.reportedDefaults!, {
+      '--moe-cache-mib': '0, disabled', '--spec-draft-n-ubatch': '0 - same as --n-ubatch',
+      '--spec-draft-sampling': 'greedy', '--cache-ram': '8192, 0 for decision models',
+    });
+  }
+  instanceConfig.spec_type = 'draft-mtp';
+  instanceConfig.explicit_overrides?.push('spec_type');
+}
+
 const docsVisionConfig: InstanceConfig = {
   ...clone(instanceConfig),
   id: STOPPED_INSTANCE_ID,
@@ -781,12 +795,17 @@ const emittedOverrideKeys = (config: InstanceConfig): Array<keyof InstanceConfig
   const speculativeChildren = new Set([
     'draft_tokens', 'spec_draft_n_min', 'spec_draft_p_min', 'spec_draft_p_split',
     'draft_gpu_layers', 'spec_draft_device', 'spec_default',
+    'spec_draft_n_ubatch', 'spec_draft_sampling',
   ])
   const unique = new Set<string>()
   for (const rawField of config.explicit_overrides ?? []) {
     const field = canonicalField(rawField)
     if (systemManaged.has(field)) continue
     if (!speculativeActive && speculativeChildren.has(field)) continue
+    if (['spec_draft_n_ubatch', 'spec_draft_sampling'].includes(field)
+      && !config.spec_type.split(',').some(kind => kind === 'auto' || kind.startsWith('draft-'))) continue
+    if (field === 'spec_draft_sampling' && !config.spec_draft_sampling) continue
+    if (field === 'spec_draft_sampling' && !config.spec_type.split(',').some(kind => ['auto', 'draft-simple', 'draft-mtp'].includes(kind))) continue
     unique.add(field)
   }
   return [...unique] as Array<keyof InstanceConfig>
@@ -808,6 +827,9 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'top_k') command.push('--top-k', String(config.top_k))
     else if (field === 'top_p') command.push('--top-p', String(config.top_p))
     else if (field === 'threads') command.push('--threads', String(config.threads))
+    else if (field === 'moe_cache_mib') command.push('--moe-cache-mib', String(config.moe_cache_mib))
+    else if (field === 'spec_draft_n_ubatch') command.push('--spec-draft-n-ubatch', String(config.spec_draft_n_ubatch))
+    else if (field === 'spec_draft_sampling') command.push('--spec-draft-sampling', config.spec_draft_sampling)
     else if (field === 'load_mode' && config.load_mode) command.push('--load-mode', config.load_mode)
     else if (field === 'lazy_mode' && config.lazy_mode) command.push('--lazy-mode', config.lazy_mode)
     else if (field === 'perf') command.push(config.perf ? '--perf' : '--no-perf')
@@ -820,7 +842,9 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
       if (value && value !== 'none') command.push('--spec-type', value)
     }
   }
-  return { command, unsupportedFlags: [], emittedOverrideKeys: emitted }
+  const unsupportedFlags = ['--moe-cache-mib', '--spec-draft-n-ubatch', '--spec-draft-sampling']
+    .filter(flag => command.includes(flag) && !engine.capabilities?.supportedFlags.includes(flag))
+  return { command, unsupportedFlags, emittedOverrideKeys: emitted }
 }
 
 const systemMetrics: SystemMetrics = {
