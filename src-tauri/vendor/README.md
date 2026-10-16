@@ -18,8 +18,10 @@ their directory. Their original source, tests and licenses are retained. Cargo's
   https://github.com/denoland/rust-urlpattern/blob/main/src/tokenizer.rs
 
 `scripts/check-vendor-patches.cjs` guards the selected local packages, patch content
-and absence of the retired dependencies from the application lockfile. GTK3 itself
-is still an upstream maintenance risk, reviewed by the existing dated RustSec policy.
+and absence of the retired dependencies from the application lockfile. The ten
+GTK3 unmaintained advisories were withdrawn on 2026-08-14 and removed from the
+allowlist during the 2026-10-16 review. The dated policy retains only the patched
+GLib advisory while Tauri still requires the GLib 0.18 ABI.
 Do not describe this backport as an upstream fixed release. Remove these patches
 when a supported Tauri release supplies the equivalent fixes. Linux CI must build
 the patched GTK/GLib chain and run its iterator regression in an optimized build.
