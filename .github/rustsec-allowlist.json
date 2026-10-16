@@ -1,67 +1,7 @@
 {
-  "reviewBy": "2026-10-15",
-  "upstream": "Tauri 2.11 Linux GTK3 and urlpattern transitive dependency chains",
+  "reviewBy": "2026-11-16",
+  "upstream": "Tauri 2.11 Linux GTK3 GLib ABI-compatible security backport",
   "entries": [
-    {
-      "id": "RUSTSEC-2024-0411",
-      "package": "gdkwayland-sys",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0412",
-      "package": "gdk",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0413",
-      "package": "atk",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0414",
-      "package": "gdkx11-sys",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0415",
-      "package": "gtk",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0416",
-      "package": "atk-sys",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0417",
-      "package": "gdkx11",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0418",
-      "package": "gdk-sys",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0419",
-      "package": "gtk3-macros",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
-    {
-      "id": "RUSTSEC-2024-0420",
-      "package": "gtk-sys",
-      "kind": "unmaintained",
-      "target": "linux"
-    },
     {
       "id": "RUSTSEC-2024-0429",
       "package": "glib",
@@ -69,5 +9,8 @@
       "target": "linux",
       "restriction": "ABI-compatible local backport of gtk-rs/gtk-rs-core#1343; checked by scripts/check-vendor-patches.cjs. Remove when Tauri adopts glib >=0.20."
     }
-  ]
+  ],
+  "reviewedAt": "2026-10-16",
+  "advisoryDatabaseCommit": "479c888ce4401313bca61ba4aba2d0f6244c4a09",
+  "reviewNotes": "RUSTSEC-2024-0411 through RUSTSEC-2024-0420 were withdrawn on 2026-08-14 and are no longer ignored. The only retained exception is the locally patched GLib advisory, guarded by source checks and Linux iterator regression tests. Rustls is updated to 0.23.46 for RUSTSEC-2026-0346 through RUSTSEC-2026-0349; no new advisory exceptions are added."
 }
