@@ -16,7 +16,9 @@ tauri-plugin-dialog = "2.7"
 tauri-plugin-process = "2.3"
 tauri-plugin-shell = "2.3"
 tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2.10"
+# Windows updates use raw EXE/MSI payloads; Linux archive updates are suspended.
+# Avoid the unused legacy ZIP extractor. macOS TAR.GZ support is unconditional.
+tauri-plugin-updater = { version = "2.10", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
