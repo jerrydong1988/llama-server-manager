@@ -5,7 +5,9 @@ use crate::path_utils::{path_identity_key, paths_equal};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
-use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::process::Command;
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -121,7 +123,7 @@ fn run_bounded(executable: &str, argument: &str) -> CommandOutput {
             };
         }
     };
-    let mut command = Command::new(executable);
+    let mut command = crate::process_environment::external_command(executable);
     command
         .arg(argument)
         .stdin(Stdio::null())

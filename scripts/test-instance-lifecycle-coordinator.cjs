@@ -65,8 +65,10 @@ assert.ok(
   startServerSource.indexOf('reserve_instance_start') < startServerSource.indexOf('CappedLogWriter::new'),
   'backend start reservation must happen before the log is opened or a process is spawned',
 )
+const checkpointArgumentsIndex = startServerSource.indexOf('apply_managed_checkpoint_arguments')
+const processSpawnIndex = startServerSource.indexOf('c.spawn()')
 assert.ok(
-  startServerSource.indexOf('apply_managed_checkpoint_arguments') < startServerSource.indexOf('Command::new(&cmd[0])'),
+  checkpointArgumentsIndex >= 0 && processSpawnIndex > checkpointArgumentsIndex,
   'managed checkpoint arguments must be finalized before the process is spawned',
 )
 assert.ok(

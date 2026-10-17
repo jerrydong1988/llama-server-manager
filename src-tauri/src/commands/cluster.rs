@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -474,7 +474,7 @@ pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevic
 
     // Start rpc-server on a temporary port, capture device output, then stop it immediately.
     let devices = tokio::task::spawn_blocking(move || -> Result<Vec<WorkerDevice>, String> {
-        let mut child = Command::new(&binary)
+        let mut child = crate::process_environment::external_command(&binary)
             .args(["--host", "127.0.0.1", "--port", "0"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -951,7 +951,7 @@ pub async fn start_local_rpc(
         };
         #[cfg(not(target_os = "windows"))]
         let mut child = {
-            std::process::Command::new("nohup")
+            crate::process_environment::external_command("nohup")
                 .arg(&binary)
                 .args(["--host", "127.0.0.1", "--port", &port.to_string()])
                 .stdin(Stdio::null())

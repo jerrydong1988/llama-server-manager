@@ -253,7 +253,7 @@ fn desktop_exec_quote(value: &Path) -> Result<String, String> {
 
 #[cfg(target_os = "linux")]
 fn systemd_user_available() -> bool {
-    std::process::Command::new("systemctl")
+    crate::process_environment::external_command("systemctl")
         .args(["--user", "show-environment"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -263,7 +263,7 @@ fn systemd_user_available() -> bool {
 
 #[cfg(target_os = "linux")]
 fn systemd_user_unit_enabled() -> bool {
-    std::process::Command::new("systemctl")
+    crate::process_environment::external_command("systemctl")
         .args(["--user", "is-enabled", "--quiet", LINUX_SERVICE_NAME])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -326,11 +326,11 @@ pub fn enable_runtime_autostart() -> Result<(), String> {
                 systemd_quote(&data_dir)?
             );
             crate::persistence::atomic_write(&unit_path, unit.as_bytes(), None)?;
-            let reload = std::process::Command::new("systemctl")
+            let reload = crate::process_environment::external_command("systemctl")
                 .args(["--user", "daemon-reload"])
                 .status()
                 .map_err(|error| format!("刷新 systemd 用户服务失败: {error}"))?;
-            let enable = std::process::Command::new("systemctl")
+            let enable = crate::process_environment::external_command("systemctl")
                 .args(["--user", "enable", LINUX_SERVICE_NAME])
                 .status()
                 .map_err(|error| format!("启用 systemd 用户服务失败: {error}"))?;
@@ -409,7 +409,7 @@ pub fn disable_runtime_autostart() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         if systemd_user_available() {
-            let disable = std::process::Command::new("systemctl")
+            let disable = crate::process_environment::external_command("systemctl")
                 .args(["--user", "disable", LINUX_SERVICE_NAME])
                 .status()
                 .map_err(|error| format!("禁用 systemd 用户服务失败: {error}"))?;
@@ -431,7 +431,7 @@ pub fn disable_runtime_autostart() -> Result<(), String> {
             }
         }
         if systemd_user_available() {
-            let reload = std::process::Command::new("systemctl")
+            let reload = crate::process_environment::external_command("systemctl")
                 .args(["--user", "daemon-reload"])
                 .status()
                 .map_err(|error| format!("刷新 systemd 用户服务失败: {error}"))?;
