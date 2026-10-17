@@ -1,4 +1,5 @@
 pub mod adlx;
+mod atomic_counter;
 pub mod autostart;
 pub mod checkpoint;
 pub mod cluster;

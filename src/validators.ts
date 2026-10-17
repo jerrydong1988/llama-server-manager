@@ -24,6 +24,7 @@ export interface Warning {
 // Flags represented by managed configuration fields. Custom arguments are
 // appended last, so repeating one of these flags can silently override the UI.
 export const KNOWN_FLAGS = new Set([
+  '--moe-cache-mib', '--spec-draft-n-ubatch', '--spec-draft-sampling',
   // Additional official aliases, checked against every overlapping stable parameter row.
   '--gpu-layers', '--predict', '-s', '-j', '-tb', '-ncmoe', '-fit',
   '-nocb', '--swa-checkpoints', '--no-direct-io', '-ndio', '-nr',
@@ -340,6 +341,8 @@ export function validateConfig(
     || !config.spec_draft_backend_sampling
     || config.spec_draft_threads > 0
     || config.spec_draft_threads_batch > 0
+    || config.spec_draft_n_ubatch > 0
+    || Boolean(config.spec_draft_sampling)
     || Boolean(config.cache_type_draft_k.trim() || config.cache_type_draft_v.trim())
   )) {
     warnings.push({ field: 'spec_type', severity: 'low', key: 'warnA5' })

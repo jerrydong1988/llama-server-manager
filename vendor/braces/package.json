@@ -1,0 +1,11 @@
+{
+  "name": "@llama-server-manager/braces",
+  "version": "3.0.3-lsm.1",
+  "private": true,
+  "description": "Repository-maintained braces 3.0.3 with bounded parser and AST traversal",
+  "license": "MIT",
+  "main": "index.js",
+  "files": ["index.js", "lib", "LICENSE", "README.md"],
+  "engines": { "node": ">=8" },
+  "dependencies": { "fill-range": "^7.1.1" }
+}

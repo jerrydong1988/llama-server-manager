@@ -327,6 +327,7 @@ fn is_known_hybrid_or_recurrent(architecture: &str) -> bool {
         "qwen35",
         "deepseek4",
         "minimax01",
+        "glm5next",
     ];
     UNSUPPORTED_HINTS
         .iter()
@@ -1098,6 +1099,8 @@ struct CanonicalFingerprintV3<'a> {
     spec_draft_backend_sampling: bool,
     spec_draft_threads: u32,
     spec_draft_threads_batch: u32,
+    spec_draft_n_ubatch: u32,
+    spec_draft_sampling: &'a str,
     ctx_size: u32,
     ctx_size_auto: bool,
     parallel: i32,
@@ -1137,6 +1140,7 @@ struct CanonicalFingerprintV3<'a> {
     tensor_split: &'a str,
     main_gpu: u32,
     moe_cpu_layers: u32,
+    moe_cache_mib: u32,
     cpu_moe: bool,
     override_kv: &'a str,
     jinja: bool,
@@ -1197,6 +1201,8 @@ fn canonical_fingerprint_bytes(
         spec_draft_backend_sampling: config.spec_draft_backend_sampling,
         spec_draft_threads: config.spec_draft_threads,
         spec_draft_threads_batch: config.spec_draft_threads_batch,
+        spec_draft_n_ubatch: config.spec_draft_n_ubatch,
+        spec_draft_sampling: config.spec_draft_sampling.trim(),
         ctx_size: config.ctx_size,
         ctx_size_auto: config.ctx_size_auto,
         parallel: config.parallel,
@@ -1236,6 +1242,7 @@ fn canonical_fingerprint_bytes(
         tensor_split: config.tensor_split.trim(),
         main_gpu: config.main_gpu,
         moe_cpu_layers: config.moe_cpu_layers,
+        moe_cache_mib: config.moe_cache_mib,
         cpu_moe: config.cpu_moe,
         override_kv: config.override_kv.trim(),
         jinja: config.jinja,
@@ -4514,6 +4521,8 @@ mod tests {
             "plamo2",
             "minimax_01",
             "qwen4exp",
+            "glm5-next",
+            "GLM5_NEXT",
         ] {
             for persistence in [false, true] {
                 let result = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
@@ -4538,6 +4547,14 @@ mod tests {
                     architecture == "qwen35" && persistence,
                     "{architecture}, persistence={persistence}"
                 );
+                if !result.eligible {
+                    assert!(
+                        result
+                            .reasons
+                            .contains(&CheckpointReasonCode::HybridRecurrentUnsupported),
+                        "{architecture}, persistence={persistence}"
+                    );
+                }
             }
         }
         config.ctx_checkpoints = 0;
@@ -5357,6 +5374,11 @@ mod tests {
         });
         assert_fingerprint_changes(&base, |config| config.spec_draft_threads = 4);
         assert_fingerprint_changes(&base, |config| config.spec_draft_threads_batch = 8);
+        assert_fingerprint_changes(&base, |config| config.spec_draft_n_ubatch = 128);
+        assert_fingerprint_changes(&base, |config| {
+            config.spec_draft_sampling = "probabilistic".into()
+        });
+        assert_fingerprint_changes(&base, |config| config.moe_cache_mib = 1024);
         assert_fingerprint_changes(&base, |config| config.reasoning_preserve = "true".into());
         assert_fingerprint_changes(&base, |config| config.reasoning_budget = "8192".into());
         assert_fingerprint_changes(&base, |config| {

@@ -9,7 +9,7 @@ import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
 import { formatPathForDisplay } from '../../utils/path'
-import { projectorEnabled, speculativeEnabled } from '../../configSemantics'
+import { draftContextEnabled, draftSamplingEnabled, projectorEnabled, speculativeEnabled } from '../../configSemantics'
 
 const formGridClassName = 'config-form-grid'
 const wideGridClassName = 'config-form-grid'
@@ -451,6 +451,8 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
               fieldKey={a('draft_gpu_layers')}
             />
             <Num label={`${t.configPage.specDraftPMin} (--spec-draft-p-min)`} value={local.spec_draft_p_min} onChange={v => set('spec_draft_p_min', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPMinTip} disabled={isEmbedding}  fieldKey={a('spec_draft_p_min')} />
+            <Num label={`${t.configPage.specDraftNUbatch} (--spec-draft-n-ubatch)`} value={local.spec_draft_n_ubatch} onChange={v => set('spec_draft_n_ubatch', v)} min={0} max={2147483647} title={t.configPage.specDraftNUbatchTip} disabled={!draftContextEnabled(local, isEmbedding)} fieldKey={a('spec_draft_n_ubatch')} />
+            <Select label={`${t.configPage.specDraftSampling} (--spec-draft-sampling)`} value={local.spec_draft_sampling} onChange={v => set('spec_draft_sampling', v)} options={['', 'greedy', 'probabilistic']} title={t.configPage.specDraftSamplingTip} defaultLabel={t.common.default} disabled={!draftSamplingEnabled(local, isEmbedding)} fieldKey={a('spec_draft_sampling')} />
             <Num label={`${t.configPage.specDraftPSplit} (--spec-draft-p-split)`} value={local.spec_draft_p_split} onChange={v => set('spec_draft_p_split', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPSplitTip} disabled={isEmbedding}  fieldKey={a('spec_draft_p_split')} />
             <Input label={`${t.configPage.specDraftDevice} (--spec-draft-device)`} value={local.spec_draft_device} onChange={v => set('spec_draft_device', v)} title={t.configPage.specDraftDeviceTip} disabled={isEmbedding}  fieldKey={a('spec_draft_device')} />
             <Input label={`${t.configPage.lookupCacheStatic} (--lookup-cache-static, -lcs)`} value={local.lookup_cache_static} onChange={v => set('lookup_cache_static', v)} title={t.configPage.lookupCacheStaticTip} disabled={isEmbedding}  fieldKey={a('lookup_cache_static')} />
@@ -541,6 +543,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         <CollapsibleGroup id="config-advanced-hardware" title={t.configPage.subAdvHardware} onReset={() => resetGroup('advancedHardware')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedHardware)}>
           <div className={formGridClassName}>
             <Num label={`${t.configPage.moeCpu} (--n-cpu-moe)`} value={local.moe_cpu_layers} onChange={v => set('moe_cpu_layers', v)} min={0} title={t.configPage.moeCpuTip} fieldKey={a('moe_cpu_layers')} />
+            <Num label={`${t.configPage.moeCacheMib} (--moe-cache-mib)`} value={local.moe_cache_mib} onChange={v => set('moe_cache_mib', v)} min={0} max={2147483647} step={256} title={t.configPage.moeCacheMibTip} fieldKey={a('moe_cache_mib')} />
             <Switch label={`${t.configPage.cpuMoe} (--cpu-moe)`} value={local.cpu_moe} onChange={v => set('cpu_moe', v)} title={t.configPage.cpuMoeTip}  fieldKey={a('cpu_moe')} />
             <Input label={`${t.configPage.device} (--device, -dev)`} value={local.device} onChange={v => set('device', v)} title={t.configPage.deviceTip}  fieldKey={a('device')} />
             <Select label={`${t.configPage.splitMode} (--split-mode, -sm)`} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row', 'tensor']} title={t.configPage.splitModeTip} defaultLabel={t.common.default}  fieldKey={a('split_mode')} />

@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-09-24",
+  "verifiedAt": "2026-10-16",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.5.0",
-  "upstreamCommit": "7fe450e19305b828c199d602c23a8337aaa1f03b",
-  "upstreamMasterChecked": "53ed051ce5e8193652e449f43216ca3859454f49",
+  "upstreamRelease": "v0.7.0",
+  "upstreamCommit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+  "upstreamMasterChecked": "a30fb4924dcfec81c1b2c20634bd47fa4403061a",
   "releaseSnapshot": {
-    "ref": "v0.5.0",
-    "commit": "7fe450e19305b828c199d602c23a8337aaa1f03b",
-    "parameterCount": 255,
-    "snapshotHash": "fe6bf44ea0bd1130edf9cebef83c9e4a4480d043dc3b28cd30650074e4590208",
+    "ref": "v0.7.0",
+    "commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+    "parameterCount": 258,
+    "snapshotHash": "731b562c84a7bbdb0111aa032bd11ea3ab94bb2a1ac7980aceee0ae098efd21a",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -128,7 +128,7 @@
           "-cram"
         ],
         "synopsisHash": "275d7a59e725fcf4e829bd3cb2f8c6ba6c98e7905802bfe7e2e2d9ecfc602af0",
-        "descriptionHash": "d35085a754d9a0e330968c156eb0d10a8e00a400dd919456a33df8b2a860de95"
+        "descriptionHash": "e703653d14c96955170dcf3538b566a4a1ab9d56c66c4cdd70d4b05c596ce644"
       },
       {
         "canonical": "--cache-reuse",
@@ -1075,6 +1075,14 @@
         "descriptionHash": "c0e148182bb88d0728bb459bc9218e116249242fb02d31df5c23205572f874a9"
       },
       {
+        "canonical": "--moe-cache-mib",
+        "aliases": [
+          "--moe-cache-mib"
+        ],
+        "synopsisHash": "906c329b199ce205cbc9cf57ec9dd413b19ff57d920d37c4421c0d820aea7114",
+        "descriptionHash": "03c5fa1983886d2a9ddce217b8a976d307c6046541e0baf3f29e66676bf5c10a"
+      },
+      {
         "canonical": "--mtmd-batch-max-tokens",
         "aliases": [
           "--mtmd-batch-max-tokens"
@@ -1206,7 +1214,7 @@
           "--port"
         ],
         "synopsisHash": "9698da6162c8830283af48eb18947f3abbacf4603f6fd9e7c2d95e8fddf666d4",
-        "descriptionHash": "46ac529d57d8360d394832bef88807a18b6567b3ed85e5fe0e2c18d688a072fc"
+        "descriptionHash": "cd56749410793390ae710bff43a6367f2661c8a294d01eb1886fb5885dd8cf53"
       },
       {
         "canonical": "--predict",
@@ -1459,7 +1467,7 @@
           "--slot-save-path"
         ],
         "synopsisHash": "fc0885a130c0ead916ea4fe48d06bd6f8cc5d4200e65adab13849aa110e8f173",
-        "descriptionHash": "1bef64fa8e03197ed6ca3c57d1c1593d6a5775501db86f11f723ac7de955fd43"
+        "descriptionHash": "45689abd9d0c522ca25e97c190da4a3f1e8b6e30a07436cf835f06fac2f51d43"
       },
       {
         "canonical": "--slots",
@@ -1604,6 +1612,14 @@
         "descriptionHash": "484e1b5627b8be5aa9f267108dc221b05294ffff57d2711ba9b3a0c771977484"
       },
       {
+        "canonical": "--spec-draft-n-ubatch",
+        "aliases": [
+          "--spec-draft-n-ubatch"
+        ],
+        "synopsisHash": "b2c232a959a24d3a986f21eaa10a0d105e8826453ed4b4fa88c9d9f5ba214c74",
+        "descriptionHash": "8f8cc902ff11ed70e98c9da85606f1c0394832d95e3bba01120ba7c17755575d"
+      },
+      {
         "canonical": "--spec-draft-ngl",
         "aliases": [
           "--gpu-layers-draft",
@@ -1677,6 +1693,14 @@
         ],
         "synopsisHash": "b9823fc87e36163f639ec97828839846dc35fa2049b32e157dcb1690d19a8990",
         "descriptionHash": "1b836a07f59f0044d410f40b329efc8ccc2221cc91a1a361965daafc5d2c2690"
+      },
+      {
+        "canonical": "--spec-draft-sampling",
+        "aliases": [
+          "--spec-draft-sampling"
+        ],
+        "synopsisHash": "b4d5ab6d5c19d7739e7f74bf5e86b273f758bdeac881ff577505db80ca82462c",
+        "descriptionHash": "2e75f3d57d198b746aadbef989a62f0c9fbc827d8f662cb6d0d5f2881a8da0ba"
       },
       {
         "canonical": "--spec-draft-threads",
@@ -2219,6 +2243,7 @@
         "bailingmoe3",
         "deepseek4",
         "falcon-h1",
+        "glm5-next",
         "granitehybrid",
         "jamba",
         "kimi-k3",
@@ -2246,9 +2271,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "53ed051ce5e8193652e449f43216ca3859454f49",
-    "parameterCount": 255,
-    "snapshotHash": "fe6bf44ea0bd1130edf9cebef83c9e4a4480d043dc3b28cd30650074e4590208",
+    "commit": "a30fb4924dcfec81c1b2c20634bd47fa4403061a",
+    "parameterCount": 258,
+    "snapshotHash": "731b562c84a7bbdb0111aa032bd11ea3ab94bb2a1ac7980aceee0ae098efd21a",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2362,7 +2387,7 @@
           "-cram"
         ],
         "synopsisHash": "275d7a59e725fcf4e829bd3cb2f8c6ba6c98e7905802bfe7e2e2d9ecfc602af0",
-        "descriptionHash": "d35085a754d9a0e330968c156eb0d10a8e00a400dd919456a33df8b2a860de95"
+        "descriptionHash": "e703653d14c96955170dcf3538b566a4a1ab9d56c66c4cdd70d4b05c596ce644"
       },
       {
         "canonical": "--cache-reuse",
@@ -3309,6 +3334,14 @@
         "descriptionHash": "c0e148182bb88d0728bb459bc9218e116249242fb02d31df5c23205572f874a9"
       },
       {
+        "canonical": "--moe-cache-mib",
+        "aliases": [
+          "--moe-cache-mib"
+        ],
+        "synopsisHash": "906c329b199ce205cbc9cf57ec9dd413b19ff57d920d37c4421c0d820aea7114",
+        "descriptionHash": "03c5fa1983886d2a9ddce217b8a976d307c6046541e0baf3f29e66676bf5c10a"
+      },
+      {
         "canonical": "--mtmd-batch-max-tokens",
         "aliases": [
           "--mtmd-batch-max-tokens"
@@ -3440,7 +3473,7 @@
           "--port"
         ],
         "synopsisHash": "9698da6162c8830283af48eb18947f3abbacf4603f6fd9e7c2d95e8fddf666d4",
-        "descriptionHash": "46ac529d57d8360d394832bef88807a18b6567b3ed85e5fe0e2c18d688a072fc"
+        "descriptionHash": "cd56749410793390ae710bff43a6367f2661c8a294d01eb1886fb5885dd8cf53"
       },
       {
         "canonical": "--predict",
@@ -3693,7 +3726,7 @@
           "--slot-save-path"
         ],
         "synopsisHash": "fc0885a130c0ead916ea4fe48d06bd6f8cc5d4200e65adab13849aa110e8f173",
-        "descriptionHash": "1bef64fa8e03197ed6ca3c57d1c1593d6a5775501db86f11f723ac7de955fd43"
+        "descriptionHash": "45689abd9d0c522ca25e97c190da4a3f1e8b6e30a07436cf835f06fac2f51d43"
       },
       {
         "canonical": "--slots",
@@ -3838,6 +3871,14 @@
         "descriptionHash": "484e1b5627b8be5aa9f267108dc221b05294ffff57d2711ba9b3a0c771977484"
       },
       {
+        "canonical": "--spec-draft-n-ubatch",
+        "aliases": [
+          "--spec-draft-n-ubatch"
+        ],
+        "synopsisHash": "b2c232a959a24d3a986f21eaa10a0d105e8826453ed4b4fa88c9d9f5ba214c74",
+        "descriptionHash": "8f8cc902ff11ed70e98c9da85606f1c0394832d95e3bba01120ba7c17755575d"
+      },
+      {
         "canonical": "--spec-draft-ngl",
         "aliases": [
           "--gpu-layers-draft",
@@ -3911,6 +3952,14 @@
         ],
         "synopsisHash": "b9823fc87e36163f639ec97828839846dc35fa2049b32e157dcb1690d19a8990",
         "descriptionHash": "1b836a07f59f0044d410f40b329efc8ccc2221cc91a1a361965daafc5d2c2690"
+      },
+      {
+        "canonical": "--spec-draft-sampling",
+        "aliases": [
+          "--spec-draft-sampling"
+        ],
+        "synopsisHash": "b4d5ab6d5c19d7739e7f74bf5e86b273f758bdeac881ff577505db80ca82462c",
+        "descriptionHash": "2e75f3d57d198b746aadbef989a62f0c9fbc827d8f662cb6d0d5f2881a8da0ba"
       },
       {
         "canonical": "--spec-draft-threads",
@@ -4453,6 +4502,7 @@
         "bailingmoe3",
         "deepseek4",
         "falcon-h1",
+        "glm5-next",
         "granitehybrid",
         "jamba",
         "kimi-k3",
@@ -4490,7 +4540,10 @@
     "--reasoning-preserve",
     "--no-reasoning-preserve",
     "--log-prompts-dir",
-    "--tools-runtime"
+    "--tools-runtime",
+    "--moe-cache-mib",
+    "--spec-draft-n-ubatch",
+    "--spec-draft-sampling"
   ],
   "defaultTrueNegativeFlags": [
     "--no-cont-batching",

@@ -160,6 +160,7 @@ export interface InstanceConfig {
   yarn_ext_factor: number; yarn_attn_factor: number; yarn_beta_slow: number; yarn_beta_fast: number; yarn_orig_ctx: number;
   // Memory & KV Cache
   flash_attn: string; moe_cpu_layers: number; cpu_moe: boolean; load_mode: string; lazy_mode: string; mlock: boolean;
+  moe_cache_mib: number;
   no_mmap: boolean; no_repack: boolean; direct_io: boolean; numa: boolean; numa_mode: string; context_shift: boolean;
   perf: boolean; check_tensors: boolean; fit: boolean; fit_mode: string; fit_target: string; fit_ctx: number; kv_unified: boolean; kv_unified_mode: string; cache_idle_slots: boolean; no_kv_offload: boolean;
   cache_type_k: string; cache_type_v: string;
@@ -170,6 +171,7 @@ export interface InstanceConfig {
   spec_draft_p_min: number; spec_draft_p_split: number; spec_draft_device: string;
   lookup_cache_static: string; lookup_cache_dynamic: string;
   spec_default: boolean; spec_draft_backend_sampling: boolean; spec_draft_threads: number; spec_draft_threads_batch: number;
+  spec_draft_n_ubatch: number; spec_draft_sampling: string;
   // GPU & Device
   device: string; split_mode: string; tensor_split: string; main_gpu: number;
   override_kv: string;

@@ -144,6 +144,31 @@ const entry = `
   assert.deepEqual(getActiveParams(manual, false), new Set(['manual_command']))
   assert.deepEqual(normalizeStoredConfig(manual, []).config, manual)
 
+  const v070 = { ...defaults, spec_type: 'draft-mtp', moe_cache_mib: 0,
+    spec_draft_n_ubatch: 0, spec_draft_sampling: 'greedy',
+    explicit_overrides: ['spec_type', 'moe_cache_mib', 'spec_draft_n_ubatch', 'spec_draft_sampling'] }
+  const v070Active = getActiveParams(v070, false)
+  for (const field of ['moe_cache_mib', 'spec_draft_n_ubatch', 'spec_draft_sampling']) {
+    assert.equal(v070Active.has(field), true, field + ' must preserve explicit zero/default intent')
+  }
+  for (const kind of ['none', '', 'ngram-mod']) {
+    const inactive = getActiveParams({ ...v070, spec_type: kind }, false)
+    assert.equal(inactive.has('spec_draft_n_ubatch'), false)
+    assert.equal(inactive.has('spec_draft_sampling'), false)
+  }
+  const orphan = getActiveParams({ ...v070, explicit_overrides: ['spec_draft_sampling'] }, false)
+  const dflash = getActiveParams({ ...v070, spec_type: 'draft-dflash' }, false)
+  assert.equal(dflash.has('spec_draft_n_ubatch'), true)
+  assert.equal(dflash.has('spec_draft_sampling'), false)
+  assert.equal(orphan.has('spec_draft_sampling'), false)
+  const vectorV070 = normalizeInstanceConfig({ ...v070, embedding: true, moe_cache_mib: 512 }, null).config
+  assert.equal(vectorV070.moe_cache_mib, 512)
+  assert.equal(vectorV070.spec_draft_n_ubatch, 0)
+  assert.equal(vectorV070.spec_draft_sampling, '')
+  assert.equal(vectorV070.explicit_overrides?.includes('spec_draft_sampling'), false)
+  const resetV070 = inheritParameters(v070, ['moe_cache_mib', 'spec_draft_n_ubatch', 'spec_draft_sampling'])
+  assert.deepEqual(resetV070.explicit_overrides, ['spec_type'])
+  assert.equal(resetV070.spec_draft_sampling, '')
   console.log('parameter intent regression tests passed')
 `
 

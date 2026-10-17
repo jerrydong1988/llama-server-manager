@@ -423,9 +423,7 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
             WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
             last_error = Some(e.clone());
         }
-        let _ = PENDING.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-            Some(n.saturating_sub(records.len() as u64))
-        });
+        super::atomic_counter::saturating_sub(&PENDING, records.len() as u64);
         if !closing && std::time::Instant::now() >= next_quota_prune {
             let more = match super::usage_quota::maintain(
                 &path.with_file_name("router-quota.db"),
@@ -509,9 +507,7 @@ pub(crate) fn record(record: UsageRecord) {
         return;
     }
     PENDING.fetch_add(1, Ordering::Relaxed);
-    let _ = ACTIVE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-        Some(n.saturating_sub(1))
-    });
+    super::atomic_counter::saturating_sub(&ACTIVE, 1);
     if writer()
         .and_then(|w| {
             w.try_send(Write::Record(Box::new(record)))

@@ -3,7 +3,7 @@ import { maskCommandArguments } from '../../store/commandFormatting'
 const categories = [
   ['model', /^(?:-m|-a|--model|--model-url|--alias|--mmproj(?:-.+)?|--lora(?:-.+)?|--chat-template(?:-.+)?|--jinja|--no-jinja|--embedding|--pooling|--reranking)$/],
   ['context', /^(?:-c|-ctk|-ctv|-cram|--ctx-size|--keep|--cache(?:-.+)?|--no-cache(?:-.+)?|--kv(?:-.+)?|--no-kv(?:-.+)?|--context-shift|--no-context-shift|--rope(?:-.+)?|--yarn(?:-.+)?|--swa(?:-.+)?)$/],
-  ['performance', /^(?:-ngl|-t|-tb|-b|-ub|-np|-cb|-fa|-lm|-lzm|--n-gpu-layers|--threads(?:-batch)?|--batch-size|--ubatch-size|--parallel|--cont-batching|--no-cont-batching|--flash-attn|--load-mode|--lazy-mode|--mlock|--mmap|--no-mmap|--direct-io|--numa|--fit(?:-.+)?|--device|--split-mode|--tensor-split|--main-gpu|--cpu(?:-.+)?|--perf|--no-perf)$/],
+  ['performance', /^(?:-ngl|-t|-tb|-b|-ub|-np|-cb|-fa|-lm|-lzm|--n-gpu-layers|--threads(?:-batch)?|--batch-size|--ubatch-size|--parallel|--cont-batching|--no-cont-batching|--flash-attn|--load-mode|--lazy-mode|--mlock|--mmap|--no-mmap|--direct-io|--numa|--fit(?:-.+)?|--device|--split-mode|--tensor-split|--main-gpu|--cpu(?:-.+)?|--moe-cache-mib|--perf|--no-perf)$/],
   ['reasoning', /^(?:--reasoning(?:-.+)?|-n|--predict)$/],
   ['sampling', /^(?:-s|--seed|--temp|--top-k|--top-p|--top-n-sigma|--min-p|--repeat(?:-.+)?|--presence-penalty|--frequency-penalty|--dry(?:-.+)?|--xtc(?:-.+)?|--mirostat(?:-.+)?|--typical|--dynatemp(?:-.+)?|--samplers|--sampler-seq|--logit-bias|--grammar(?:-.+)?|--json-schema(?:-.+)?)$/],
   ['speculative', /^(?:-md|-ngld|--model-draft|--n-gpu-layers-draft|--spec(?:-.+)?|--draft(?:-.+)?|--lookup(?:-.+)?)$/],

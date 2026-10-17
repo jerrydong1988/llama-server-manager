@@ -34,6 +34,16 @@ export function ngramCacheEnabled(config: InstanceConfig, isEmbedding = config.e
   return !isEmbedding && hasSpeculativeType(config.spec_type, 'ngram-cache')
 }
 
+export function draftContextEnabled(config: InstanceConfig, isEmbedding = config.embedding): boolean {
+  return !isEmbedding && parseSpeculativeTypes(config.spec_type)
+    .some(kind => kind === 'auto' || kind.startsWith('draft-'))
+}
+
+export function draftSamplingEnabled(config: InstanceConfig, isEmbedding = config.embedding): boolean {
+  return !isEmbedding && parseSpeculativeTypes(config.spec_type)
+    .some(kind => ['auto', 'draft-simple', 'draft-mtp'].includes(kind))
+}
+
 export function reasoningBudgetEnabled(config: InstanceConfig): boolean {
   const raw = config.reasoning_budget.trim()
   if (!raw) return false

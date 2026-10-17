@@ -713,6 +713,9 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     if should_emit(config, "cpu_moe", config.cpu_moe) && config.cpu_moe {
         cmd.push("--cpu-moe".into());
     }
+    if should_emit(config, "moe_cache_mib", config.moe_cache_mib > 0) {
+        cmd.extend_from_slice(&["--moe-cache-mib".into(), config.moe_cache_mib.to_string()]);
+    }
     let load_mode = config.load_mode.trim().to_ascii_lowercase();
     if should_emit(config, "load_mode", !load_mode.is_empty())
         && matches!(
@@ -883,6 +886,30 @@ fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec
         && spec_type != "none"
         && should_emit(config, "spec_type", true);
     if spec_active {
+        if crate::speculative::uses_draft_context(&spec_type) {
+            if should_emit(
+                config,
+                "spec_draft_n_ubatch",
+                config.spec_draft_n_ubatch > 0,
+            ) {
+                cmd.extend_from_slice(&[
+                    "--spec-draft-n-ubatch".into(),
+                    config.spec_draft_n_ubatch.to_string(),
+                ]);
+            }
+            if should_emit(
+                config,
+                "spec_draft_sampling",
+                !config.spec_draft_sampling.is_empty(),
+            ) && !config.spec_draft_sampling.is_empty()
+                && crate::speculative::uses_draft_sampling(&spec_type)
+            {
+                cmd.extend_from_slice(&[
+                    "--spec-draft-sampling".into(),
+                    config.spec_draft_sampling.clone(),
+                ]);
+            }
+        }
         if should_emit(
             config,
             "draft_model_path",
@@ -1788,7 +1815,12 @@ fn prepare_manual_launch(
             false,
         ));
     }
-    let port = manual_option_value(&arguments, &["--port"])?.unwrap_or_else(|| "8080".to_string());
+    // Pin an omitted port to the instance setting: upstream changed its default
+    // from 8080 to 9931 in v0.7.0. Monitoring and argv must use the same port.
+    let supplied_port = manual_option_value(&arguments, &["--port"])?;
+    let port = supplied_port
+        .clone()
+        .unwrap_or_else(|| config.port.to_string());
     config.port = port.parse::<u16>().map_err(|_| {
         AppError::new(
             "MANUAL_COMMAND_PORT_INVALID",
@@ -1802,6 +1834,9 @@ fn prepare_manual_launch(
             "手动命令中的端口必须为 1 到 65535。",
             false,
         ));
+    }
+    if supplied_port.is_none() {
+        arguments.extend(["--port".into(), config.port.to_string()]);
     }
     if let Some(model_path) = manual_option_value(&arguments, &["-m", "--model"])? {
         config.model_path = model_path;
@@ -1848,8 +1883,41 @@ fn prepare_launch_checked(
         prepare_manual_launch(config, engine_path)
     } else {
         validate_managed_custom_argument_security(&config)?;
-        Ok(prepare_launch(config, engine_path))
+        let prepared = prepare_launch(config, engine_path);
+        validate_cache_and_draft_parameters(&prepared.0, &prepared.2)?;
+        Ok(prepared)
     }
+}
+
+fn validate_cache_and_draft_parameters(
+    config: &InstanceConfig,
+    command: &[String],
+) -> AppResult<()> {
+    for (flag, value) in [
+        ("--moe-cache-mib", config.moe_cache_mib),
+        ("--spec-draft-n-ubatch", config.spec_draft_n_ubatch),
+    ] {
+        if command.iter().any(|arg| arg == flag) && value > i32::MAX as u32 {
+            return Err(AppError::new(
+                "INVALID_PARAMETER_VALUE",
+                format!("{flag} must be between 0 and {}", i32::MAX),
+                false,
+            ));
+        }
+    }
+    if command.iter().any(|arg| arg == "--spec-draft-sampling")
+        && !matches!(
+            config.spec_draft_sampling.as_str(),
+            "" | "greedy" | "probabilistic"
+        )
+    {
+        return Err(AppError::new(
+            "INVALID_PARAMETER_VALUE",
+            "spec_draft_sampling must be greedy or probabilistic",
+            false,
+        ));
+    }
+    Ok(())
 }
 
 const SECURITY_SENSITIVE_CUSTOM_FLAGS: &[&str] = &[
@@ -6376,6 +6444,169 @@ mod perf_parser_tests {
             ..InstanceConfig::default()
         };
         assert!(prepare_launch_checked(zero_port, "llama-server").is_err());
+    }
+
+    #[test]
+    fn manual_omitted_port_is_pinned_to_instance_for_old_and_new_engines() {
+        for port in [8080, 9931, 18081] {
+            let config = InstanceConfig {
+                launch_mode: "manual".into(),
+                manual_command: "-m model.gguf".into(),
+                port,
+                ..InstanceConfig::default()
+            };
+            let (effective, _, command) = prepare_launch_checked(config, "llama-server").unwrap();
+            assert_eq!(effective.port, port);
+            assert!(has_flag_value(&command, "--port", &port.to_string()));
+            assert_eq!(command.iter().filter(|arg| *arg == "--port").count(), 1);
+        }
+        for argument in ["--port 9001", "--port=9002", "--port 9001 --port=9002"] {
+            let config = InstanceConfig {
+                launch_mode: "manual".into(),
+                manual_command: format!("-m model.gguf {argument}"),
+                port: 18081,
+                ..InstanceConfig::default()
+            };
+            let (effective, _, command) = prepare_launch_checked(config, "llama-server").unwrap();
+            assert_eq!(
+                effective.port,
+                if argument.ends_with("9001") {
+                    9001
+                } else {
+                    9002
+                }
+            );
+            assert!(!command.iter().any(|arg| arg == "18081"));
+        }
+        for argument in [
+            "",
+            "--port",
+            "--port=",
+            "--port 0",
+            "--port 65536",
+            "--port -1",
+        ] {
+            let config = InstanceConfig {
+                launch_mode: "manual".into(),
+                manual_command: format!("-m model.gguf {argument}"),
+                port: 0,
+                ..InstanceConfig::default()
+            };
+            assert!(
+                prepare_launch_checked(config, "llama-server").is_err(),
+                "{argument}"
+            );
+        }
+    }
+
+    #[test]
+    fn v070_parameters_preserve_inheritance_zero_overrides_and_draft_dependencies() {
+        let flags = [
+            "--moe-cache-mib",
+            "--spec-draft-n-ubatch",
+            "--spec-draft-sampling",
+        ];
+        let defaults = generate_normalized_command(&InstanceConfig::default(), "llama-server");
+        assert!(flags
+            .iter()
+            .all(|flag| !defaults.iter().any(|arg| arg == flag)));
+        let mut config = InstanceConfig {
+            moe_cache_mib: 1024,
+            spec_type: "draft-mtp".into(),
+            spec_draft_n_ubatch: 128,
+            spec_draft_sampling: "probabilistic".into(),
+            explicit_overrides: Some(vec![
+                "spec_type".into(),
+                "moe_cache_mib".into(),
+                "spec_draft_n_ubatch".into(),
+                "spec_draft_sampling".into(),
+            ]),
+            ..InstanceConfig::default()
+        };
+        let (_, _, command) = prepare_launch_checked(config.clone(), "llama-server").unwrap();
+        assert!(has_flag_value(&command, flags[0], "1024"));
+        assert!(has_flag_value(&command, flags[1], "128"));
+        assert!(has_flag_value(&command, flags[2], "probabilistic"));
+        let older = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec!["--spec-type".into()],
+            ..EngineCapabilities::default()
+        };
+        let unsupported = unsupported_command_flags(&command, &older);
+        assert!(flags
+            .iter()
+            .all(|flag| unsupported.iter().any(|arg| arg == flag)));
+        config.moe_cache_mib = 0;
+        config.spec_draft_n_ubatch = 0;
+        config.spec_draft_sampling = "greedy".into();
+        let (_, _, zero) = prepare_launch_checked(config.clone(), "llama-server").unwrap();
+        assert!(has_flag_value(&zero, flags[0], "0"));
+        assert!(has_flag_value(&zero, flags[1], "0"));
+        assert!(has_flag_value(&zero, flags[2], "greedy"));
+        for kind in ["none", "", "ngram-mod"] {
+            config.spec_type = kind.into();
+            let (_, _, inactive) = prepare_launch_checked(config.clone(), "llama-server").unwrap();
+            assert!(!inactive
+                .iter()
+                .any(|arg| arg == flags[1] || arg == flags[2]));
+        }
+        config.spec_type = "draft-mtp".into();
+        for kind in ["draft-dflash", "draft-eagle3", "draft-dspark"] {
+            config.spec_type = kind.into();
+            let (_, _, command) = prepare_launch_checked(config.clone(), "llama-server").unwrap();
+            assert!(has_flag_value(&command, flags[1], "0"));
+            assert!(!command.iter().any(|arg| arg == flags[2]));
+        }
+        config.spec_type = "draft-mtp".into();
+        config.embedding = true;
+        let (vector, _, command) = prepare_launch_checked(config.clone(), "llama-server").unwrap();
+        assert!(vector.spec_draft_sampling.is_empty());
+        assert!(!command.iter().any(|arg| arg == flags[1] || arg == flags[2]));
+        assert!(has_flag_value(&command, flags[0], "0"));
+        config.embedding = false;
+        config.explicit_overrides = Some(Vec::new());
+        let (_, _, inherited) = prepare_launch_checked(config, "llama-server").unwrap();
+        assert!(flags
+            .iter()
+            .all(|flag| !inherited.iter().any(|arg| arg == flag)));
+    }
+
+    #[test]
+    fn v070_parameters_validate_values_and_load_older_configs() {
+        let base = InstanceConfig {
+            spec_type: "draft-mtp".into(),
+            ..InstanceConfig::default()
+        };
+        for invalid in [
+            InstanceConfig {
+                moe_cache_mib: u32::MAX,
+                ..base.clone()
+            },
+            InstanceConfig {
+                spec_draft_n_ubatch: u32::MAX,
+                ..base.clone()
+            },
+            InstanceConfig {
+                spec_draft_sampling: "invalid".into(),
+                ..base.clone()
+            },
+        ] {
+            assert!(prepare_launch_checked(invalid, "llama-server").is_err());
+        }
+        let mut old = serde_json::to_value(&base).unwrap();
+        for field in [
+            "moe_cache_mib",
+            "spec_draft_n_ubatch",
+            "spec_draft_sampling",
+        ] {
+            old.as_object_mut().unwrap().remove(field);
+        }
+        let restored: InstanceConfig = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(restored.moe_cache_mib, 0);
+        assert_eq!(restored.spec_draft_n_ubatch, 0);
+        assert!(restored.spec_draft_sampling.is_empty());
+        old["moe_cache_mib"] = serde_json::json!(-1);
+        assert!(serde_json::from_value::<InstanceConfig>(old).is_err());
     }
 
     #[test]
