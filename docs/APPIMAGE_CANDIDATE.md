@@ -2,6 +2,8 @@
 
 本包仅用于验证，尚未恢复正式 AppImage 发布或 Linux 自动更新。它使用 Tauri 已合并的 [#16062](https://github.com/tauri-apps/tauri/pull/16062)，固定打包工具源码为 `8e7028331ad37ac2db74d4ec20e66be5cacf2c40`。应用源码提交、工具哈希和产物依赖检查见 `build-info.json`。
 
+打包插件的 `continuous` 地址会随上游定期重建而更新。当前基线已核对 [2026-10-01 上游构建](https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/actions/runs/36815339264)的源码提交及两种架构的下载文件 SHA-256，记录于 `scripts/appimage/toolchain.json`。后续下载若再次与基线不符，CI 会停止，须重新审阅来源后更新哈希。
+
 ## Ubuntu 上运行
 
 1. `uname -m` 为 `x86_64` 时下载 x86_64 候选包；为 `aarch64` 时下载 aarch64 候选包。解压 GitHub Actions artifact ZIP。
