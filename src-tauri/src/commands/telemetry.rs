@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -73,6 +73,7 @@ pub struct TelemetrySessionSummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetrySampleSummary {
+    pub inference: Option<super::inference_metrics::InferenceThroughput>,
     pub session_id: String,
     pub instance_id: String,
     pub ts: i64,
@@ -277,6 +278,7 @@ enum TelemetryWrite {
         timestamp: i64,
         system: SystemMetrics,
         llama: Option<LlamaMetricSample>,
+        inference: Option<String>,
     },
     Inference {
         session_id: String,
@@ -696,6 +698,7 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
         ("decode_calls_total", "INTEGER"),
         ("max_tokens_observed", "INTEGER"),
         ("gpu_name", "TEXT"),
+        ("inference_throughput", "TEXT"),
     ] {
         if !sample_columns.iter().any(|column| column == name) {
             conn.execute(
@@ -1047,14 +1050,20 @@ fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<()
             timestamp,
             system,
             llama,
-        } => insert_metric_sample(
-            conn,
-            session_id,
-            instance_id,
-            *timestamp,
-            system,
-            llama.as_ref(),
-        ),
+            inference,
+        } => {
+            insert_metric_sample(
+                conn,
+                session_id,
+                instance_id,
+                *timestamp,
+                system,
+                llama.as_ref(),
+            )?;
+            conn.execute("UPDATE metric_samples SET inference_throughput = ?1 WHERE rowid = last_insert_rowid()",
+                params![inference]).map_err(|e| format!("failed to save inference throughput: {e}"))?;
+            Ok(())
+        }
         TelemetryWrite::Inference {
             session_id,
             completed_at,
@@ -1095,6 +1104,13 @@ pub fn record_metric_sample(
         timestamp: now_ms(),
         system: system.clone(),
         llama: llama.cloned(),
+        inference: super::monitoring::capture_frame(instance_id)
+            .filter(|frame| frame.session_id.as_deref() == Some(session_id))
+            .and_then(|frame| frame.inference)
+            .and_then(|mut inference| {
+                inference.tasks.clear();
+                serde_json::to_string(&inference).ok()
+            }),
     })
 }
 
@@ -3058,7 +3074,7 @@ fn latest_samples(conn: &Connection, limit: u32) -> Result<Vec<TelemetrySampleSu
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
-                    busy_slots_per_decode
+                    busy_slots_per_decode, inference_throughput
              FROM metric_samples
              ORDER BY ts DESC
              LIMIT ?1",
@@ -3085,7 +3101,7 @@ fn samples_for_session(
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
-                    busy_slots_per_decode
+                    busy_slots_per_decode, inference_throughput
              FROM metric_samples
              WHERE session_id = ?1
              ORDER BY ts DESC
@@ -3105,6 +3121,9 @@ fn samples_for_session(
 
 fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleSummary> {
     Ok(TelemetrySampleSummary {
+        inference: row
+            .get::<_, Option<String>>(23)?
+            .and_then(|json| serde_json::from_str(&json).ok()),
         session_id: row.get(0)?,
         instance_id: row.get(1)?,
         ts: row.get(2)?,
@@ -3357,6 +3376,7 @@ mod tests {
         let (waiter, _) = mpsc::channel();
         let invalid = TelemetryWrite::Flush(waiter);
         let valid = TelemetryWrite::Metric {
+            inference: None,
             session_id: "writer-isolation".into(),
             instance_id: "instance".into(),
             timestamp: 2,
@@ -3454,6 +3474,28 @@ mod tests {
             .unwrap();
         assert_eq!(values, (None, 17, 4096));
         let sample = samples_for_session(&conn, "session-metrics", 1).unwrap();
+        assert!(
+            sample[0].inference.is_none(),
+            "legacy gauge samples are not live phase samples"
+        );
+        let inference =
+            super::super::inference_metrics::InferenceTracker::default().snapshot(200, Some(0));
+        apply_telemetry_write(
+            &conn,
+            &TelemetryWrite::Metric {
+                session_id: "session-metrics".into(),
+                instance_id: "instance-metrics".into(),
+                timestamp: 200,
+                system: system.clone(),
+                llama: Some(llama),
+                inference: Some(serde_json::to_string(&inference).unwrap()),
+            },
+        )
+        .unwrap();
+        let restored = samples_for_session(&conn, "session-metrics", 1).unwrap();
+        let restored = restored[0].inference.as_ref().unwrap();
+        assert_eq!(restored.prefill.value, Some(0.0));
+        assert_eq!(restored.decode.state, "idle");
         assert_eq!(sample[0].gpu_vendor.as_deref(), Some("AMD"));
         assert_eq!(
             sample[0].gpu_name.as_deref(),

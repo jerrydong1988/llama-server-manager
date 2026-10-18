@@ -969,14 +969,19 @@ const monitoringOverview = {
   last_write_error_at: null,
   latest_samples: monitoringSamples,
 }
-const monitoringSeries = Array.from({ length: IS_DOCS_SCENARIO ? 18 : 1 }, (_, index) => {
-  const offset = IS_DOCS_SCENARIO ? 17 - index : 0
+const monitoringSeries = Array.from({ length: 101 }, (_, index) => {
+  const offset = 100 - index
   const throughput = IS_DOCS_SCENARIO ? 39.8 + (index % 6) * 1.7 : monitoringFrame.throughput
   return {
     ...clone(monitoringFrame),
-    ts: monitoringNow - offset * 20_000,
+    ts: monitoringNow - offset * 3_000,
     throughput,
     outputTokensPerSecond: throughput,
+    inference: {
+      prefill: { value: 800 + (index % 6) * 100, state: 'live' as const, source: 'log' as const, sampledAt: monitoringNow - offset * 3_000, windowMs: 3000, covered: 1, expected: 1 },
+      decode: { value: throughput, state: 'live' as const, source: 'slots' as const, sampledAt: monitoringNow - offset * 3_000, windowMs: 3000, covered: 1, expected: 1 },
+      tasks: [],
+    },
     system: {
       ...clone(monitoringFrame.system ?? systemMetrics),
       system_cpu_percent: IS_DOCS_SCENARIO ? 27 + (index % 5) : monitoringFrame.system?.system_cpu_percent ?? 0,

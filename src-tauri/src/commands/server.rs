@@ -3308,6 +3308,91 @@ pub(crate) fn probe_instance_readiness(
         || probe_status_is_success(&probe("/v1/models").map_err(|error| error.to_string()))
 }
 
+/// Keep inference phase sampling independent from the five-second GPU/SQLite
+/// cycle. One bounded request at a time; never publish for a replaced process.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wait_with_inference_sampling(
+    client: &reqwest::blocking::Client,
+    endpoint_base: &str,
+    api_key: &str,
+    instance_id: &str,
+    session_id: Option<&str>,
+    workload: ModelWorkload,
+    iteration_started: std::time::Instant,
+    owns_process: impl Fn() -> bool,
+) {
+    let interval = std::time::Duration::from_secs(5);
+    if workload != ModelWorkload::Inference {
+        std::thread::sleep(interval.saturating_sub(iteration_started.elapsed()));
+        return;
+    }
+    loop {
+        if !owns_process() {
+            return;
+        }
+        let sampled_at = crate::commands::telemetry::current_time_ms();
+        let request = client
+            .get(format!("{endpoint_base}/slots"))
+            .timeout(std::time::Duration::from_secs(2));
+        let request = if api_key.is_empty() {
+            request
+        } else {
+            request.bearer_auth(api_key)
+        };
+        let slots = request
+            .send()
+            .ok()
+            .filter(|response| response.status().is_success())
+            .and_then(|response| response.json::<Vec<serde_json::Value>>().ok());
+        let mut active = false;
+        if let Some(values) = slots {
+            let slots = values
+                .iter()
+                .filter_map(|value| {
+                    use crate::commands::inference_metrics::SlotObservation;
+                    Some(SlotObservation {
+                        slot: u32::try_from(value.get("id")?.as_u64()?).ok()?,
+                        task: value.get("id_task").and_then(|v| v.as_u64()),
+                        processing: value.get("is_processing")?.as_bool()?,
+                        processed: value
+                            .get("n_prompt_tokens_processed")
+                            .and_then(|v| v.as_u64()),
+                        cached: value.get("n_prompt_tokens_cache").and_then(|v| v.as_u64()),
+                        generated: value
+                            .get("next_token")
+                            .and_then(|v| v.as_array())
+                            .and_then(|v| v.first())
+                            .and_then(|v| v.get("n_decoded"))
+                            .and_then(|v| v.as_u64()),
+                    })
+                })
+                .collect::<Vec<_>>();
+            // Malformed rows must not look like an empty (idle) server.
+            if slots.len() == values.len() && owns_process() {
+                active = slots.iter().any(|slot| slot.processing);
+                crate::commands::monitoring::observe_inference_slots(
+                    instance_id,
+                    session_id,
+                    &slots,
+                    sampled_at,
+                );
+            }
+        }
+        let remaining = interval.saturating_sub(iteration_started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(if active {
+            remaining.min(std::time::Duration::from_secs(1))
+        } else {
+            remaining
+        });
+        if iteration_started.elapsed() >= interval {
+            break;
+        }
+    }
+}
+
 pub(crate) fn collect_instance_monitor_sample(
     client: &reqwest::blocking::Client,
     endpoint_base: &str,
@@ -3588,8 +3673,15 @@ fn monitor_loop(
             );
         }
 
-        std::thread::sleep(
-            std::time::Duration::from_secs(5).saturating_sub(iteration_started.elapsed()),
+        wait_with_inference_sampling(
+            &client,
+            &endpoint_base,
+            &api_key,
+            instance_id,
+            telemetry_session_id.as_deref(),
+            workload,
+            iteration_started,
+            is_my_instance,
         );
     }
 }
@@ -5138,6 +5230,69 @@ pub(crate) struct RuntimePerfTracker {
     finished: bool,
 }
 
+// Only call for newly observed lines, never for the persisted log tail replay.
+fn observe_inference_line(
+    parser: &PerfParser,
+    line: &str,
+    instance_id: &str,
+    session_id: Option<&str>,
+) {
+    use crate::commands::inference_metrics::LogObservation;
+    if parser.workload != ModelWorkload::Inference {
+        return;
+    }
+    let Some((slot, task)) = parser.extract_ids(line) else {
+        return;
+    };
+    let observation = if parser.is_launch(line) {
+        Some(LogObservation::Start)
+    } else if parser.is_release(line) {
+        Some(LogObservation::Finish)
+    } else if let Some(c) = parser.re_prompt_progress.captures(line) {
+        c.get(1)
+            .and_then(|v| v.as_str().parse().ok())
+            .zip(c.get(2).and_then(|v| v.as_str().parse::<f64>().ok()))
+            .zip(c.get(3).and_then(|v| v.as_str().parse().ok()))
+            .map(|((tokens, seconds), average)| {
+                let progress = line
+                    .split("progress =")
+                    .nth(1)
+                    .and_then(|value| value.split(',').next())
+                    .and_then(|value| value.trim().parse().ok());
+                LogObservation::Prefill {
+                    tokens,
+                    elapsed_ms: seconds * 1000.0,
+                    average,
+                    progress,
+                }
+            })
+    } else if let Some(c) = parser.re_generation.captures(line) {
+        c.get(1)
+            .and_then(|v| v.as_str().parse().ok())
+            .zip(c.get(2).and_then(|v| v.as_str().parse().ok()))
+            .map(|(tokens, average)| LogObservation::Decode {
+                tokens,
+                average,
+                recent: parser
+                    .re_tg_3s
+                    .captures(line)
+                    .and_then(|c| c.get(1))
+                    .and_then(|v| v.as_str().parse().ok()),
+            })
+    } else {
+        None
+    };
+    if let Some(observation) = observation {
+        crate::commands::monitoring::observe_inference_log(
+            instance_id,
+            session_id,
+            slot,
+            task as u64,
+            observation,
+        );
+    }
+}
+
 impl RuntimePerfTracker {
     pub(crate) fn new(
         instance_id: String,
@@ -5187,6 +5342,12 @@ impl RuntimePerfTracker {
         if self.finished {
             return;
         }
+        observe_inference_line(
+            &self.parser,
+            line,
+            &self.instance_id,
+            self.telemetry_session_id.as_deref(),
+        );
         if !parse_perf_line(
             &self.parser,
             line,
@@ -5558,6 +5719,12 @@ fn tail_log_file(
                     continue;
                 }
                 log_lines.push(format!("{text}\n"));
+                observe_inference_line(
+                    &parser,
+                    &text,
+                    instance_id,
+                    telemetry_session_id.as_deref(),
+                );
                 if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
                     perf_changed = true;
                     record_completed(&last_completed, &mut last_recorded_task_id);
@@ -6990,6 +7157,21 @@ mod perf_parser_tests {
         assert_eq!(active.active_requests, 1);
         assert_eq!(active.output_tokens_per_second, Some(18.34));
         assert_eq!(active.source, "task");
+        assert_eq!(
+            active.inference.unwrap().decode.value,
+            None,
+            "the first 100-token interval exceeds the recent-rate window"
+        );
+        tracker.process_line(
+            "34.32.633.180 I slot print_timing: id  1 | task 4418 | n_gen =    160, tg =  18.90 t/s, tg_3s =  20.00 t/s",
+        );
+        let recent = crate::commands::monitoring::capture_frame(&instance_id)
+            .unwrap()
+            .inference
+            .unwrap();
+        assert_eq!(recent.decode.value, Some(20.0));
+        assert_eq!(recent.decode.window_ms, Some(3000));
+        assert_eq!(recent.tasks[0].decode_average, Some(18.9));
 
         tracker.process_line(
             "31.56.107.589 I slot      release: id  1 | task 4418 | stop processing: n_tokens = 781, truncated = 0",
@@ -6999,8 +7181,31 @@ mod perf_parser_tests {
         assert_eq!(idle.active_requests, 0);
         assert_eq!(idle.output_tokens_per_second, Some(0.0));
         assert_eq!(idle.source, "idle");
+        assert_eq!(idle.inference.unwrap().decode.value, Some(0.0));
 
         crate::commands::monitoring::remove_instance(&instance_id);
+    }
+
+    #[test]
+    fn restored_prompt_logs_observe_deltas_without_an_old_launch_line() {
+        let id = "restored-inference-prompt-parser";
+        let mut tracker =
+            RuntimePerfTracker::new(id.into(), Some("restored".into()), ModelWorkload::Inference);
+        tracker.process_line("4 I slot print_timing: id  0 | task 22 | prompt processing, n_tokens =   2048, progress = 0.50, t =   4.00 s / 512.00 tokens per second");
+        let first = crate::commands::monitoring::capture_frame(id)
+            .unwrap()
+            .inference
+            .unwrap();
+        assert_eq!(first.prefill.value, None);
+        tracker.process_line("6 I slot print_timing: id  0 | task 22 | prompt processing, n_tokens =   4096, progress = 1.00, t =   6.00 s / 682.67 tokens per second");
+        let next = crate::commands::monitoring::capture_frame(id)
+            .unwrap()
+            .inference
+            .unwrap();
+        assert_eq!(next.prefill.value, Some(1024.0));
+        assert_eq!(next.tasks[0].prefill_average, Some(682.67));
+        assert_eq!(next.tasks[0].progress, Some(1.0));
+        crate::commands::monitoring::remove_instance(id);
     }
 
     #[test]
@@ -7020,6 +7225,10 @@ mod perf_parser_tests {
         assert_eq!(active.active_requests, 1);
         assert_eq!(active.input_tokens_per_second, Some(512.0));
         assert_eq!(active.source, "task");
+        assert!(
+            active.inference.is_none(),
+            "vector input is not inference Prefill"
+        );
 
         let snapshot = tracker.snapshot();
         let task = &snapshot["tasks"][0];

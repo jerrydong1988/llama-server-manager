@@ -9,6 +9,7 @@ pub mod cluster_ssh;
 pub mod config;
 pub mod download;
 pub mod engine_capabilities;
+pub(crate) mod inference_metrics;
 pub mod model_inventory;
 pub mod monitoring;
 pub mod nvml;

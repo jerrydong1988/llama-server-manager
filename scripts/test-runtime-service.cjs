@@ -381,6 +381,8 @@ async function main() {
   }
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-runtime-smoke-'))
   let forwardedRequests = 0
+  let inferenceStage = 'idle'
+  let inferenceStageStarted = Date.now()
   const backend = http.createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => chunks.push(chunk))
@@ -394,7 +396,13 @@ async function main() {
         response.setHeader('content-type', 'text/plain')
         response.end('')
       } else if (request.url === '/slots') {
-        response.end('[]')
+        const elapsed = Math.max(0, Date.now() - inferenceStageStarted) / 1000
+        response.end(JSON.stringify(inferenceStage === 'idle' ? [] : [{
+          id: 0, id_task: 42, is_processing: true, n_ctx: 131072,
+          n_prompt_tokens_processed: inferenceStage === 'prefill' ? Math.floor(elapsed * 1000) + 1 : 50000,
+          n_prompt_tokens_cache: 60000,
+          next_token: [{ n_decoded: inferenceStage === 'decode' ? Math.floor(elapsed * 20) + 1 : 0 }],
+        }]))
       } else if (request.url === '/v1/chat/completions') {
         forwardedRequests += 1
         response.end('{"id":"runtime-smoke-response","model":"runtime-smoke-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}')
@@ -524,6 +532,24 @@ async function main() {
       throw new Error(`legacy launch did not fail open with checkpoints disabled: ${JSON.stringify(legacyCheckpointStatus)}`)
     }
 
+    const waitForInference = async (predicate, label) => {
+      let observed
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const response = await request(endpoint, token, { command: 'get_status' }, `inference-${label}-${attempt}`)
+        observed = response.reply?.payload?.monitoring?.[launchSpec.instance_id]?.inference
+        if (observed && predicate(observed)) return observed
+        await sleep(200)
+      }
+      throw new Error(`Inference ${label} did not converge: ${JSON.stringify(observed)}`)
+    }
+    inferenceStage = 'prefill'
+    inferenceStageStarted = Date.now()
+    const prefill = await waitForInference(value => value.prefill.state === 'live', 'prefill')
+    assert.ok(prefill.prefill.value > 700 && prefill.prefill.value < 1300, JSON.stringify(prefill))
+    assert.equal(prefill.decode.value, 0)
+    assert.equal(prefill.tasks[0].prefillAverage, null, 'slot observations cannot invent phase averages')
+    assert.equal(prefill.tasks[0].cachedTokens, 60000)
+
     for (let cycle = 0; cycle < 5; cycle += 1) {
       const stopped = await request(endpoint, token, { command: 'stop_proxy' }, `stop-proxy-${cycle}`)
       assert.equal(stopped.reply?.payload?.running, false, JSON.stringify(stopped))
@@ -603,6 +629,13 @@ async function main() {
     if (routedWhileDetached.status !== 200 || !routedWhileDetached.body.includes('runtime-smoke-response')) {
       throw new Error(`detached runtime stopped forwarding requests: ${JSON.stringify(routedWhileDetached)}`)
     }
+    const detachedInference = await waitForInference(value => value.prefill.state === 'live', 'detached-prefill')
+    assert.ok(detachedInference.prefill.value > 700)
+    inferenceStage = 'decode'
+    inferenceStageStarted = Date.now()
+    const decode = await waitForInference(value => value.decode.state === 'live' && value.decode.value > 0, 'decode')
+    assert.equal(decode.prefill.value, 0, 'prefill must end before the delayed n_gen log arrives')
+    assert.equal(decode.tasks[0].phase, 'decode')
 
     const upgradeShutdown = await request(
       endpoint,
@@ -635,6 +668,12 @@ async function main() {
     }
     JSON.parse(fs.readFileSync(runtimeStatePath, 'utf8'))
     launchedPids.add(restoredInstance.pid)
+    const restoredInference = await waitForInference(value => value.decode.state === 'live' && value.decode.value > 0, 'restored-decode')
+    assert.ok(restoredInference.decode.value < 30, 'restoration must not count previously generated tokens as new work')
+    inferenceStage = 'idle'
+    const idleInference = await waitForInference(value => value.decode.state === 'idle', 'idle')
+    assert.equal(idleInference.prefill.value, 0)
+    assert.equal(idleInference.decode.value, 0)
     if (restored.reply?.payload?.proxy?.running !== false) {
       throw new Error(`runtime ignored the occupied routing port during recovery: ${JSON.stringify(restored)}`)
     }

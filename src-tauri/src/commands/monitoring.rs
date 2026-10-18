@@ -1,3 +1,6 @@
+use super::inference_metrics::{
+    InferenceThroughput, InferenceTracker, LogObservation, SlotObservation,
+};
 use crate::commands::telemetry::LlamaMetricSample;
 use crate::models::{AppState, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
@@ -23,6 +26,8 @@ const VECTOR_MATCH_TIME_BUCKET_MS: i64 = 500;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitoringFrame {
+    #[serde(default)]
+    pub inference: Option<InferenceThroughput>,
     pub instance_id: String,
     pub session_id: Option<String>,
     pub session_started_at: i64,
@@ -165,6 +170,7 @@ fn deduplicated_vector_rate_events<'a>(
 }
 
 struct InstanceMonitoringState {
+    inference: InferenceTracker,
     instance_id: String,
     session_id: Option<String>,
     workload: ModelWorkload,
@@ -181,6 +187,7 @@ struct InstanceMonitoringState {
 impl InstanceMonitoringState {
     fn new(instance_id: &str, session_id: Option<&str>, workload: ModelWorkload, now: i64) -> Self {
         Self {
+            inference: InferenceTracker::default(),
             instance_id: instance_id.to_string(),
             session_id: session_id.map(ToString::to_string),
             workload,
@@ -210,6 +217,7 @@ impl InstanceMonitoringState {
         self.workload = workload;
         self.registered_at = now.max(self.registered_at.saturating_add(1));
         self.system = None;
+        self.inference = InferenceTracker::default();
         self.llama = None;
         self.tasks = None;
         self.slots = None;
@@ -220,6 +228,14 @@ impl InstanceMonitoringState {
     fn push_frame(&mut self, frame: MonitoringFrame) {
         if self.timeline.back().map(|item| item.ts) == Some(frame.ts) {
             self.timeline.pop_back();
+        }
+        // Keep current task details for hydration, but not thousands of copies.
+        if let Some(inference) = self
+            .timeline
+            .back_mut()
+            .and_then(|frame| frame.inference.as_mut())
+        {
+            inference.tasks.clear();
         }
         self.timeline.push_back(frame);
         while self.timeline.len() > FRAME_RETENTION {
@@ -376,6 +392,15 @@ impl InstanceMonitoringState {
         .max();
 
         MonitoringFrame {
+            inference: (self.workload == ModelWorkload::Inference).then(|| {
+                self.inference.snapshot(
+                    now,
+                    slots_fresh
+                        .map(|item| item.value.busy)
+                        .or_else(|| task_fresh.map(|item| item.value.active))
+                        .or_else(|| llama_fresh.map(|item| item.value.requests_processing)),
+                )
+            }),
             instance_id: self.instance_id.clone(),
             session_id: self.session_id.clone(),
             session_started_at: self.registered_at,
@@ -456,6 +481,56 @@ fn with_state(
         state.reset_session(existing_session.as_deref(), workload, now, false);
     }
     update(&mut state);
+}
+
+pub(crate) fn observe_inference_log(
+    instance_id: &str,
+    session_id: Option<&str>,
+    slot: u32,
+    task: u64,
+    observation: LogObservation,
+) {
+    with_inference_state(instance_id, session_id, |state| {
+        state
+            .inference
+            .log(slot, task, observation, current_time_ms())
+    });
+}
+
+pub(crate) fn observe_inference_slots(
+    instance_id: &str,
+    session_id: Option<&str>,
+    slots: &[SlotObservation],
+    sampled_at: i64,
+) {
+    with_inference_state(instance_id, session_id, |state| {
+        state.inference.slots(slots, sampled_at)
+    });
+}
+
+fn with_inference_state(
+    instance_id: &str,
+    session_id: Option<&str>,
+    update: impl FnOnce(&mut InstanceMonitoringState),
+) {
+    let shared = MONITORING
+        .lock()
+        .unwrap()
+        .entry(instance_id.to_string())
+        .or_insert_with(|| {
+            Arc::new(Mutex::new(InstanceMonitoringState::new(
+                instance_id,
+                session_id,
+                ModelWorkload::Inference,
+                current_time_ms(),
+            )))
+        })
+        .clone();
+    let mut state = shared.lock().unwrap();
+    // Delayed observations may not reset a replacement process's session.
+    if state.session_id.as_deref() == session_id && state.workload == ModelWorkload::Inference {
+        update(&mut state);
+    }
 }
 
 pub fn update_metrics(
@@ -716,6 +791,39 @@ mod tests {
             requests_deferred: 0,
             busy_slots_per_decode: 0.0,
         }
+    }
+
+    #[test]
+    fn inference_session_guard_and_history_preserve_only_current_task_details() {
+        let id = "inference-session-guard-test";
+        with_state(id, Some("new"), ModelWorkload::Inference, |_| {});
+        observe_inference_log(id, Some("old"), 0, 1, LogObservation::Start);
+        let frame = capture_frame(id).unwrap();
+        assert_eq!(frame.session_id.as_deref(), Some("new"));
+        assert!(frame.inference.unwrap().tasks.is_empty());
+        observe_inference_log(id, Some("new"), 0, 2, LogObservation::Start);
+        let now = current_time_ms();
+        sample_frame(id, now);
+        sample_frame(id, now + 1000);
+        let history = get_monitoring_series(Some(id.into()), None);
+        assert_eq!(
+            history
+                .last()
+                .unwrap()
+                .inference
+                .as_ref()
+                .unwrap()
+                .tasks
+                .len(),
+            1
+        );
+        assert!(history[..history.len() - 1].iter().all(|frame| frame
+            .inference
+            .as_ref()
+            .unwrap()
+            .tasks
+            .is_empty()));
+        remove_instance(id);
     }
 
     #[test]
