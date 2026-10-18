@@ -199,6 +199,7 @@ async function run() {
   assert.equal((await call('downloads.list')).data.max_concurrent, 2)
   const restoredFiles = (await call('downloads.list')).data.queue.flatMap(entry => entry.files)
   for (const entry of history) assert.ok(restoredFiles.some(file => file.task_id === entry.files[0].task_id && file.status === entry.status))
+  assert.equal((await mutate('downloads.clear', { statuses: ['active', 'paused'] }, [], false)).error.code, 'VALIDATION')
   await mutate('downloads.clear', { statuses: ['completed', 'error'] })
   assert.deepEqual((await call('downloads.list')).data.queue.flatMap(entry => entry.files.map(file => file.status)), ['paused'])
   assert.equal((await call('tasks.get', { id: renamed.data.id })).data.status, 'succeeded')

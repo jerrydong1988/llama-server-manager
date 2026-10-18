@@ -108,6 +108,83 @@ test('filtered instance reordering swaps adjacent visible instances', async ({ p
   })).toEqual(['browser-group-beta', 'browser-hidden-instance', 'browser-test-instance'])
 })
 
+test('external download cleanup updates visible history only after success', async ({ page }) => {
+  await openTab(page, 'downloads', 'download-resume')
+  await expect(page.getByTitle('▶ 继续')).toBeVisible()
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    await backend.emitEvent('download-complete', {
+      taskId: 'browser-download-task', runId: 'browser-download-run', version: 1,
+      fileName: 'browser-model.gguf', repoId: 'browser/model', source: 'huggingface',
+      remotePath: 'browser-model.gguf', downloaded: 1024, total: 1024,
+      path: 'C:\\browser-test\\downloads\\browser\\model\\browser-model.gguf',
+    })
+    backend.downloadQueueOverride = []
+    await backend.emitEvent('management-config-changed', { operation: 'downloads.clear', revision: 0, download_effect: null })
+  })
+  await expect(page.getByTitle('入库扫描').first()).toBeVisible()
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent('management-config-changed', {
+    operation: 'downloads.clear', revision: 0, download_effect: { clear_statuses: ['completed'] },
+  }))
+  await expect(page.getByText('browser-model.gguf', { exact: true })).toBeHidden()
+})
+
+test('external cancel all updates paused download cards', async ({ page }) => {
+  await openTab(page, 'downloads', 'download-resume')
+  await expect(page.getByTitle('▶ 继续')).toBeVisible()
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.downloadQueueOverride = []
+    await backend.emitEvent('management-config-changed', {
+      operation: 'downloads.cancel_all', revision: 0, download_effect: { cancel_all: true },
+    })
+  })
+  await expect(page.getByTitle('▶ 继续')).toBeHidden()
+  await expect(page.getByText('已取消', { exact: true }).first()).toBeVisible()
+})
+
+test('external download settings refresh open policy controls', async ({ page }) => {
+  await openTab(page, 'downloads', 'download-resume')
+  await expect(page.getByRole('slider')).toHaveValue('3')
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.downloadQueueOverride = []
+    backend.downloadSettingsOverride = { max_concurrent: 6, bandwidth_limit_bytes_per_sec: 2048,
+      resume_policy: 'auto_on_launch', low_priority_throttle: true }
+    await backend.emitEvent('management-config-changed', { operation: 'downloads.settings', revision: 0 })
+  })
+  await expect(page.getByRole('slider')).toHaveValue('6')
+  await expect(page.getByRole('button', { name: '启动时自动恢复', exact: true })).toHaveClass(/shadow-sm/)
+  await expect(page.getByRole('switch').last()).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('spinbutton').last()).toHaveValue('2')
+})
+
+test('external newer download attempt replaces completed card state', async ({ page }) => {
+  await openTab(page, 'downloads', 'download-resume')
+  await expect(page.getByTitle('▶ 继续')).toBeVisible()
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    await backend.emitEvent('download-complete', {
+      taskId: 'browser-download-task', runId: 'browser-download-run', version: 1,
+      fileName: 'browser-model.gguf', repoId: 'browser/model', source: 'huggingface',
+      remotePath: 'browser-model.gguf', downloaded: 1024, total: 1024,
+      path: 'C:\\browser-test\\downloads\\browser\\model\\browser-model.gguf',
+    })
+  })
+  await expect(page.getByTitle('入库扫描').first()).toBeVisible()
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.downloadQueueOverride = [{ id: 'new-entry', repo_id: 'browser/model', source: 'huggingface',
+      save_dir: 'C:\\browser-test\\downloads', added_at: Date.now(), status: 'paused',
+      files: [{ name: 'browser-model.gguf', path: 'browser-model.gguf', size: 1024, file_type: 'model',
+        task_id: 'browser-download-task', run_id: 'new-run', version: 2, downloaded: 0, status: 'paused' }],
+    }]
+    await backend.emitEvent('management-config-changed', { operation: 'downloads.retry', revision: 0 })
+  })
+  await expect(page.getByTitle('入库扫描')).toBeHidden()
+  await expect(page.getByTitle('▶ 继续')).toBeVisible()
+})
+
 test('StrictMode keeps instance connection results mounted', async ({ page }) => {
   await openTab(page, 'instances', 'instance-connection')
 

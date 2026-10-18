@@ -86,14 +86,15 @@ export function mergeRestoredDownloadTask(
     ...restored,
     id: existing.id,
     runId: existingIsNewer ? existing.runId : restored.runId,
-    downloaded: Math.max(existing.downloaded ?? 0, restored.downloaded ?? 0),
-    total: existing.total || restored.total,
-    speed: existing.status === 'active' ? existing.speed : restored.speed,
+    downloaded: existingIsNewer ? Math.max(existing.downloaded ?? 0, restored.downloaded ?? 0) : restored.downloaded,
+    total: existingIsNewer ? existing.total || restored.total : restored.total,
+    speed: existingIsNewer && existing.status === 'active' ? existing.speed : restored.speed,
     status: existingIsNewer
       ? preferExistingStatus(existing.status, restored.status)
       : restored.status,
     version: Math.max(existing.version ?? 0, restored.version ?? 0),
     error: existingIsNewer ? existing.error : restored.error,
-    remoteChanged: existing.remoteChanged,
+    remoteChanged: existingIsNewer ? existing.remoteChanged : undefined,
+    completedAt: existingIsNewer ? existing.completedAt : undefined,
   }
 }

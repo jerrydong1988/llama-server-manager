@@ -15,6 +15,8 @@ import type {
   MonitoringFrame,
   SystemMetrics,
   WorkerInfo,
+  PersistedQueueEntry,
+  DownloadManagerSnapshot,
 } from '../src/store/types'
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
@@ -660,6 +662,8 @@ type BrowserTestControl = {
   lastGenerated: GeneratedServerCommand | null
   commandOverride: string[] | null
   failProxyStatus: boolean
+  downloadQueueOverride: PersistedQueueEntry[] | null
+  downloadSettingsOverride: Partial<DownloadManagerSnapshot> | null
   failProxyTargets: boolean
   failRuntimeStatus: boolean
   updaterCheckCount: number
@@ -728,6 +732,8 @@ const control: BrowserTestControl = {
   lastGenerated: null,
   commandOverride: null,
   failProxyStatus: false,
+  downloadQueueOverride: null,
+  downloadSettingsOverride: null,
   failProxyTargets: false,
   failRuntimeStatus: false,
   updaterCheckCount: 0,
@@ -1206,6 +1212,9 @@ mockIPC((command, payload) => {
       })
     }
     case 'get_download_manager_snapshot':
+      if (control.downloadQueueOverride !== null) {
+        return { queue: clone(control.downloadQueueOverride), active_count: 0, max_concurrent: 3, resume_policy: 'manual', bandwidth_limit_bytes_per_sec: 0, low_priority_throttle: false, ...control.downloadSettingsOverride }
+      }
       if (IS_DOCS_SCENARIO) {
         return {
           queue: [

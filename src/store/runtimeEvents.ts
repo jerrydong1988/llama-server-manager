@@ -7,6 +7,7 @@ import type {
   AppState,
   CheckpointStatus,
   DownloadProgress,
+  DownloadManagerSnapshot,
   InstanceConfig,
   MonitoringFrame,
   PerfUpdateEvent,
@@ -45,6 +46,7 @@ let sysMetricsInFlight = false
 let runtimeManagedIds = new Set<string>()
 let lastReportedRuntimeStatusError: string | null = null
 let runtimeBridgeWarnings = new Set<string>()
+let managementDownloadRefresh = 0
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -182,7 +184,7 @@ export function registerGlobalStoreListeners(
 ) {
   let managementReloadPending = false
   let managementReloadAgain = false
-  registerListener<{ operation: string; revision: number }>(store, 'management-config-changed', (event) => {
+  registerListener<{ operation: string; revision: number; download_effect?: { clear_statuses?: string[]; cancel_all?: boolean } | null }>(store, 'management-config-changed', (event) => {
     const operation = event.payload.operation
     const report = (error: unknown) => store.getState().addRuntimeWarning(`管理状态同步失败：${String(error)}`)
     if (operation.startsWith('engines.')) {
@@ -195,8 +197,27 @@ export function registerGlobalStoreListeners(
       void invoke<AppState['workers']>('get_workers').then(workers => store.setState({ workers })).catch(report)
     }
     if (operation.startsWith('downloads.')) {
-      void invoke<{ queue: import('./types').PersistedQueueEntry[] }>('get_download_manager_snapshot')
-        .then(snapshot => store.getState().restoreDownloadQueue(snapshot.queue)).catch(report)
+      const refresh = ++managementDownloadRefresh
+      const effect = event.payload.download_effect
+      if (effect) {
+        store.setState(state => {
+          const tasks = { ...state.downloadTasks }
+          for (const [id, task] of Object.entries(tasks)) {
+            if (effect.clear_statuses?.includes(task.status)) delete tasks[id]
+            else if (effect.cancel_all && ['active', 'paused', 'pausing', 'queued'].includes(task.status)) {
+              tasks[id] = { ...task, status: 'cancelled', speed: 0 }
+            }
+          }
+          return { downloadTasks: tasks, ...(effect.cancel_all ? { downloadQueue: [] } : {}) }
+        })
+      }
+      void invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')
+        .then(snapshot => {
+          if (refresh !== managementDownloadRefresh) return
+          store.getState().restoreDownloadQueue(snapshot.queue)
+          window.__downloadSnapshotMeta = snapshot
+          window.dispatchEvent(new Event('lsm-download-settings-changed'))
+        }).catch(report)
     }
     if (event.payload.revision === getManagementRevision()) return
     if (hasUnsavedManagementChanges(store.getState())) {

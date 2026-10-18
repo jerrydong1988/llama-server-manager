@@ -195,7 +195,16 @@ impl Host {
             if let Err(error) = host.update_task(&task_copy, status, Some(result)) {
                 eprintln!("management task persistence failed: {}", error.message);
             }
-            let _ = host.app.emit("management-config-changed", json!({"operation":request.operation,"revision":crate::commands::config::management_revision()}));
+            let download_effect = if status == "succeeded" {
+                match request.operation.as_str() {
+                    "downloads.clear" => json!({"clear_statuses":request.arguments["statuses"]}),
+                    "downloads.cancel_all" => json!({"cancel_all":true}),
+                    _ => Value::Null,
+                }
+            } else {
+                Value::Null
+            };
+            let _ = host.app.emit("management-config-changed", json!({"operation":request.operation,"revision":crate::commands::config::management_revision(),"download_effect":download_effect}));
         });
         Ok(json!({"task_id":task_id,"status":"queued"}))
     }

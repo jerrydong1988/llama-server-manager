@@ -866,6 +866,12 @@ async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
         "downloads.resume_all" => value(download::resume_all_downloads(app.clone()).await?),
         "downloads.cancel_all" => value(download::cancel_all_downloads(state, app.clone()).await?),
         "downloads.clear" => {
+            let selected = args["statuses"].as_array().expect("validated");
+            if selected.is_empty() || selected.iter().any(|status| {
+                !matches!(status.as_str(), Some("completed" | "error" | "cancelled"))
+            }) {
+                return Err(Failure::new("VALIDATION", "clear supports completed, error and cancelled records only; cancel active or paused tasks explicitly"));
+            }
             let statuses = args["statuses"]
                 .as_array()
                 .unwrap()

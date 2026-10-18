@@ -256,7 +256,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         const saveDir = entry.save_dir || 'models'
         for (const file of entry.files) {
           const taskId = file.task_id || crypto.randomUUID()
-          if (tasks[taskId]?.status === 'completed') continue
+          if (tasks[taskId]?.status === 'completed' && (tasks[taskId].version ?? 0) >= (file.version ?? 0)) continue
 
           tasks[taskId] = mergeRestoredDownloadTask(tasks[taskId], file, {
             repoId: entry.repo_id,

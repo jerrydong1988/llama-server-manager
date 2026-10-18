@@ -107,4 +107,17 @@ const cancelledMerge = mergeRestoredDownloadTask(
 assert.strictEqual(cancelledMerge.status, 'cancelled')
 assert.strictEqual(cancelledMerge.runId, 'run-cancelled')
 
+const restarted = mergeRestoredDownloadTask(
+  { ...existingActive, status: 'completed', downloaded: 1000, completedAt: 123, remoteChanged: true },
+  { ...olderPersistedFile, version: 5, run_id: 'new-run', downloaded: 0, size: 2000, status: 'paused' },
+  { repoId: 'repo-a', source: 'huggingface', saveDir: 'models', entryStatus: 'paused' },
+)
+assert.strictEqual(restarted.status, 'paused')
+assert.strictEqual(restarted.downloaded, 0)
+assert.strictEqual(restarted.total, 2000)
+assert.strictEqual(restarted.speed, 0)
+assert.strictEqual(restarted.completedAt, undefined)
+assert.strictEqual(restarted.remoteChanged, undefined)
+assert.strictEqual(restarted.runId, 'new-run')
+
 console.log('download restore merge regression passed')

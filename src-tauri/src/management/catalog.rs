@@ -119,7 +119,7 @@ pub fn operations() -> Vec<Operation> {
         ("downloads.pause_all","Pause all active downloads","write",""),
         ("downloads.resume_all","Resume paused downloads","write",""),
         ("downloads.cancel_all","Cancel all download tasks","delete",""),
-        ("downloads.clear","Remove task records with selected statuses","delete","statuses:strings"),
+        ("downloads.clear","Remove completed, error or cancelled task records; preserves downloaded files","delete","statuses:strings"),
         ("downloads.settings","Set download scheduling and recovery policy","write","concurrency?:integer bytes_per_second?:integer low_priority?:boolean resume_policy?:string"),
         ("instances.list","List configured instances and current runtime state","read",""),
         ("instances.get","Read one instance configuration and revision (secrets redacted)","read","id:string"),
