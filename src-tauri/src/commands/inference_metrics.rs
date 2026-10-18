@@ -293,7 +293,8 @@ impl InferenceTracker {
         self.last_log = Some(now);
         self.finished.retain(|_, ts| now - *ts <= 30_000);
         if matches!(observation, LogObservation::Finish) {
-            self.unidentified_slots.remove(&slot);
+            // An unidentified busy slot may already belong to the next task.
+            // Only a fresh slot observation or identified task can resolve it.
             self.tasks.remove(&(slot, id));
             self.finished.insert((slot, id), now);
             return;
@@ -638,6 +639,25 @@ mod tests {
         assert_eq!(snapshot.tasks.len(), 1);
         assert_eq!(snapshot.tasks[0].task_id, 2);
         assert_eq!(snapshot.prefill.value, None);
+    }
+
+    #[test]
+    fn old_task_release_cannot_clear_an_unidentified_replacement() {
+        let mut tracker = InferenceTracker::default();
+        tracker.log(1, 1, LogObservation::Start, 1000);
+        tracker.slots(
+            &[SlotObservation {
+                task: None,
+                ..slot(1, 0, 0)
+            }],
+            2000,
+        );
+        tracker.log(1, 1, LogObservation::Finish, 2500);
+        let snapshot = tracker.snapshot(2500, None);
+        assert_eq!(snapshot.prefill.value, None);
+        assert_eq!(snapshot.decode.expected, 1);
+        tracker.slots(&[], 3000);
+        assert_eq!(tracker.snapshot(3000, None).decode.value, Some(0.0));
     }
 
     #[test]
