@@ -6,6 +6,7 @@ import { formatHostPort } from '../../utils/network'
 import { pathsEqual } from '../../utils/path'
 import { useI18n } from '../../i18n'
 import { getPerformanceLabels, getSpeculativeDecodingLabels } from '../../i18n/pageLabels'
+import { getInferenceLabels } from '../../i18n/inferenceMonitoring'
 import type {
   DiagnosticFinding,
   InferenceRequestSummary,
@@ -19,13 +20,12 @@ import type {
 import { Badge, Button, EmptyPanel, PageFrame, PageHeader } from '../ui'
 import { ActiveRequestRow, ComparisonTable, MonitorPanel, SessionCard, SignalMeter, StatusTile, TrendChart } from '../monitoring/MonitoringPrimitives'
 import { formatDuration, formatMemory, formatMs, formatRate, formatTime } from '../monitoring/monitoringFormat'
+import { DualThroughput, DualThroughputTrends, InferenceTasks } from '../monitoring/InferencePanels'
+import { inferenceTrend } from '../monitoring/inferenceThroughput'
 import {
   buildRequestPressure,
   formatRequestPressureDetail,
   buildResourceSignals,
-  buildTelemetryThroughputPoints,
-  mergeThroughputPoints,
-  monitoringFramePoints,
 } from '../monitoring/monitoringViewModel'
 import {
   buildSpeculativeDecodingSummary,
@@ -64,6 +64,7 @@ const TELEMETRY_DETAIL_REFRESH_MS = 5000
 
 export default function PerformancePage() {
   const { lang } = useI18n()
+  const inferenceLabels = getInferenceLabels(lang)
   const labels = useMemo(() => getPerformanceLabels(lang), [lang])
   const speculativeLabels = useMemo(() => getSpeculativeDecodingLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
@@ -266,28 +267,10 @@ export default function PerformancePage() {
   const selectedRunning = selectedSession
     ? selectedSession.stopped_at == null
     : selectedInstance?.status === 'running'
-  const currentThroughput = currentFrame?.throughput ?? 0
   const trendEnd = selectedSession?.stopped_at || Date.now()
   const trendStart = trendEnd - trendRangeToMs(trendRange)
-  const inferenceTrendPoints = useMemo(
-    () => {
-      const live = monitoringFramePoints(liveFrames, 'inference')
-        .filter(point => point.ts >= trendStart && point.value != null)
-        .map(point => ({ ts: point.ts, value: point.value as number }))
-      return mergeThroughputPoints(
-        buildTelemetryThroughputPoints(trendSamples),
-        live,
-        trendStart,
-        240,
-      )
-    },
-    [liveFrames, trendSamples, trendStart],
-  )
-  const currentThroughputDetail = currentFrame?.source === 'task'
-    ? labels.fromLiveTasks
-    : currentFrame?.source === 'llama'
-        ? labels.fromLlamaMetrics
-        : labels.idleThroughput
+  const prefillTrend = inferenceTrend(liveFrames, trendSamples, 'prefill', trendStart)
+  const decodeTrend = inferenceTrend(liveFrames, trendSamples, 'decode', trendStart)
   const pressure = buildRequestPressure(
     currentFrame?.activeRequests ?? latestSample?.requests_processing,
     currentFrame?.queuedRequests ?? latestSample?.requests_deferred,
@@ -487,7 +470,7 @@ export default function PerformancePage() {
                     className="py-3"
                   />
                 )) : (
-                  <StatusTile label={labels.currentTps} value={formatRate(currentThroughput)} detail={currentThroughputDetail} icon={<Gauge className="h-5 w-5" />} tone="blue" className="py-3" />
+                  <div className="lg:col-span-2"><DualThroughput frames={[selectedRunning ? currentFrame ?? undefined : undefined]} lang={lang} /></div>
                 )}
                 <StatusTile
                   label={labels.queuePressure}
@@ -550,8 +533,10 @@ export default function PerformancePage() {
                 </div>
               }
             >
-              <TrendChart
-                points={performanceMode.kind === 'vector' ? vectorTrend : inferenceTrendPoints}
+              {performanceMode.kind === 'inference' ? (
+                <DualThroughputTrends prefill={prefillTrend} decode={decodeTrend} start={trendStart} end={trendEnd} lang={lang} />
+              ) : <TrendChart
+                points={vectorTrend}
                 rangeStart={selectedRunning ? trendStart : undefined}
                 rangeEnd={selectedRunning ? trendEnd : undefined}
                 emptyText={performanceMode.kind === 'vector' ? performanceMode.source.summary : labels.noSamplesYet}
@@ -559,7 +544,7 @@ export default function PerformancePage() {
                 unit={performanceMode.kind === 'vector' && vectorTrendMetric === 'items'
                   ? performanceMode.itemName === 'document' ? labels.documentsPerSecondShort : labels.itemsPerSecondShort
                   : performanceMode.kind === 'vector' ? 'input tok/s' : 'tok/s'}
-              />
+              />}
               {performanceMode.kind === 'vector' ? (
                 <div data-vector-source-state={performanceMode.source.kind} className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
                   <span className="min-w-0 flex-1">{performanceMode.source.summary}</span>
@@ -571,8 +556,10 @@ export default function PerformancePage() {
               ) : null}
             </MonitorPanel>
 
-            <MonitorPanel title={labels.activeRequests} icon={<Radio className="h-5 w-5" />} action={<Badge tone={activeTasks.length > 0 ? 'emerald' : 'slate'}>{activeTasks.length}</Badge>}>
-              {activeTasks.length === 0 ? (
+            <MonitorPanel title={labels.activeRequests} icon={<Radio className="h-5 w-5" />} action={<Badge tone={(performanceMode.kind === 'inference' ? currentFrame?.inference?.tasks.length : activeTasks.length) ? 'emerald' : 'slate'}>{performanceMode.kind === 'inference' ? currentFrame?.inference?.tasks.length ?? 0 : activeTasks.length}</Badge>}>
+              {performanceMode.kind === 'inference' ? (
+                <InferenceTasks entries={[{ frame: selectedRunning ? currentFrame ?? undefined : undefined, name: selectedSession?.instance_name || selectedInstance?.name }]} lang={lang} />
+              ) : activeTasks.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
                   {selectedSession?.stopped_at ? labels.sessionFinishedNoActive : labels.noActiveRequests}
                 </div>
@@ -694,7 +681,9 @@ export default function PerformancePage() {
               ) : (
                 <div className="grid grid-cols-2 gap-2">
                   <MiniStat label={labels.requests} value={analysis?.request_count ?? requests.length} />
-                  <MiniStat label={labels.avgGenerationSpeed} value={formatRate(analysis?.avg_generation_tps)} />
+                  <MiniStat label={inferenceLabels.decodeAverage} value={formatRate(analysis?.avg_generation_tps)} />
+                  <MiniStat label={inferenceLabels.prefillAverage} value={formatRate(analysis?.avg_prompt_tps)} />
+                  <MiniStat label={inferenceLabels.prefillTime} value={formatMs(average(requests.map(request => request.prompt_time_ms)))} />
                   <MiniStat label={labels.avgTotalTime} value={formatMs(analysis?.avg_total_time_ms)} />
                   <MiniStat label={labels.maxBusySlots} value={analysis?.max_busy_slots ?? 0} />
                 </div>

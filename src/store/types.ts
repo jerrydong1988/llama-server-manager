@@ -350,6 +350,7 @@ export interface SystemMetricsSample extends SystemMetrics {
 export type ModelWorkload = 'inference' | 'embedding' | 'reranker'
 
 export interface TelemetrySampleSummary {
+  inference?: InferenceThroughput | null
   session_id: string
   instance_id: string
   ts: number
@@ -462,6 +463,7 @@ export interface PerfUpdateEvent {
 }
 
 export interface MonitoringFrame {
+  inference?: InferenceThroughput | null
   instanceId: string
   sessionId: string | null
   sessionStartedAt: number
@@ -482,6 +484,37 @@ export interface MonitoringFrame {
   source: 'task' | 'llama' | 'vector-log' | 'idle' | 'unavailable'
   dataAgeMs: number
   system: SystemMetrics | null
+}
+
+export interface InferenceRate {
+  value: number | null
+  state: 'live' | 'idle' | 'sampling' | 'stale' | 'unavailable' | 'partial'
+  source: 'log' | 'slots' | 'mixed' | 'none'
+  sampledAt: number | null
+  windowMs: number | null
+  covered: number
+  expected: number
+}
+
+export interface InferencePhaseTask {
+  slotId: number
+  taskId: number
+  phase: 'unknown' | 'prefill' | 'decode'
+  startedAt: number
+  processedTokens: number | null
+  generatedTokens: number | null
+  cachedTokens: number | null
+  progress: number | null
+  prefillAverage: number | null
+  decodeAverage: number | null
+  prefill: InferenceRate
+  decode: InferenceRate
+}
+
+export interface InferenceThroughput {
+  prefill: InferenceRate
+  decode: InferenceRate
+  tasks: InferencePhaseTask[]
 }
 
 export interface TelemetrySessionAnalysis {

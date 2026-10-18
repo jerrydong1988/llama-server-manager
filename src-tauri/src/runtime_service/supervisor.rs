@@ -867,9 +867,23 @@ impl RuntimeSupervisor {
                     }
                     let _ = crate::commands::monitoring::capture_frame(&instance_id);
                     drop(lifecycle);
-                    std::thread::sleep(
-                        std::time::Duration::from_secs(5)
-                            .saturating_sub(iteration_started.elapsed()),
+                    crate::commands::server::wait_with_inference_sampling(
+                        &client,
+                        &endpoint_base,
+                        &api_key,
+                        &instance_id,
+                        telemetry_session_id.as_deref(),
+                        workload,
+                        iteration_started,
+                        || {
+                            supervisor
+                                .state
+                                .lock()
+                                .unwrap()
+                                .running
+                                .get(&instance_id)
+                                .is_some_and(|current| current.pid == expected_pid)
+                        },
                     );
                 }
             })

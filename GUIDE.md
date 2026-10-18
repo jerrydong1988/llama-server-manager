@@ -533,6 +533,20 @@ AMD 指标优先使用 ADLX，NVIDIA 使用 NVML，无法取得 GPU 指标时会
 
 AMD signals prefer ADLX and NVIDIA uses NVML; the app falls back to system metrics when GPU telemetry is unavailable. Stale live instance metrics are cleared when no instance is selected.
 
+### Prefill / Decode 双指标 / Dual Throughput
+
+生成实例在“性能监控”的实例概览和吞吐趋势中并列展示 **Prefill 输入速度**、**Decode 生成速度**；大屏顶部、实时吞吐和实例列表使用同一套数据。两条趋势各自使用纵轴，保持相同时间范围。活跃请求显示当前阶段、已处理/生成 Token、缓存复用量及可获得的输入进度。
+
+近期速度来自连续任务日志或 `/slots` 计数采样，目标窗口约 3 秒，页面注明实际观察窗口和来源；缓存复用 Token 不计入 Prefill。日志的阶段平均只显示在“阶段平均”或请求统计中，`/metrics` 平均值不补成实时曲线。短请求可能没有连续实时样本，完成后仍可查看 Prefill 平均速度和耗时。
+
+“采样中”表示尚未形成连续观测；“等待更新”表示旧样本已过期；“数据不可用”表示没有对应来源；确认无该阶段计算时才显示 `0 tok/s`。部分任务或实例缺数时标记覆盖率，趋势留空。旧历史记录没有新字段时也留空。Embedding/Reranker 输入吞吐不混入生成实例的 Prefill。
+
+无需新增模型参数。保留引擎 INFO 进度日志，或启用 slots API，即可提供观测来源。后台运行时持续采集；重新打开窗口使用后台快照，进程/会话重建则重新建立计数基线，历史日志重放不会产生实时速度。槽位查询有超时限制、不会重叠：活跃时约每秒一次，空闲时约每 5 秒一次；GPU 指标和 SQLite 采样保持原有周期。
+
+Generation instances show **Prefill input speed** and **Decode output speed** together in Performance and the monitoring wall. Their charts have independent vertical scales and a shared time range. Active requests show phase, processed/generated tokens, cache reuse, and available input progress. Recent rates use consecutive log or slot observations with an approximately three-second window; the actual window and source are labeled. Cached tokens are excluded from Prefill. Phase averages remain separate, and `/metrics` averages never fill recent-rate charts. Short requests may have only completed-request averages and timings.
+
+Sampling, stale, unavailable, partial coverage, and observed zero are distinct states. Missing historical fields remain gaps. Background snapshots survive GUI reconnection; restarted processes establish fresh counter baselines, and replayed logs cannot manufacture live rates. Slot requests are bounded and serialized (about one second while active, five seconds while idle); GPU and SQLite sampling retain their existing cadence. No additional model parameter is required; INFO progress logs or the slots API provide observations.
+
 ---
 
 ## 监控大屏 / Monitoring Wall

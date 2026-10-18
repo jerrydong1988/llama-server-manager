@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict')
+require('./test-inference-throughput.cjs')
 const fs = require('node:fs')
 const Module = require('node:module')
 const path = require('node:path')
@@ -216,6 +217,13 @@ const entry = `
   assert.equal(mixed.unit, 'tok/s')
   assert.equal(mixed.current, 50, 'input token throughput must not be added to generation throughput')
   assert.equal(mixed.vectorItemsPerSecond, 2)
+
+  const taskFrame = (ts) => frame({ ts, inference: { tasks: [{ taskId: 42 }] } })
+  const compacted = appendMonitoringFrame([taskFrame(1000)], taskFrame(2000))
+  assert.equal(compacted[0].inference.tasks.length, 0, 'history must not duplicate active task payloads')
+  assert.equal(compacted[1].inference.tasks.length, 1, 'current task details must survive hydration')
+  const delayed = appendMonitoringFrame(compacted, taskFrame(1500))
+  assert.deepEqual(delayed.map(point => point.inference.tasks.length), [0, 0, 1], 'an out-of-order frame must not clear current task details')
 
   assert.deepEqual(
     appendMonitoringFrame(instanceFrames, frame({ ts: 2000, throughput: 55 })),
@@ -440,12 +448,14 @@ for (const source of [performanceSource, bigScreenSource]) {
   assert.doesNotMatch(source, /listen<MetricsEvent>/, 'views must not register page-local metrics listeners')
   assert.doesNotMatch(source, /listen<PerfUpdateEvent>/, 'views must not register page-local task listeners')
 }
-assert.match(performanceSource, /monitoringFramePoints/, 'performance view must project selected-instance frames')
+assert.match(performanceSource, /inferenceTrend/, 'performance view must project phase-specific rates from selected-instance frames')
+assert.match(performanceSource, /DualThroughputTrends/, 'performance view must render separate Prefill and Decode axes')
 assert.match(performanceSource, /system: sysMetrics,[\s\S]*history: systemMetricsHistory/, 'performance resources must use the global realtime sampler')
 assert.doesNotMatch(performanceSource, /system: currentFrame\?\.system/, 'performance resource cards must not follow the selected session')
 assert.match(performanceSource, /const detailReady = Boolean\(selectedSessionId\) && detailSessionId === selectedSessionId/, 'telemetry detail state must be bound to the selected session before rendering')
 assert.match(performanceSource, /sample\.session_id === selectedSession\.id/, 'historical fallback samples must belong to the selected session')
 assert.match(bigScreenSource, /buildFleetThroughputSeries/, 'wallboard must use workload-aware fleet aggregation')
+assert.match(bigScreenSource, /fleetInferenceTrend/, 'wallboard must aggregate phase-specific rates with fleet coverage')
 assert.match(bigScreenSource, /system: sysMetrics,[\s\S]*history: systemMetricsHistory/, 'wallboard resources must use the same global realtime sampler')
 assert.doesNotMatch(bigScreenSource, /latest: latestSample/, 'wallboard resource trends must not mix unrelated session samples')
 assert.match(bigScreenSource, /const pressureFrames = inferenceFrames\.length > 0 \? inferenceFrames : currentFrames/, 'mixed workload pressure must use one consistent numerator and capacity population')

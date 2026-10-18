@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { getBigScreenLabels, getSpeculativeDecodingLabels } from '../i18n/pageLabels'
+import { getInferenceLabels } from '../i18n/inferenceMonitoring'
 import { useAppStore } from '../store'
 import type {
   DownloadProgress,
@@ -30,6 +31,8 @@ import type {
 import { Badge, joinClassNames } from './ui'
 import { MiniSparkline, TrendChart } from './monitoring/MonitoringPrimitives'
 import { formatBytes, formatBytesPerSecond, formatDuration, formatMs, formatRate, formatTime } from './monitoring/monitoringFormat'
+import { DualThroughput, DualThroughputTrends, InferenceTasks } from './monitoring/InferencePanels'
+import { fleetInferenceTrend } from './monitoring/inferenceThroughput'
 import {
   buildActivityFeed,
   buildFleetThroughputSeries,
@@ -141,6 +144,13 @@ export default function BigScreenPage() {
     [monitoringCurrentByInstance, runningInstanceIds],
   )
   const trendStart = trendEnd - 5 * 60 * 1000
+  const inferenceIds = runningInstances.filter(instance =>
+    (monitoringCurrentByInstance[instance.id]?.workload || (instance.config.embedding || instance.config.reranking ? 'embedding' : 'inference')) === 'inference',
+  ).map(instance => instance.id)
+  const hasInference = inferenceIds.length > 0 || runningInstances.length === 0
+  const dualFrames = inferenceIds.map(id => monitoringCurrentByInstance[id])
+  const prefillTrend = fleetInferenceTrend(monitoringFramesByInstance, inferenceIds, 'prefill', trendStart)
+  const decodeTrend = fleetInferenceTrend(monitoringFramesByInstance, inferenceIds, 'decode', trendStart)
   const fleetThroughput = useMemo(
     () => buildFleetThroughputSeries(
       monitoringFramesByInstance,
@@ -364,14 +374,15 @@ export default function BigScreenPage() {
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <WallKpi label={labels.serviceStatus} value={statusLabel} detail={statusDetail} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
-        <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
+        {hasInference ? <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"><DualThroughput frames={dualFrames} lang={lang} compact /></div>
+          : <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />}
         <WallKpi label={labels.requestPressure} value={pressure.percent == null ? '--' : `${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
         <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
       </section>
 
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
         <WallPanel title={labels.realtimeThroughput} icon={<Activity className="h-5 w-5" />} action={<Badge tone="blue">{labels.range5m}</Badge>}>
-          <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
+          {hasInference ? <DualThroughputTrends prefill={prefillTrend} decode={decodeTrend} start={trendStart} end={trendEnd} lang={lang} /> : <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
             <div className="space-y-4">
               <div>
                 <div className="text-xs text-slate-500">{labels.currentThroughput}</div>
@@ -385,17 +396,18 @@ export default function BigScreenPage() {
               </div>
             </div>
             <TrendChart points={trendPoints} rangeStart={trendStart} rangeEnd={trendEnd} emptyText={labels.noSamples} unit={fleetThroughput.unit} className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/50" />
-          </div>
+          </div>}
           <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/50">
             <div className="mb-2 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{labels.activeRequests}</div>
               <Badge tone={activeRequestCount > 0 ? 'emerald' : 'slate'}>{activeRequestCount}</Badge>
             </div>
-            {activeRequestTasks.length === 0 ? (
+            {hasInference ? <InferenceTasks entries={inferenceIds.map(id => ({ frame: monitoringCurrentByInstance[id], name: instances.find(instance => instance.id === id)?.name }))} lang={lang} /> : null}
+            {!hasInference && activeRequestTasks.length === 0 ? (
               <EmptyDark text={labels.noActiveRequests} />
             ) : (
               <div className="space-y-2">
-                {activeRequestTasks.map(task => (
+                {activeRequestTasks.filter(task => task.workload !== 'inference').map(task => (
                   <ActiveWallRequest key={`${task.instanceName}-${task.task_id}`} task={task} />
                 ))}
               </div>
@@ -436,7 +448,7 @@ export default function BigScreenPage() {
             {instances.length === 0 ? (
               <EmptyDark text={labels.noInstances} />
             ) : instances.slice(0, 5).map(instance => (
-              <InstanceWallRow key={instance.id} instance={instance} labels={labels} sessions={sessions} currentFrame={monitoringCurrentByInstance[instance.id]} />
+              <InstanceWallRow key={instance.id} instance={instance} labels={labels} lang={lang} sessions={sessions} currentFrame={monitoringCurrentByInstance[instance.id]} />
             ))}
           </div>
         </WallPanel>
@@ -614,11 +626,13 @@ function WallInlineStat({ label, value }: { label: string; value: string }) {
 }
 
 function InstanceWallRow({
+  lang,
   instance,
   labels,
   sessions,
   currentFrame,
 }: {
+  lang: string
   instance: Instance
   labels: ReturnType<typeof getBigScreenLabels>
   sessions: TelemetrySessionSummary[]
@@ -635,10 +649,12 @@ function InstanceWallRow({
         <div className="truncate font-mono text-xs text-slate-500">{instance.config.host}:{instance.config.port}</div>
       </div>
       <div className="text-right text-sm text-blue-700 dark:text-blue-200">
-        {isRunning && currentFrame
+        {isRunning && (currentFrame?.workload || (instance.config.embedding || instance.config.reranking ? 'embedding' : 'inference')) === 'inference'
+          ? <DualThroughput frames={[currentFrame]} lang={lang} compact />
+          : isRunning && currentFrame
           ? formatRate(currentFrame.throughput, currentFrame.throughputUnit)
           : latestSession?.workload === 'inference'
-            ? formatRate(latestSession.avg_tokens_per_sec)
+            ? <div>{formatRate(latestSession.avg_tokens_per_sec)}<div className="text-xs text-slate-600 dark:text-slate-300">{getInferenceLabels(lang).sessionDecodeAverage}</div></div>
             : '--'}
       </div>
     </div>

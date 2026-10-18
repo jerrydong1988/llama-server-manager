@@ -15,6 +15,11 @@ function sameMonitoringSession(left: MonitoringFrame, right: MonitoringFrame) {
   return left.sessionStartedAt === right.sessionStartedAt
 }
 
+function compactTaskHistory(frames: MonitoringFrame[]) {
+  return frames.map((item, index) => index < frames.length - 1 && item.inference?.tasks.length
+    ? { ...item, inference: { ...item.inference, tasks: [] } } : item)
+}
+
 export function appendMonitoringFrame(previous: MonitoringFrame[], frame: MonitoringFrame) {
   const previousLast = previous[previous.length - 1]
   if (
@@ -24,19 +29,21 @@ export function appendMonitoringFrame(previous: MonitoringFrame[], frame: Monito
   ) {
     return previous
   }
-  const sameSession = previousLast && sameMonitoringSession(previousLast, frame) ? previous : []
+  const sameSession = previousLast && sameMonitoringSession(previousLast, frame)
+    ? previous
+    : []
   const last = sameSession[sameSession.length - 1]
   if (!last || frame.ts > last.ts) {
-    return [...sameSession, frame].slice(-MAX_MONITORING_FRAMES)
+    return compactTaskHistory([...sameSession, frame].slice(-MAX_MONITORING_FRAMES))
   }
   if (frame.ts === last.ts) {
-    return [...sameSession.slice(0, -1), frame]
+    return compactTaskHistory([...sameSession.slice(0, -1), frame])
   }
   const byTimestamp = new Map(sameSession.map(item => [item.ts, item]))
   byTimestamp.set(frame.ts, frame)
-  return [...byTimestamp.values()]
+  return compactTaskHistory([...byTimestamp.values()]
     .sort((left, right) => left.ts - right.ts)
-    .slice(-MAX_MONITORING_FRAMES)
+    .slice(-MAX_MONITORING_FRAMES))
 }
 
 export function mergeMonitoringFrames(
@@ -52,9 +59,9 @@ export function mergeMonitoringFrames(
   for (const frame of [...previous, ...incoming]) {
     if (sameMonitoringSession(frame, latest)) byTimestamp.set(frame.ts, frame)
   }
-  return [...byTimestamp.values()]
+  return compactTaskHistory([...byTimestamp.values()]
     .sort((left, right) => left.ts - right.ts)
-    .slice(-MAX_MONITORING_FRAMES)
+    .slice(-MAX_MONITORING_FRAMES))
 }
 
 export function createMonitoringSlice(set: AppStoreSet): Pick<
