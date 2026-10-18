@@ -798,6 +798,8 @@ async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
                         Failure::new("NOT_FOUND", format!("repository file not found: {path}"))
                     })?;
                 file.task_id = Some(uuid::Uuid::new_v4().to_string());
+                // Control requests can arrive before the first progress event.
+                file.run_id = Some(uuid::Uuid::new_v4().to_string());
                 file.version = Some(0);
                 files.push(file);
             }

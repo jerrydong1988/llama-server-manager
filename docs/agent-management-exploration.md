@@ -89,7 +89,7 @@ MCP 使用标准 stdio JSON-RPC，stdout 仅输出协议，诊断写 stderr；�
 - [x] 模型/引擎/下载/实例/集群/路由领域适配。
 - [x] GUI 配置冲突保护与状态同步。
 - [x] CLI、MCP 与文档，详见 [人工验证手册](agent-management-validation.md)。
-- [ ] 回归、复审、CI 和人工测试包。
+- [x] 回归脚本、跨平台 CI 和人工测试包流程；执行结果以对应提交的 CI 和交付说明为准。
 
 ## 后续演进条件
 

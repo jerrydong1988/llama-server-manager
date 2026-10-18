@@ -425,7 +425,16 @@ fn main() {
         let Some(path) = std::env::args_os().nth(index + 1) else {
             eprintln!("--management-data-dir requires an absolute path"); std::process::exit(1);
         };
-        if let Err(error) = crate::utils::set_data_dir_override(path.into()) { eprintln!("{error}"); std::process::exit(1); }
+        let path = std::path::PathBuf::from(path);
+        let configured = (|| -> Result<(), String> {
+            if !path.is_absolute() { return Err("management data directory must be absolute".into()); }
+            std::fs::create_dir_all(&path).map_err(|error|error.to_string())?;
+            // Native Windows atomic replacement uses extended paths, where forward
+            // slashes are not accepted. Canonicalize before any persistence starts.
+            let canonical = std::fs::canonicalize(&path).map_err(|error|error.to_string())?;
+            crate::utils::set_data_dir_override(canonical)
+        })();
+        if let Err(error) = configured { eprintln!("{error}"); std::process::exit(1); }
     }
     if crate::runtime_service::is_runtime_service_invocation() {
         if let Err(error) = crate::runtime_service::configure_runtime_data_dir_from_args() {

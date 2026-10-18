@@ -184,10 +184,23 @@ async function run() {
 
   await mutate('service.stop', {})
   await wait(3000)
-  const restarted = await call('service.start')
+  // Terminal and paused tasks live on disk, outside the active scheduler queue.
+  const history = ['paused', 'completed', 'error'].map((status, index) => ({
+    id: `history-${status}`, repo_id: 'fixture/history', source: 'huggingface',
+    save_dir: modelDir, added_at: index, status, retries: 0, max_retries: 3,
+    files: [{ name: `${status}.gguf`, path: `${status}.gguf`, size: 24,
+      file_type: 'model', task_id: `task-${status}`, run_id: `run-${status}`,
+      downloaded: status === 'completed' ? 24 : 0, version: 0, status }],
+  }))
+  fs.writeFileSync(path.join(data, 'configs', 'downloads.json'), JSON.stringify({ queue: history }))
+  const restarted = await call('service.start', {}, ['--data-dir', data.replaceAll('\\', '/')])
   assert.notEqual(restarted.data.pid, hostPid)
   hostPid = restarted.data.pid
   assert.equal((await call('downloads.list')).data.max_concurrent, 2)
+  const restoredFiles = (await call('downloads.list')).data.queue.flatMap(entry => entry.files)
+  for (const entry of history) assert.ok(restoredFiles.some(file => file.task_id === entry.files[0].task_id && file.status === entry.status))
+  await mutate('downloads.clear', { statuses: ['completed', 'error'] })
+  assert.deepEqual((await call('downloads.list')).data.queue.flatMap(entry => entry.files.map(file => file.status)), ['paused'])
   assert.equal((await call('tasks.get', { id: renamed.data.id })).data.status, 'succeeded')
   assert.equal((await call('engines.list')).data.engines[0].name, 'Agent test engine')
   const referencedRevision = (await call('instances.get', { id: 'agent-fixture' })).data.revision

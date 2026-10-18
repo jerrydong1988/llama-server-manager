@@ -221,16 +221,30 @@ fn active_download_slot_count(state: &AppState) -> usize {
     }
 }
 
-async fn throttle_download_bytes(state: &AppState, bytes: u64) {
+fn take_bandwidth_tokens(available: &mut f64, bytes: u64, limit: u64) -> Option<std::time::Duration> {
+    if *available >= bytes as f64 {
+        *available -= bytes as f64;
+        None
+    } else {
+        // Keep partial credit. Clearing it makes successive deficit waits
+        // oscillate indefinitely when a chunk is larger than the balance.
+        Some(std::time::Duration::from_secs_f64((bytes as f64 - *available) / limit as f64))
+    }
+}
+
+async fn throttle_download_bytes(state: &AppState, bytes: u64, run_id: &str) -> bool {
     if bytes == 0 {
-        return;
+        return true;
     }
 
     loop {
+        if state.cancel_flags.lock().unwrap().get(run_id).copied().unwrap_or(false) {
+            return false;
+        }
         let wait = {
             let limit = effective_download_bandwidth_limit(state);
             if limit == 0 {
-                return;
+                return true;
             }
 
             let mut limiter = state.download_bandwidth_limiter.lock().unwrap();
@@ -241,23 +255,16 @@ async fn throttle_download_bytes(state: &AppState, bytes: u64) {
             limiter.available_bytes = (limiter.available_bytes + elapsed * limit_f64).min(capacity);
             limiter.last_refill = now;
 
-            if limiter.available_bytes >= bytes as f64 {
-                limiter.available_bytes -= bytes as f64;
-                None
-            } else {
-                let deficit = bytes as f64 - limiter.available_bytes;
-                limiter.available_bytes = 0.0;
-                Some(std::time::Duration::from_secs_f64(deficit / limit_f64))
-            }
+            take_bandwidth_tokens(&mut limiter.available_bytes, bytes, limit)
         };
 
         if let Some(duration) = wait {
             if duration.is_zero() {
-                return;
+                return true;
             }
-            tokio::time::sleep(duration).await;
+            tokio::time::sleep(duration.min(std::time::Duration::from_millis(100))).await;
         } else {
-            return;
+            return true;
         }
     }
 }
@@ -1683,7 +1690,10 @@ async fn download_single_file(
         match chunk {
             Ok(bytes) => {
                 let len = bytes.len() as u64;
-                throttle_download_bytes(&shared, len).await;
+                if !throttle_download_bytes(&shared, len, &run_id).await {
+                    // Re-enter the cancellation branch before writing this chunk.
+                    continue;
+                }
                 if let Err(e) = file.write_all(&bytes).await {
                     let persisted_downloaded = save_path
                         .metadata(&temp_path)
@@ -2129,12 +2139,51 @@ pub async fn pause_file_download(
     run_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let _scheduler = state
+        .download_scheduler_lock
+        .lock()
+        .map_err(|_| "download scheduler lock is poisoned".to_string())?;
+    // A queued file has no running transfer to observe cancellation flags.
+    // Move it to durable paused history without pausing its queued siblings.
+    let mut queue = state.download_queue.lock().unwrap().clone();
+    if let Some(paused) = take_queued_file_for_pause(&mut queue, &task_id, run_id.as_deref()) {
+        update_download_state(&state, |persisted| {
+            remove_task_from_entries(persisted, &task_id);
+            persisted.push(paused);
+            Ok(())
+        })?;
+        *state.download_queue.lock().unwrap() = queue;
+        return Ok(());
+    }
     let key = run_id.unwrap_or(task_id);
     let mut cancel = state.cancel_flags.lock().unwrap();
     let mut pause = state.pause_flags.lock().unwrap();
     pause.insert(key.clone(), true);
     cancel.insert(key, true);
     Ok(())
+}
+
+fn take_queued_file_for_pause(
+    queue: &mut Vec<PersistedQueueEntry>,
+    task_id: &str,
+    run_id: Option<&str>,
+) -> Option<PersistedQueueEntry> {
+    let (entry_index, file_index) = queue.iter().enumerate().find_map(|(index, entry)| {
+        entry.files.iter().position(|file| {
+            file.task_id.as_deref() == Some(task_id)
+                && run_id.map_or(true, |id| file.run_id.as_deref() == Some(id))
+                && !is_terminal_download_file(file)
+        }).map(|file_index| (index, file_index))
+    })?;
+    let mut paused = queue[entry_index].clone();
+    let mut file = queue[entry_index].files.remove(file_index);
+    file.status = Some("paused".into());
+    paused.id = uuid::Uuid::new_v4().to_string();
+    paused.files = vec![file];
+    paused.status = "paused".into();
+    queue[entry_index].status = derive_entry_status(&queue[entry_index]);
+    queue.retain(|entry| !entry.files.is_empty());
+    Some(paused)
 }
 
 pub async fn cancel_and_cleanup_download(
@@ -2619,6 +2668,33 @@ fn collect_manager_entries(state: &AppState) -> Vec<PersistedQueueEntry> {
     entries
 }
 
+// Runtime batches can contain only the resumed files of a persisted batch.
+// Overlay by task identity while retaining paused/completed siblings and history.
+fn merge_download_snapshot(
+    mut persisted: Vec<PersistedQueueEntry>,
+    runtime: Vec<PersistedQueueEntry>,
+) -> Vec<PersistedQueueEntry> {
+    let live_ids: HashSet<_> = runtime
+        .iter()
+        .flat_map(|entry| entry.files.iter().filter_map(|file| file.task_id.as_ref()))
+        .collect();
+    for entry in &mut persisted {
+        entry.files.retain(|file| {
+            !file.task_id.as_ref().is_some_and(|id| live_ids.contains(id))
+        });
+        entry.status = derive_entry_status(entry);
+    }
+    persisted.retain(|entry| !entry.files.is_empty());
+    for mut entry in runtime {
+        if let Some(index) = persisted.iter().position(|saved| saved.id == entry.id) {
+            entry.files.extend(persisted.remove(index).files);
+        }
+        entry.status = derive_entry_status(&entry);
+        persisted.push(entry);
+    }
+    persisted
+}
+
 fn derive_entry_status(entry: &PersistedQueueEntry) -> String {
     if entry
         .files
@@ -2941,10 +3017,11 @@ fn persist_terminal_entry(state: &AppState, mut entry: PersistedQueueEntry) -> R
         let cancel_flags = state.cancel_flags.lock().unwrap().clone();
         let pause_flags = state.pause_flags.lock().unwrap().clone();
         entry.files.retain(|file| {
-            !matches!(
-                file.status.as_deref(),
-                Some("completed") | Some("cancelled")
-            ) && !cleanup_requested(file, &cancel_flags, &pause_flags)
+            // Retain completion history for clients that were disconnected when
+            // the event fired. Ownership remains in its separate ledger so
+            // clearing the visible record never deletes the downloaded file.
+            file.status.as_deref() != Some("cancelled")
+                && !cleanup_requested(file, &cancel_flags, &pause_flags)
         });
     }
 
@@ -4177,6 +4254,57 @@ pub fn flush_download_manager_state(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod audit_remediation_tests {
     use super::*;
+
+    #[test]
+    fn bandwidth_limiter_keeps_partial_credit_until_chunk_is_ready() {
+        let mut available = 32.0;
+        assert_eq!(take_bandwidth_tokens(&mut available, 100, 64), Some(std::time::Duration::from_secs_f64(68.0 / 64.0)));
+        assert_eq!(available, 32.0);
+        available += 68.0;
+        assert_eq!(take_bandwidth_tokens(&mut available, 100, 64), None);
+        assert_eq!(available, 0.0);
+    }
+
+    #[test]
+    fn snapshot_preserves_history_and_overlays_resumed_task_identity() {
+        let entry = |id: &str, tasks: &[(&str, &str, u64)]| -> PersistedQueueEntry {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "repo_id": "test/models", "source": "huggingface",
+                "save_dir": "models", "added_at": 0, "status": "paused",
+                "retries": 0, "max_retries": 3,
+                "files": tasks.iter().map(|(task, status, bytes)| serde_json::json!({
+                    "name": format!("{task}.gguf"), "path": format!("{task}.gguf"),
+                    "size": 100, "file_type": "model", "task_id": task,
+                    "status": status, "downloaded": bytes
+                })).collect::<Vec<_>>()
+            })).unwrap()
+        };
+        let snapshot = merge_download_snapshot(
+            vec![entry("original", &[("a", "paused", 10), ("b", "completed", 100)]),
+                 entry("history", &[("c", "error", 20)])],
+            vec![entry("resumed", &[("a", "active", 60)])],
+        );
+        let files: Vec<_> = snapshot.iter().flat_map(|entry| &entry.files).collect();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files.iter().find(|file| file.task_id.as_deref() == Some("a")).unwrap().downloaded, Some(60));
+        assert_eq!(snapshot.iter().find(|entry| entry.id == "original").unwrap().status, "completed");
+        assert_eq!(snapshot.iter().find(|entry| entry.id == "resumed").unwrap().status, "active");
+        let same_batch = merge_download_snapshot(
+            vec![entry("same", &[("a", "paused", 10), ("b", "completed", 100)])],
+            vec![entry("same", &[("a", "active", 70)])],
+        );
+        assert_eq!(same_batch.len(), 1);
+        assert_eq!(same_batch[0].files.len(), 2);
+        let mut queued = vec![entry("queued", &[("a", "queued", 0), ("b", "queued", 0)])];
+        queued[0].status = "queued".into();
+        assert!(take_queued_file_for_pause(&mut queued, "a", Some("stale-run")).is_none());
+        let paused = take_queued_file_for_pause(&mut queued, "a", None).unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_ne!(paused.id, queued[0].id);
+        assert_eq!(paused.files[0].task_id.as_deref(), Some("a"));
+        assert_eq!(queued[0].files[0].task_id.as_deref(), Some("b"));
+        assert_eq!(queued[0].status, "queued");
+    }
 
     #[test]
     fn huggingface_pagination_accepts_only_trusted_next_links() {
@@ -5602,8 +5730,17 @@ pub struct DownloadManagerSnapshot {
 pub async fn get_download_manager_snapshot(
     state: tauri::State<'_, AppState>,
 ) -> Result<DownloadManagerSnapshot, String> {
-    let queue = collect_manager_entries(&state);
-    let active_count = state.download_active_batches.lock().unwrap().len();
+    let (queue, active_count) = {
+        let _scheduler = state
+            .download_scheduler_lock
+            .lock()
+            .map_err(|_| "download scheduler lock is poisoned".to_string())?;
+        let queue = merge_download_snapshot(
+            load_download_state(&state)?,
+            collect_manager_entries(&state),
+        );
+        (queue, state.download_active_batches.lock().unwrap().len())
+    };
     let max_concurrent = *state.download_max_concurrent.lock().unwrap();
     let bandwidth_limit_bytes_per_sec =
         *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap();
