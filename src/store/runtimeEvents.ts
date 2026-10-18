@@ -2,6 +2,7 @@ import { invokeApp as invoke } from '../lib/ipc'
 import { listen, type Event } from '@tauri-apps/api/event'
 import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
+import { getManagementRevision, hasUnsavedManagementChanges } from './managementRevision'
 import type {
   AppState,
   CheckpointStatus,
@@ -179,6 +180,38 @@ export function registerGlobalStoreListeners(
   store: StoreLike,
   startupTimings: { name: string; ms: number }[],
 ) {
+  let managementReloadPending = false
+  let managementReloadAgain = false
+  registerListener<{ operation: string; revision: number }>(store, 'management-config-changed', (event) => {
+    const operation = event.payload.operation
+    const report = (error: unknown) => store.getState().addRuntimeWarning(`管理状态同步失败：${String(error)}`)
+    if (operation.startsWith('engines.')) {
+      void invoke<AppState['engines']>('get_engines').then(engines => store.setState({ engines })).catch(report)
+    }
+    if (operation.startsWith('models.')) {
+      void invoke<AppState['models']>('get_models').then(models => store.setState({ models })).catch(report)
+    }
+    if (operation.startsWith('cluster.')) {
+      void invoke<AppState['workers']>('get_workers').then(workers => store.setState({ workers })).catch(report)
+    }
+    if (operation.startsWith('downloads.')) {
+      void invoke<{ queue: import('./types').PersistedQueueEntry[] }>('get_download_manager_snapshot')
+        .then(snapshot => store.getState().restoreDownloadQueue(snapshot.queue)).catch(report)
+    }
+    if (event.payload.revision === getManagementRevision()) return
+    if (hasUnsavedManagementChanges(store.getState())) {
+      store.getState().addRuntimeWarning('外部管理客户端已修改配置。本窗口尚有未保存编辑，已保留编辑内容并阻止覆盖；请备份编辑后重新加载配置。')
+      return
+    }
+    if (managementReloadPending) { managementReloadAgain = true; return }
+    managementReloadPending = true
+    void (async () => {
+      do {
+        managementReloadAgain = false
+        await store.getState().loadConfig()
+      } while (managementReloadAgain && !hasUnsavedManagementChanges(store.getState()))
+    })().catch(report).finally(() => { managementReloadPending = false })
+  })
   let checkpointSnapshotReceived = false
   let checkpointHydrationWarning: string | null = null
   const classifyLogLevel = (text: string): 'info' | 'warning' | 'error' => {

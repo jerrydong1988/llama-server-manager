@@ -3,6 +3,7 @@ import { useAppStore, type InstanceConfig } from '../../store'
 import { migrateParameterIntent } from '../../parameterIntent'
 import { normalizeModelPath } from '../../store/bootstrap'
 import { isEqualValue } from './configWorkspace'
+import { registerManagementDraftCheck } from '../../store/managementRevision'
 
 type Draft = {
   sourceConfig: InstanceConfig
@@ -16,6 +17,7 @@ type Draft = {
 
 // Session-only drafts survive page unmounts without persisting unsaved settings.
 const drafts = new Map<string, Draft>()
+registerManagementDraftCheck(() => [...drafts.values()].some(draft => !isEqualValue(draft.local, draft.baseline)))
 const listeners = new Set<() => void>()
 const subscribe = (listener: () => void) => {
   listeners.add(listener)

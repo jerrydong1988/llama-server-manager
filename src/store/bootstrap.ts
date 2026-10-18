@@ -1,4 +1,5 @@
 import { startTransition } from 'react'
+import { hasUnsavedManagementChanges, managementSignature, markManagementSaved, setManagementRevision } from './managementRevision'
 import { invokeApp as invoke } from '../lib/ipc'
 import { ensureManagedPublicModelAlias, normalizeInstanceConfig } from '../modelPolicy'
 import { migrateParameterIntent } from '../parameterIntent'
@@ -20,6 +21,7 @@ import type {
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
 
 export type GlobalConfigShape = {
+  management_revision?: number
   config_load_warning?: string | null
   instances: Record<string, InstanceConfig>
   model_dirs: string[]
@@ -211,6 +213,7 @@ async function processConfig(
   if (global.config_load_warning) {
     get().addRuntimeWarning(global.config_load_warning)
   }
+  setManagementRevision(global.management_revision)
   const modelScanRequest = beginModelInventoryRequest()
   const engineScanRequest = beginEngineInventoryRequest()
   const runningIds = new Set(Object.keys(global.running || {}))
@@ -262,6 +265,7 @@ async function processConfig(
     })
   })
 
+  markManagementSaved(managementSignature(get()))
   if (global.dark_mode !== undefined) {
     document.documentElement.classList.toggle('dark', global.dark_mode)
     startTransition(() => {
@@ -318,6 +322,7 @@ export async function loadAppBootstrap(
   startupTimings: { name: string; ms: number }[],
 ) {
   const startedAt = performance.now()
+  const alreadyHydrated = get().instancesHydrated
   set({ isLoading: true })
 
   try {
@@ -361,7 +366,11 @@ export async function loadAppBootstrap(
         applyEngineInventory(cachedScan[1], set, {}, cachedEngineScanRequest)
       })
     }
-    await processConfig(global, get, set)
+    if (alreadyHydrated && hasUnsavedManagementChanges(get())) {
+      get().addRuntimeWarning('外部配置加载期间出现未保存编辑，已保留草稿；请备份编辑后重新打开窗口。')
+    } else {
+      await processConfig(global, get, set)
+    }
   } catch (error) {
     console.error('load_config error:', error)
     get().addRuntimeWarning(`bootstrap failed: ${errorMessage(error)}`)

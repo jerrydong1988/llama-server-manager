@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invokeApp as invoke } from '../lib/ipc'
+import { listen } from '@tauri-apps/api/event'
 import { Activity, AlertTriangle, Copy, Eye, EyeOff, HeartPulse, Plus, PowerOff, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
 import { useAppStore } from '../store'
 import { formatHostPort, httpUrl } from '../utils/network'
@@ -8,6 +9,7 @@ import { getProxyLabels } from '../i18n/pageLabels'
 import { getRouterUsageLabels } from '../i18n/routerUsage'
 import ProxyUsagePanel from './ProxyUsagePanel'
 import { getRouterManagementLabels } from '../i18n/routerManagement'
+import { getAgentManagementLabels } from '../i18n/agentManagement'
 import { QuotaSettings } from './routerUsage/QuotaSettings'
 import { WorkspaceFloatingActions } from './shell/WorkspaceActions'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
@@ -400,6 +402,7 @@ function routeAvailabilityView(kind: RouteAvailabilityKind, labels: ReturnType<t
 }
 
 export default function ProxyPage() {
+  const configRevision = useRef<string | undefined>(undefined)
   const { lang } = useI18n()
   const management = getRouterManagementLabels(lang)
   const [view, setView] = useState<'settings' | 'usage'>('settings')
@@ -571,6 +574,7 @@ export default function ProxyPage() {
 
     try {
       const configResult = await invoke<unknown>('get_proxy_config')
+      configRevision.current = (configResult as { config_revision?: string } | null)?.config_revision
       const nextConfig = normalizeConfig(configResult)
       setConfig(nextConfig)
       setDraft(nextConfig)
@@ -622,6 +626,20 @@ export default function ProxyPage() {
   useEffect(() => {
     void loadProxy()
   }, [])
+
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    void listen<{ operation: string }>('management-config-changed', event => {
+      if (!event.payload.operation.startsWith('routes.')) return
+      if (JSON.stringify(config) !== JSON.stringify(draft)) {
+        setError(getAgentManagementLabels(lang).routerConflict)
+      } else {
+        void loadProxy()
+      }
+    }).then(stop => { if (disposed) stop(); else unlisten = stop }).catch(error => setError(errorMessage(error)))
+    return () => { disposed = true; unlisten?.() }
+  }, [config, draft, lang])
 
   useEffect(() => {
     let cancelled = false
@@ -815,7 +833,8 @@ export default function ProxyPage() {
     setNotice('')
 
     try {
-      const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft) })
+      const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft), expectedRevision: configRevision.current })
+      configRevision.current = (savedValue as { config_revision?: string } | null)?.config_revision
       const nextConfig = normalizeConfig(savedValue ?? toCommandConfig(draft))
       const nextStatusValue = await invoke<unknown>('get_proxy_status').catch(() => null)
       setConfig(nextConfig)
@@ -837,7 +856,8 @@ export default function ProxyPage() {
 
   const persistDraftConfig = async () => {
     hideRevealedSecret()
-    const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft) })
+    const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft), expectedRevision: configRevision.current })
+    configRevision.current = (savedValue as { config_revision?: string } | null)?.config_revision
     const nextConfig = normalizeConfig(savedValue ?? toCommandConfig(draft))
     setConfig(nextConfig)
     setDraft(nextConfig)

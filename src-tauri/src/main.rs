@@ -9,6 +9,7 @@ mod error;
 mod external_artifacts;
 mod model_artifacts;
 mod models;
+mod management;
 mod operation_timing;
 mod path_utils;
 mod persistence;
@@ -401,7 +402,31 @@ fn tray_icon_image() -> Result<tauri::image::Image<'static>, tauri::Error> {
     tauri::image::Image::from_bytes(TRAY_ICON_BYTES)
 }
 
+fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
+    if app.get_webview_window("main").is_some() { return Ok(()); }
+    let config_dir = crate::utils::get_data_dir().join("configs");
+    let (config, revision) = crate::commands::config::management_snapshot(&config_dir);
+    let mut initial = serde_json::to_value(&config)?;
+    initial["management_revision"] = serde_json::json!(revision);
+    let script = format!("window.__INITIAL_CONFIG__ = {};", initial);
+    let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+        .title("Llama 服务器管理器").inner_size(1280.0, 800.0).min_inner_size(1024.0, 720.0)
+        .resizable(true).fullscreen(false).visible(false)
+        .background_color(tauri::utils::config::Color(26, 26, 46, 255)).initialization_script(&script);
+    if let Some(state) = crate::commands::config::read_window_state_from_disk(&config_dir) {
+        builder = builder.position(state.x as f64, state.y as f64).inner_size(state.width as f64, state.height as f64);
+    }
+    builder.build()?;
+    Ok(())
+}
+
 fn main() {
+    if let Some(index) = std::env::args_os().position(|arg| arg == "--management-data-dir") {
+        let Some(path) = std::env::args_os().nth(index + 1) else {
+            eprintln!("--management-data-dir requires an absolute path"); std::process::exit(1);
+        };
+        if let Err(error) = crate::utils::set_data_dir_override(path.into()) { eprintln!("{error}"); std::process::exit(1); }
+    }
     if crate::runtime_service::is_runtime_service_invocation() {
         if let Err(error) = crate::runtime_service::configure_runtime_data_dir_from_args() {
             eprintln!("Runtime service configuration failed: {error}");
@@ -430,12 +455,20 @@ fn main() {
     }
     let initial_workers = load_workers();
 
+    let mut context = tauri::generate_context!();
+    if std::env::args_os().any(|arg| arg == "--management-data-dir")
+        && crate::management::wire::data_identity(&data_dir) != crate::management::wire::data_identity(&crate::management::wire::default_data_dir()) {
+        let digest = crate::management::wire::digest(crate::management::wire::data_identity(&crate::utils::get_data_dir()).as_bytes());
+        context.config_mut().identifier = format!("com.llama.manager.exploration.{}", &digest[..16]);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg == "--management-service") { return; }
+            let _ = ensure_main_window(app);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -497,6 +530,7 @@ fn main() {
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
                         "show" => {
+                            let _ = ensure_main_window(app);
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
@@ -527,6 +561,7 @@ fn main() {
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                         let app = tray.app_handle();
+                        let _ = ensure_main_window(app);
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -549,33 +584,10 @@ fn main() {
                     maintenance_running_count,
                 );
             });
-            let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
             timings.push(("setup-config-read".into(), now()));
 
             // Create the window programmatically and inject config data.
-            let init_script = format!(
-                "window.__INITIAL_CONFIG__ = {};\nif(window.__lsm_setInitialConfig)window.__lsm_setInitialConfig(window.__INITIAL_CONFIG__);",
-                config_json
-            );
-            let window_state = crate::commands::config::read_window_state_from_disk(&config_dir);
-            let mut window_builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                .title("Llama 服务器管理器")
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(1024.0, 720.0)
-                .resizable(true)
-                .fullscreen(false)
-                .visible(false)
-                .background_color(tauri::utils::config::Color(26, 26, 46, 255))
-                .initialization_script(&init_script);
-
-            // Restore window position.
-            if let Some(ws) = window_state {
-                window_builder = window_builder
-                    .position(ws.x as f64, ws.y as f64)
-                    .inner_size(ws.width as f64, ws.height as f64);
-            }
-
-            window_builder.build()?;
+            if !crate::management::hidden_start() { ensure_main_window(app.handle())?; }
             timings.push(("setup-window-built".into(), now()));
 
             // Synchronize AppState; process restoration also runs asynchronously in load_config IPC.
@@ -625,6 +637,7 @@ fn main() {
             }
 
             crate::runtime_service::start_app_bridge(app.handle().clone());
+            crate::management::start(app.handle().clone()).map_err(std::io::Error::other)?;
 
             if !crate::runtime_service::manages_instances() && config.proxy_config.enabled {
                 let app_handle = app.handle().clone();
@@ -747,7 +760,7 @@ fn main() {
             crate::storage_maintenance::cleanup_storage_group,
             crate::storage_maintenance::schedule_webview_cache_cleanup,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 

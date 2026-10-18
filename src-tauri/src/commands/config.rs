@@ -12,6 +12,43 @@ use tauri::Emitter;
 // Unified config write helpers.
 
 static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static MANAGEMENT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn management_revision() -> u64 {
+    MANAGEMENT_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub fn management_config_revision(global: &GlobalConfig) -> String {
+    let roots = |directories: &[String]| {
+        let mut seen=HashSet::new();
+        directories.iter().map(|directory| {
+            let path=std::path::PathBuf::from(directory);
+            crate::path_utils::path_identity_key(&if path.is_relative() {crate::utils::get_data_dir().join(path)}else{path})
+        }).filter(|path|seen.insert(path.clone())).collect::<Vec<_>>()
+    };
+    let value = serde_json::json!({
+        "instances": global.instances, "model_dirs": roots(&global.model_dirs),
+        "engine_dirs": roots(&global.engine_dirs), "default_engine_id": global.default_engine_id,
+        "instance_order": global.instance_order, "proxy_config": global.proxy_config,
+        "engine_names": global.engine_names,
+    });
+    crate::management::wire::digest(value.to_string().as_bytes())
+}
+
+pub fn management_update<F>(state: &AppState, expected: &str, update: F) -> Result<GlobalConfig, String>
+where F: FnOnce(&mut GlobalConfig) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().map_err(|_| "configuration lock poisoned")?;
+    let directory = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&directory)?;
+    if management_config_revision(&global) != expected { return Err("CONFIG_CONFLICT: configuration changed; read it again before applying this operation".into()); }
+    update(&mut global)?;
+    global.instances = normalize_instances_for_save(global.instances).all;
+    persist_global_config_unlocked(&directory, &global)?;
+    *state.instances.lock().unwrap() = global.instances.clone();
+    MANAGEMENT_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    crate::runtime_service::mark_config_sync_pending();
+    Ok(global)
+}
 
 fn dedupe_path_dirs(directories: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -96,15 +133,6 @@ fn persist_global_config_unlocked(
     )
     .map_err(|error| format!("保存失败: {error}"))?;
     Ok(true)
-}
-
-/// Atomically writes instances.json; all config writes should go through this helper to avoid races.
-pub fn persist_global_config(
-    config_dir: &std::path::Path,
-    global: &GlobalConfig,
-) -> Result<(), String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
-    persist_global_config_unlocked(config_dir, global).map(|_| ())
 }
 
 /// Reads existing config, mutates it, then writes atomically for non-save_config paths.
@@ -238,6 +266,16 @@ fn load_global_config_for_update_unlocked(
 
 /// Reads config from disk and resolves paths without AppState so main.rs setup() can call it early.
 pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    read_config_unlocked(config_dir)
+}
+
+pub fn management_snapshot(config_dir: &std::path::Path) -> (GlobalConfig, u64) {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    (read_config_unlocked(config_dir), management_revision())
+}
+
+fn read_config_unlocked(config_dir: &std::path::Path) -> GlobalConfig {
     let mut global = load_global_config_file(config_dir);
 
     // Resolve relative paths.
@@ -291,7 +329,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
                 "restore-cleanup",
             );
         }
-        if let Err(error) = persist_global_config(config_dir, &global) {
+        if let Err(error) = persist_global_config_unlocked(config_dir, &global) {
             eprintln!("Failed to persist stale runtime cleanup: {error}");
         }
     }
@@ -361,6 +399,7 @@ pub async fn save_config(
     instance_order: Vec<String>,
     last_tab: String,
     dark_mode: bool,
+    expected_management_revision: Option<u64>,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<HashMap<String, InstanceConfig>> {
     let mut timing = crate::operation_timing::OperationTiming::new("save_config");
@@ -383,6 +422,9 @@ pub async fn save_config(
     })?;
     {
         let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        if expected_management_revision.unwrap_or(0) != management_revision() {
+            return Err(AppError::new("CONFIG_CONFLICT", "配置已被外部管理客户端修改，请重新加载后再保存。", false));
+        }
         // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
         // concurrent start/stop can persist newer state and then be overwritten here.
         let running_snapshot = state.running.lock().unwrap().clone();
@@ -420,25 +462,26 @@ pub async fn save_config(
 pub async fn load_config(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<GlobalConfig, String> {
+) -> Result<serde_json::Value, String> {
     let t0 = std::time::Instant::now();
     let config_dir = state.config_dir.lock().unwrap().clone();
 
     // Read config through read_config_from_disk, including process liveness checks.
-    let global = read_config_from_disk(&config_dir);
-
-    // Update AppState.
-    {
-        let mut stored = state.instances.lock().unwrap();
-        *stored = global.instances.clone();
-    }
-    *state.engine_names.lock().unwrap() = global.engine_names.clone();
-    *state.running.lock().unwrap() = global.running.clone();
-    *state.download_max_concurrent.lock().unwrap() = global.download_max_concurrent.max(1);
-    *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() =
-        global.download_bandwidth_limit_bytes_per_sec;
-    *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
-    *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    let (global, management_revision) = {
+        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        let global = read_config_unlocked(&config_dir);
+        // Publish the snapshot before allowing another management write.
+        *state.instances.lock().unwrap() = global.instances.clone();
+        *state.engine_names.lock().unwrap() = global.engine_names.clone();
+        *state.running.lock().unwrap() = global.running.clone();
+        *state.download_max_concurrent.lock().unwrap() = global.download_max_concurrent.max(1);
+        *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() = global.download_bandwidth_limit_bytes_per_sec;
+        *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
+        *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
+        (global, management_revision())
+    };
+    drop(_transition);
 
     // Restore log capture, metrics, and the single authoritative health monitor.
     let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
@@ -489,7 +532,9 @@ pub async fn load_config(
             "name": "load-config-rust", "ms": t_total
         }),
     );
-    Ok(global)
+    let mut result = serde_json::to_value(global).map_err(|e| e.to_string())?;
+    result["management_revision"] = serde_json::json!(management_revision);
+    Ok(result)
 }
 
 // Window state.
@@ -567,6 +612,17 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn management_revision_normalizes_relative_absolute_and_duplicate_roots() {
+        let mut original = default_global_config();
+        let mut equivalent = default_global_config();
+        let absolute = crate::utils::get_data_dir().join("models").to_string_lossy().into_owned();
+        equivalent.model_dirs = vec![absolute.clone(), absolute];
+        assert_eq!(management_config_revision(&original), management_config_revision(&equivalent));
+        original.default_engine_id = "changed".into();
+        assert_ne!(management_config_revision(&original), management_config_revision(&equivalent));
+    }
 
     #[test]
     fn engine_names_are_not_published_when_persistence_fails() {
@@ -876,7 +932,7 @@ pub mod ipc {
     pub async fn load_config(
         state: tauri::State<'_, AppState>,
         app: tauri::AppHandle,
-    ) -> crate::error::AppResult<GlobalConfig> {
+    ) -> crate::error::AppResult<serde_json::Value> {
         super::load_config(state, app)
             .await
             .map_err(crate::error::AppError::from)

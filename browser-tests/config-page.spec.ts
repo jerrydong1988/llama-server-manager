@@ -148,6 +148,41 @@ test('unsaved configuration survives page navigation and saves against the origi
   await expect(temperature.locator('[data-config-status="changed"]')).toHaveCount(0)
 })
 
+test('external management preserves a dirty parameter draft and refuses its stale save', async ({ page }) => {
+  await openConfiguration(page)
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await temperature.fill('0.91')
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.state.instances['browser-test-instance'].temp = 0.42
+    backend.state.management_revision = 1
+    await backend.emitEvent('management-config-changed', { operation: 'instances.update', revision: 1 })
+  })
+  await expect(temperature).toHaveValue('0.91')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'save_config').length)).toBe(1)
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].temp)).toBe(0.42)
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.saveCount)).toBe(0)
+  await expect(temperature).toHaveValue('0.91')
+})
+
+test('external management refreshes a clean parameter page with its new revision', async ({ page }) => {
+  await openConfiguration(page)
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.state.instances['browser-test-instance'].temp = 0.42
+    backend.state.management_revision = 1
+    await backend.emitEvent('management-config-changed', { operation: 'instances.update', revision: 1 })
+  })
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await expect(temperature).toHaveValue('0.42')
+  await temperature.fill('0.72')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  const save = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.find(call => call.command === 'save_config'))
+  expect(save?.payload).toMatchObject({ expectedManagementRevision: 1 })
+})
+
 test('switching instances keeps their configuration drafts independent', async ({ page }) => {
   await openConfiguration(page, 'monitoring')
   const temperature = page.locator('[data-config-field="temp"] input')

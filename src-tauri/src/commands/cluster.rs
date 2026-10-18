@@ -576,8 +576,16 @@ pub async fn add_worker(
     app: tauri::AppHandle,
 ) -> Result<WorkerInfo, String> {
     confirm_worker_enrollment(&app, &host, port).await?;
+    enroll_authorized_worker(host, port, name, origin, &state)
+}
+
+/// Called only after GUI confirmation or an explicit trusted management request.
+pub(crate) fn enroll_authorized_worker(
+    host: String, port: u16, name: String, origin: Option<WorkerOrigin>, state: &AppState,
+) -> Result<WorkerInfo, String> {
+    validate_worker_endpoint(&host, port)?;
     let origin = origin.unwrap_or_default();
-    update_workers(&state, |workers| {
+    update_workers(state, |workers| {
         if let Some(existing) = workers
             .iter_mut()
             .find(|worker| worker.host == host && worker.port == port)
@@ -612,14 +620,8 @@ async fn confirm_worker_enrollment(
     host: &str,
     port: u16,
 ) -> Result<(), String> {
+    validate_worker_endpoint(host, port)?;
     let host = host.trim();
-    if host.is_empty()
-        || host.len() > 255
-        || port == 0
-        || host.chars().any(|character| character.is_control())
-    {
-        return Err("Worker endpoint is invalid".to_string());
-    }
     let message = format!(
         "是否信任 RPC 节点 {host}:{port}？\n\nRPC 节点没有可验证的身份，可能影响推理结果的完整性与可用性。请只批准你控制的节点。"
     );
@@ -644,6 +646,13 @@ async fn confirm_worker_enrollment(
     }
 }
 
+fn validate_worker_endpoint(host: &str, port: u16) -> Result<(), String> {
+    if host.trim().is_empty() || host.len() > 255 || port == 0 || host.chars().any(char::is_control) {
+        return Err("Worker endpoint is invalid".into());
+    }
+    Ok(())
+}
+
 pub async fn approve_worker(
     id: String,
     state: State<'_, AppState>,
@@ -658,11 +667,16 @@ pub async fn approve_worker(
         .cloned()
         .ok_or_else(|| "Discovered worker not found".to_string())?;
     confirm_worker_enrollment(&app, &candidate.host, candidate.port).await?;
-    update_workers(&state, |workers| {
+    approve_authorized_worker(&id, &state)
+}
+
+pub(crate) fn approve_authorized_worker(id: &str, state: &AppState) -> Result<WorkerInfo, String> {
+    update_workers(state, |workers| {
         let worker = workers
             .iter_mut()
             .find(|worker| worker.id == id && worker.auto_discovered)
             .ok_or_else(|| "Discovered worker not found".to_string())?;
+        validate_worker_endpoint(&worker.host, worker.port)?;
         worker.auto_discovered = false;
         worker.status = WorkerStatus::Unknown;
         Ok(worker.clone())

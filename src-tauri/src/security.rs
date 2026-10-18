@@ -116,7 +116,7 @@ fn validate_download_root_boundary(root: &Path, app_data_root: &Path) -> Result<
     Ok(())
 }
 
-fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
+pub(crate) fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     let root = canonical_directory(root)?;
     let key = normalized_authority_key(&root);
     let mut authority = PATH_AUTHORITY.lock().unwrap();

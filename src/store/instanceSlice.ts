@@ -6,6 +6,7 @@ import {
   reconcileInstancesWithModels,
 } from './bootstrap'
 import { createLatestSaveCoordinator } from './configSaveCoordinator'
+import { getManagementRevision, managementSignature, markManagementSaved } from './managementRevision'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
@@ -58,6 +59,8 @@ const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
   }))
 }
 type ConfigSaveSnapshot = {
+  managementSignature: string
+  expectedManagementRevision: number
   revision: number
   instances: Record<string, InstanceConfig>
   modelDirs: string[]
@@ -77,10 +80,11 @@ let latestConfigSaveRevision = 0
 let latestAppliedConfigSaveRevision = 0
 
 const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot, PersistedConfigResult>(
-  async ({ revision, ...snapshot }) => ({
-    revision,
-    instances: await invoke<Record<string, InstanceConfig>>('save_config', snapshot),
-  }),
+  async ({ revision, managementSignature: signature, ...snapshot }) => {
+    const instances = await invoke<Record<string, InstanceConfig>>('save_config', snapshot)
+    markManagementSaved(signature)
+    return { revision, instances }
+  },
 )
 
 export function createInstanceSlice(
@@ -339,6 +343,8 @@ export function createInstanceSlice(
 
       const revision = ++latestConfigSaveRevision
       const operation = configSaveCoordinator.save({
+        managementSignature: managementSignature({ ...state, instances: reconciled.instances }),
+        expectedManagementRevision: getManagementRevision(),
         revision,
         instances: instancesById,
         modelDirs: state.modelDirs,
