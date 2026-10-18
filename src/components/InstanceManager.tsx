@@ -332,7 +332,7 @@ const InstanceManager = () => {
       </div>
 
       <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Surface as="section" className="instance-list-container min-w-0 overflow-hidden">
+        <Surface as="section" className="instance-list-container relative z-10 min-w-0">
           <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
@@ -396,7 +396,7 @@ const InstanceManager = () => {
                     }}
                     aria-selected={selected}
                     aria-current={selected ? 'true' : undefined}
-                    className={`instance-list-row relative grid min-w-0 gap-3 px-5 py-4 text-left transition ${
+                    className={`instance-list-row relative grid min-w-0 gap-3 px-5 py-4 text-left transition last:rounded-b-lg ${
                       selected
                         ? 'bg-blue-50/95 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.24)] dark:bg-blue-500/15 dark:shadow-[inset_0_0_0_1px_rgba(96,165,250,0.32)]'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-900/60'
