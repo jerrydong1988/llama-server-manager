@@ -97,6 +97,20 @@ async function run() {
   const schemas = (await call('service.capabilities')).data.operations
   assert.ok(schemas.length >= 65)
   assert.ok(schemas.every(op => op.schema.additionalProperties === false))
+  const decimalDefaults = {
+    rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
+    yarn_ext_factor: -1, yarn_attn_factor: -1, yarn_beta_slow: -1, yarn_beta_fast: -1,
+    spec_draft_p_min: 0, spec_draft_p_split: 0.1, slot_prompt_similarity: 0.1,
+    temp: 0.8, top_p: 0.95, repeat_penalty: 1, min_p: 0.05,
+    presence_penalty: 0, frequency_penalty: 0, mirostat_lr: 0.1, mirostat_ent: 5,
+    xtc_probability: 0, xtc_threshold: 0.1, dynatemp_range: 0, dynatemp_exp: 1,
+    typical_p: 1, dry_multiplier: 0, dry_base: 1.75, adaptive_target: -1,
+    adaptive_decay: 0.9, top_n_sigma: -1,
+  }
+  const assertDecimals = (config, expected) => {
+    for (const [field, value] of Object.entries(expected)) assert.equal(config[field], value, field)
+  }
+  assertDecimals((await call('instances.defaults')).data.config, decimalDefaults)
   for (const [purpose, directory] of [['engine', engineDir], ['model', modelDir], ['download', modelDir]]) {
     await mutate('paths.authorize', { purpose, path: directory })
     if (purpose !== 'download') {
@@ -130,6 +144,18 @@ async function run() {
   const races = await Promise.all(['First', 'Second'].map(name => mutate('instances.update', { id: 'agent-fixture', revision, patch: { name } }, [], false)))
   assert.equal(races.filter(result => result.ok).length, 1)
   assert.equal(races.find(result => !result.ok).error.code, 'CONFIG_CONFLICT')
+  const decimalPatch = { temp: 0.12345679, top_p: 0.95, mirostat_lr: 0.1, xtc_threshold: 0.1, adaptive_decay: 0.9 }
+  revision = (await call('instances.get', { id: 'agent-fixture' })).data.revision
+  await mutate('instances.update', { id: 'agent-fixture', revision, patch: decimalPatch })
+  const decimalSaved = (await call('instances.get', { id: 'agent-fixture' })).data
+  assertDecimals(decimalSaved.config, { ...decimalDefaults, ...decimalPatch })
+  assertDecimals(JSON.parse(fs.readFileSync(path.join(data, 'configs', 'instances.json'))).instances['agent-fixture'], decimalPatch)
+  assert.ok(Object.keys(decimalPatch).every(field => decimalSaved.config.explicit_overrides.includes(field)))
+  const cloned = await mutate('instances.clone', { id: 'agent-fixture', new_id: 'decimal-clone', revision: decimalSaved.revision, patch: { name: 'Decimal clone', port: await freePort(), launch_mode: 'managed' } })
+  const command = cloned.data.result.validation.command
+  assert.equal(command[command.indexOf('--temp') + 1], '0.12345679')
+  assert.equal(command[command.indexOf('--top-p') + 1], '0.95')
+  await mutate('instances.delete', { id: 'decimal-clone', revision: cloned.data.result.revision })
   await mutate('instances.start', { id: 'agent-fixture' })
   for (let attempt = 0; attempt < 30; attempt++) {
     const response = await fetch(`http://127.0.0.1:${port}/health`).catch(() => null)
@@ -170,15 +196,19 @@ async function run() {
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
     { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'engines_list', arguments: {} } },
     { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'engines_delete', arguments: { id: engineId } } },
+    { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'instances_defaults', arguments: {} } },
+    { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'instances_get', arguments: { id: 'agent-fixture' } } },
   ].map(message => JSON.stringify(message)).join('\n') + '\n'
   const mcp = await execute(cli, ['--app', executable, '--data-dir', data, 'mcp'], { input })
   assert.equal(mcp.code, 0, mcp.stderr)
   const messages = mcp.stdout.trim().split('\n').map(line => JSON.parse(line))
-  assert.equal(messages.length, 4)
+  assert.equal(messages.length, 6)
   assert.ok(messages[1].result.tools.every(tool => tool.annotations.readOnlyHint))
   assert.equal(messages[2].result.structuredContent.ok, true)
   assert.equal(messages[3].error.code, -32602)
-  checks += 4
+  assertDecimals(messages[4].result.structuredContent.data.config, decimalDefaults)
+  assertDecimals(messages[5].result.structuredContent.data.config, { ...decimalDefaults, ...decimalPatch })
+  checks += 6
   assert.equal((await call('service.status')).data.pid, hostPid, 'MCP EOF must not terminate host')
   assert.ok(!fs.readFileSync(path.join(data, 'management', 'tasks.json'), 'utf8').includes(secret))
 
@@ -196,6 +226,7 @@ async function run() {
   const restarted = await call('service.start', {}, ['--data-dir', data.replaceAll('\\', '/')])
   assert.notEqual(restarted.data.pid, hostPid)
   hostPid = restarted.data.pid
+  assertDecimals((await call('instances.get', { id: 'agent-fixture' })).data.config, { ...decimalDefaults, ...decimalPatch })
   assert.equal((await call('downloads.list')).data.max_concurrent, 2)
   const restoredFiles = (await call('downloads.list')).data.queue.flatMap(entry => entry.files)
   for (const entry of history) assert.ok(restoredFiles.some(file => file.task_id === entry.files[0].task_id && file.status === entry.status))

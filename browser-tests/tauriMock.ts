@@ -1502,6 +1502,10 @@ mockIPC((command, payload) => {
     }
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
+      if (BROWSER_SCENARIO === 'parameter-float-normalization') {
+        // Model the Rust save response when a JS number needs f32 normalization.
+        instances[INSTANCE_ID].temp = 0.12345679
+      }
       const persist = () => {
         if ((args.expectedManagementRevision ?? 0) !== (control.state.management_revision ?? 0)) {
           throw { code: 'CONFIG_CONFLICT', message: 'Configuration changed outside this window', retryable: false }
@@ -1510,7 +1514,7 @@ mockIPC((command, payload) => {
         if (Array.isArray(args.modelDirs)) control.state.model_dirs = clone(args.modelDirs as string[])
         control.saveCount += 1
         syncAutomationProbe()
-        return instances
+        return clone(instances)
       }
       if (BROWSER_SCENARIO === 'delayed-config-save') {
         return new Promise((resolve, reject) => {

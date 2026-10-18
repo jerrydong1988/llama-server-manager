@@ -10,7 +10,7 @@ fn main() {
         return;
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("llama-server management test fixture\n--model FNAME\n--host HOST\n--port PORT\n--alias NAME\n--metrics\n--slots\n--props\n--api-key KEY\n--ctx-size N\n--threads N\n--n-gpu-layers N\n--parallel N\n--no-warmup");
+        println!("llama-server management test fixture\n--model FNAME\n--host HOST\n--port PORT\n--alias NAME\n--metrics\n--slots\n--props\n--api-key KEY\n--ctx-size N\n--threads N\n--n-gpu-layers N\n--parallel N\n--no-warmup\n--temp N\n--top-p N\n--mirostat-lr N\n--xtc-threshold N\n--adaptive-decay N");
         return;
     }
     let value = |flag: &str| {

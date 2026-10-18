@@ -59,7 +59,6 @@ const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
   }))
 }
 type ConfigSaveSnapshot = {
-  managementSignature: string
   expectedManagementRevision: number
   revision: number
   instances: Record<string, InstanceConfig>
@@ -80,9 +79,16 @@ let latestConfigSaveRevision = 0
 let latestAppliedConfigSaveRevision = 0
 
 const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot, PersistedConfigResult>(
-  async ({ revision, managementSignature: signature, ...snapshot }) => {
+  async ({ revision, ...snapshot }) => {
     const instances = await invoke<Record<string, InstanceConfig>>('save_config', snapshot)
-    markManagementSaved(signature)
+    // The saved baseline must include backend normalization (notably f32
+    // precision and managed aliases), or later MCP events look like conflicts.
+    markManagementSaved(managementSignature({
+      instances: snapshot.instanceOrder.map(id => ({ id, config: instances[id] ?? snapshot.instances[id] })),
+      modelDirs: snapshot.modelDirs,
+      engineDirs: snapshot.engineDirs,
+      defaultEngineId: snapshot.defaultEngineId,
+    }))
     return { revision, instances }
   },
 )
@@ -343,7 +349,6 @@ export function createInstanceSlice(
 
       const revision = ++latestConfigSaveRevision
       const operation = configSaveCoordinator.save({
-        managementSignature: managementSignature({ ...state, instances: reconciled.instances }),
         expectedManagementRevision: getManagementRevision(),
         revision,
         instances: instancesById,

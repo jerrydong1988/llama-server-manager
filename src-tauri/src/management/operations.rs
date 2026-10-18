@@ -961,4 +961,23 @@ mod tests {
             .any(|arg| arg == "--temp"));
         assert!(patch_instance(&mut configured, &json!({"explicit_overrides":["typo"]})).is_err());
     }
+
+    #[test]
+    fn decimal_parameter_patches_match_defaults_and_launch_arguments() {
+        let mut configured = value(InstanceConfig::default()).unwrap();
+        assert_eq!(configured["temp"], 0.8);
+        assert_eq!(configured["top_p"], 0.95);
+        patch_instance(&mut configured, &json!({"name":"Legacy defaults"})).unwrap();
+        assert_eq!(configured["explicit_overrides"], json!([]));
+        patch_instance(&mut configured, &json!({"temp":0.12345679,"top_p":0.95})).unwrap();
+        let parsed: InstanceConfig = serde_json::from_value(configured).unwrap();
+        let command = server::generate_command(&parsed, "llama-server");
+        for (flag, value) in [("--temp", "0.12345679"), ("--top-p", "0.95")] {
+            assert!(command.windows(2).any(|args| args == [flag, value]));
+        }
+        let mut reloaded = value(parsed).unwrap();
+        patch_instance(&mut reloaded, &json!({"explicit_overrides":[]})).unwrap();
+        let inherited: InstanceConfig = serde_json::from_value(reloaded).unwrap();
+        assert!(!server::generate_command(&inherited, "llama-server").iter().any(|arg| arg == "--temp"));
+    }
 }

@@ -389,10 +389,36 @@ fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> N
     NormalizedInstances { all, changed }
 }
 
+// Keep the submitted JSON until numeric normalization has been compared. A
+// typed command argument would lose the original JS precision before this
+// comparison, leaving the GUI showing a value that was never stored.
+fn normalize_submitted_instances(
+    submitted: HashMap<String, serde_json::Value>,
+) -> Result<NormalizedInstances, String> {
+    let mut instances = HashMap::with_capacity(submitted.len());
+    let mut numeric_changes = HashSet::new();
+    for (id, input) in submitted {
+        let config: InstanceConfig = serde_json::from_value(input.clone())
+            .map_err(|error| format!("invalid instance configuration: {error}"))?;
+        let canonical = serde_json::to_value(&config).map_err(|error| error.to_string())?;
+        if input.as_object().is_some_and(|fields| fields.iter().any(|(key, value)| {
+            value.is_number() && value.as_f64() != canonical[key].as_f64()
+        })) {
+            numeric_changes.insert(id.clone());
+        }
+        instances.insert(id, config);
+    }
+    let mut normalized = normalize_instances_for_save(instances);
+    for id in numeric_changes {
+        normalized.changed.insert(id.clone(), normalized.all[&id].clone());
+    }
+    Ok(normalized)
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri expands IPC fields into command parameters.
 pub async fn save_config(
-    instances: HashMap<String, InstanceConfig>,
+    instances: HashMap<String, serde_json::Value>,
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
     default_engine_id: String,
@@ -403,7 +429,8 @@ pub async fn save_config(
     state: tauri::State<'_, AppState>,
 ) -> AppResult<HashMap<String, InstanceConfig>> {
     let mut timing = crate::operation_timing::OperationTiming::new("save_config");
-    let normalized = normalize_instances_for_save(instances);
+    let normalized = normalize_submitted_instances(instances)
+        .map_err(|error| AppError::new("INVALID_CONFIG", error, false))?;
     let instances = normalized.all;
     let config_dir = state.config_dir.lock().unwrap().clone();
     let snapshot = FrontendConfigSnapshot {
@@ -612,6 +639,24 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_config_reports_numeric_normalization_and_preserves_manual_text() {
+        let original = normalize_for_launch(InstanceConfig {
+            alias: "test".into(), explicit_overrides: Some(vec!["temp".into()]),
+            ..InstanceConfig::default()
+        }).into_config();
+        let mut submitted = serde_json::to_value(&original).unwrap();
+        submitted["temp"] = serde_json::json!(0.123456789);
+        submitted["manual_command"] = serde_json::json!("--temp 0.123456789");
+        let normalized = normalize_submitted_instances(HashMap::from([("test".into(), submitted)])).unwrap();
+        assert_eq!(serde_json::to_value(&normalized.changed["test"]).unwrap()["temp"], 0.12345679);
+        assert_eq!(normalized.all["test"].manual_command, "--temp 0.123456789");
+        let canonical = serde_json::to_value(&normalized.all["test"]).unwrap();
+        let unchanged = normalize_submitted_instances(HashMap::from([("test".into(), canonical)])).unwrap();
+        assert!(unchanged.changed.is_empty());
+        assert!(normalize_submitted_instances(HashMap::from([("test".into(), serde_json::json!({"temp":"invalid"}))])).is_err());
+    }
 
     #[test]
     fn management_revision_normalizes_relative_absolute_and_duplicate_roots() {

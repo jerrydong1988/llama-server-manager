@@ -407,9 +407,24 @@ export const Input = ({ label, value, onChange, placeholder, type, title, disabl
 )}
 
 export const Num = ({ label, value, onChange, min, max, step, title, disabled, fieldKey }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
+  // Preserve intermediate edits (empty, minus sign, decimal point/exponent).
+  // Only finite complete numbers update configuration; blur restores the last
+  // valid value. External changes such as inheritance/undo take precedence.
+  const [edit, setEdit] = useState<{ value: number; text: string } | null>(null)
+  const text = edit && Object.is(edit.value, value) ? edit.text : String(value)
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className="h-10 w-full" />
+      <TextInput
+        type="number" value={text} min={min} max={max} step={step ?? 1}
+        onChange={event => {
+          const next = event.target.valueAsNumber
+          const complete = Number.isFinite(next)
+          setEdit({ value: complete ? next : value, text: event.target.value })
+          if (complete) onChange(next)
+        }}
+        onBlur={() => setEdit(null)}
+        disabled={disabled} className="h-10 w-full"
+      />
     </FieldFrame>
 )}
 

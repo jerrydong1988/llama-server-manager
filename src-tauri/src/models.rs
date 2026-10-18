@@ -374,6 +374,18 @@ impl Default for KvCheckpointConfig {
     }
 }
 
+// serde_json::Value widens f32 to f64 before formatting, exposing binary
+// rounding noise (0.8 -> 0.800000011920929). Serialize the shortest decimal
+// that round-trips to the same f32 instead. Keep this on configuration fields:
+// it must not round telemetry, integer values, or user-supplied command strings.
+fn serialize_parameter_float<S: serde::Serializer>(value: &f32, serializer: S) -> Result<S::Ok, S::Error> {
+    if !value.is_finite() {
+        return Err(serde::ser::Error::custom("parameter must be a finite number"));
+    }
+    let decimal = value.to_string().parse::<f64>().map_err(serde::ser::Error::custom)?;
+    serializer.serialize_f64(decimal)
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstanceConfig {
@@ -447,18 +459,25 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub rope_scaling: String,
     #[serde(default)]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub rope_scale: f32,
     #[serde(default)]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub rope_freq_base: f32,
     #[serde(default)]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub rope_freq_scale: f32,
     #[serde(default = "default_negative_one_f32")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub yarn_ext_factor: f32,
     #[serde(default = "default_negative_one_f32")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub yarn_attn_factor: f32,
     #[serde(default = "default_negative_one_f32")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub yarn_beta_slow: f32,
     #[serde(default = "default_negative_one_f32")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub yarn_beta_fast: f32,
     #[serde(default)]
     pub yarn_orig_ctx: u32,
@@ -516,8 +535,10 @@ pub struct InstanceConfig {
     pub spec_draft_n_min: u32,
     pub spec_type: String,
     #[serde(default)]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub spec_draft_p_min: f32,
     #[serde(default = "default_point_one")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub spec_draft_p_split: f32,
     #[serde(default)]
     pub spec_draft_device: String,
@@ -597,6 +618,7 @@ pub struct InstanceConfig {
     pub kv_checkpoint: KvCheckpointConfig,
     pub log_prompts_dir: String,
     #[serde(default = "default_point_one")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub slot_prompt_similarity: f32,
     pub prefill_assistant: bool,
     // Multi-Model & Media
@@ -634,13 +656,19 @@ pub struct InstanceConfig {
     pub json_schema: String,
     #[serde(default)]
     pub json_schema_file: String,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub temp: f32,
     pub top_k: u32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub top_p: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub repeat_penalty: f32,
     pub seed: i64,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub min_p: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub presence_penalty: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub frequency_penalty: f32,
     pub repeat_last_n: i32,
     #[serde(default)]
@@ -652,23 +680,35 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub backend_sampling: bool,
     pub mirostat: u8,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub mirostat_lr: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub mirostat_ent: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub xtc_probability: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub xtc_threshold: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub dynatemp_range: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub dynatemp_exp: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub typical_p: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub dry_multiplier: f32,
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub dry_base: f32,
     pub dry_allowed_length: u32,
     pub dry_penalty_last_n: i32,
     pub dry_sequence_breaker: String,
     #[serde(default = "default_negative_one_f32")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub adaptive_target: f32,
     #[serde(default = "default_adaptive_decay")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub adaptive_decay: f32,
     #[serde(default = "default_negative_one_f32")]
+    #[serde(serialize_with = "serialize_parameter_float")]
     pub top_n_sigma: f32,
     #[serde(default)]
     pub logit_bias: String,
@@ -689,6 +729,80 @@ pub struct InstanceConfig {
     pub reuse_port: bool,
     #[serde(default)]
     pub auto_start: bool,
+}
+
+#[cfg(test)]
+mod parameter_float_tests {
+    use super::InstanceConfig;
+
+    // Every floating-point launch parameter, including defaults hidden by
+    // inactive dependencies, must survive both direct JSON and Value envelopes.
+    const FIELDS: &[&str] = &[
+        "rope_scale", "rope_freq_base", "rope_freq_scale", "yarn_ext_factor",
+        "yarn_attn_factor", "yarn_beta_slow", "yarn_beta_fast", "spec_draft_p_min",
+        "spec_draft_p_split", "slot_prompt_similarity", "temp", "top_p",
+        "repeat_penalty", "min_p", "presence_penalty", "frequency_penalty",
+        "mirostat_lr", "mirostat_ent", "xtc_probability", "xtc_threshold",
+        "dynatemp_range", "dynatemp_exp", "typical_p", "dry_multiplier", "dry_base",
+        "adaptive_target", "adaptive_decay", "top_n_sigma",
+    ];
+
+    #[test]
+    fn parameter_floats_have_identical_decimal_json_in_every_envelope() {
+        for input in [0.8, 0.95, 0.1, 0.9, 0.12345679, 0.00000001, -1.0, 1.75, 123456.79] {
+            let mut fields = serde_json::json!({"explicit_overrides": ["temp"]});
+            for field in FIELDS {
+                fields[*field] = serde_json::json!(input);
+            }
+            let config: InstanceConfig = serde_json::from_value(fields).unwrap();
+            let direct: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            let envelope = serde_json::json!({"config": &config});
+            let value = serde_json::to_value(&config).unwrap();
+            for field in FIELDS {
+                assert_eq!(value[*field], serde_json::json!(input), "{field}: {input}");
+                assert_eq!(envelope["config"][*field], direct[*field], "{field}");
+            }
+            let reloaded: InstanceConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(serde_json::to_value(reloaded).unwrap(), direct);
+        }
+    }
+
+    #[test]
+    fn parameter_floats_repair_legacy_expansions_without_changing_intent() {
+        let config: InstanceConfig = serde_json::from_str(r#"{
+            "temp": 0.800000011920929, "top_p": 0.949999988079071,
+            "mirostat_lr": 0.10000000149011612, "adaptive_decay": 0.8999999761581421,
+            "explicit_overrides": ["temp", "top_p"]
+        }"#).unwrap();
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["temp"], 0.8);
+        assert_eq!(value["top_p"], 0.95);
+        assert_eq!(value["mirostat_lr"], 0.1);
+        assert_eq!(value["adaptive_decay"], 0.9);
+        assert_eq!(value["explicit_overrides"], serde_json::json!(["temp", "top_p"]));
+        let reloaded: InstanceConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(reloaded.temp.to_bits(), config.temp.to_bits());
+        assert_eq!(reloaded.top_p.to_bits(), config.top_p.to_bits());
+        let legacy: InstanceConfig = serde_json::from_str("{}").unwrap();
+        assert!(serde_json::to_value(legacy).unwrap()["explicit_overrides"].is_null());
+    }
+
+    #[test]
+    fn parameter_floats_preserve_bits_and_reject_non_finite_values() {
+        for temp in [0.0, -0.0, f32::from_bits(1), f32::MIN_POSITIVE, f32::MAX,
+            f32::MIN, f32::from_bits(0x3f800001), 0.12345679, -0.00000001] {
+            let config = InstanceConfig { temp, ..InstanceConfig::default() };
+            let value = serde_json::to_value(&config).unwrap();
+            let reloaded: InstanceConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(reloaded.temp.to_bits(), temp.to_bits(), "{temp}");
+        }
+        for temp in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let config = InstanceConfig { temp, ..InstanceConfig::default() };
+            assert!(serde_json::to_value(&config).is_err());
+            assert!(serde_json::to_string(&config).is_err());
+        }
+    }
 }
 
 fn model_file_stem(value: &str) -> Option<String> {
