@@ -87,6 +87,12 @@ test('keyboard navigation and English labels remain usable', async ({ page }) =>
   await page.getByRole('button', { name: 'Command Center', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Background tasks' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Cancel queued task' })).toBeEnabled()
+  await page.evaluate(() => { window.__MANAGEMENT_TASK_TEST__.tasks.find(t => t.id === 'task-queued')!.operation = 'runtime.clear_error' })
+  await page.getByRole('button', { name: 'Refresh tasks' }).click()
+  await expect(page.getByTestId('task-detail')).toContainText('runtime.clear_error')
+  await page.getByRole('button', { name: 'Open resource' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(await page.evaluate(() => localStorage.getItem('lastTab'))).toBe('dashboard')
 })
 
 test('empty history, missing details and closing the panel stop polling cleanly', async ({ page }) => {

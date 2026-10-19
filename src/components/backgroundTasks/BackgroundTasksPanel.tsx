@@ -10,7 +10,7 @@ import type { TaskStatus } from './types'
 const tones = { queued: 'blue', running: 'amber', succeeded: 'emerald', failed: 'red', cancelled: 'slate', interrupted: 'violet' } as const
 const resourceTabs: Record<string, string> = {
   models: 'model-repo', engines: 'engine', instances: 'instances', checkpoints: 'instances', presets: 'config',
-  downloads: 'downloads', routes: 'proxy', usage: 'proxy', runtime: 'proxy', storage: 'storage', monitoring: 'perf',
+  downloads: 'downloads', routes: 'proxy', usage: 'proxy', runtime: 'dashboard', storage: 'storage', monitoring: 'perf',
 }
 
 export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
