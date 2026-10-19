@@ -1432,7 +1432,7 @@ mockIPC((command, payload) => {
       if (new URLSearchParams(window.location.search).get('connection') === 'fail') throw new Error('Connection refused')
       return 'HTTP 200'
     case 'process_download_queue': return null
-    case 'get_proxy_config': return clone(proxyConfig)
+    case 'get_proxy_config': return { ...clone(proxyConfig), config_revision: JSON.stringify(proxyConfig) }
     case 'get_router_performance': return routerPerformanceMock((args.query || {}) as Record<string, unknown>)
     case 'get_router_budgets': return routerBudgetsMock(proxyConfig.api_keys)
     case 'get_router_usage': return routerUsageMock((args.query || {}) as Record<string, unknown>)
@@ -1458,6 +1458,9 @@ mockIPC((command, payload) => {
       throw new Error('no running instance matches the requested model')
     }
     case 'save_proxy_config': {
+      if (args.expectedRevision !== undefined && args.expectedRevision !== JSON.stringify(proxyConfig)) {
+        throw { code: 'CONFIG_CONFLICT', message: 'Router configuration changed; reload before saving', retryable: false }
+      }
       const next = clone(args.config as BrowserProxyConfig)
       next.api_keys = next.api_keys.map(apiKey => ({
         ...apiKey,
@@ -1471,7 +1474,7 @@ mockIPC((command, payload) => {
         ? enabledRoutes.filter(route => proxyTargets.some(target => target.instance_id === route.target_instance_id && target.running)).length
         : proxyTargets.filter(target => target.running).length
       proxyStatus.unhealthy_routes = Math.max(0, proxyStatus.active_routes - proxyStatus.healthy_routes)
-      return clone(proxyConfig)
+      return { ...clone(proxyConfig), config_revision: JSON.stringify(proxyConfig) }
     }
     case 'start_proxy':
       proxyConfig.enabled = true
@@ -1505,6 +1508,20 @@ mockIPC((command, payload) => {
       syncAutomationProbe()
       return generated
     }
+    case 'delete_instance_config': {
+      const id = String(args.instanceId)
+      if (args.expectedManagementRevision !== (control.state.management_revision ?? 0)) throw new Error('CONFIG_CONFLICT')
+      if (proxyConfig.default_instance_id === id || proxyConfig.routes.some(route => route.target_instance_id === id)) {
+        throw new Error('INSTANCE_REFERENCED: remove routes/default target first')
+      }
+      if (control.state.running[id]) throw new Error('INSTANCE_ACTIVE')
+      if (!control.state.instances[id]) throw new Error('NOT_FOUND')
+      delete control.state.instances[id]
+      control.state.instance_order = control.state.instance_order.filter(other => other !== id)
+      control.state.management_revision = (control.state.management_revision ?? 0) + 1
+      return { deleted: id, management_revision: control.state.management_revision }
+    }
+    case 'delete_instance_log': return 0
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
       if (BROWSER_SCENARIO === 'parameter-float-normalization') {
@@ -1531,6 +1548,10 @@ mockIPC((command, payload) => {
         })
       }
       return persist()
+    }
+    case 'stop_server': {
+      delete control.state.running[String(args.instanceId)]
+      return null
     }
     case 'start_server': {
       const instanceId = String(args.instanceId ?? '')

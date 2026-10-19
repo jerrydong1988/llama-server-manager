@@ -1,7 +1,7 @@
 import { invokeApp as invoke } from '../lib/ipc'
 import { mergeRestoredDownloadTask } from './downloadMerge'
 import type { AppStoreGet, AppStoreSet } from './helpers'
-import type { AppState, DownloadProgress, MsFileEntry, PersistedQueueEntry } from './types'
+import type { AppState, DownloadManagerSnapshot, DownloadProgress, MsFileEntry, PersistedQueueEntry } from './types'
 import { pathsEqual } from '../utils/path'
 
 type ResumeDownloadTaskResult = {
@@ -150,17 +150,27 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
           .filter((taskId): taskId is string => Boolean(taskId))
           .map(taskId => [taskId, tasks[taskId]]),
       )
+      // Register identities before the backend can emit events for this run.
+      set(current => ({
+        downloadTasks: { ...current.downloadTasks, ...taskUpdates },
+        downloadQueue: [...current.downloadQueue, queuedEntry],
+      }))
       try {
         await invoke('enqueue_download_queue', { entry: toPersistedQueueEntry(queuedEntry) })
       } catch (error) {
+        set(current => {
+          const restored = { ...current.downloadTasks }
+          for (const [id, submitted] of Object.entries(taskUpdates)) {
+            if (restored[id]?.runId !== submitted.runId) continue
+            if (state.downloadTasks[id]) restored[id] = state.downloadTasks[id]
+            else delete restored[id]
+          }
+          return { downloadTasks: restored, downloadQueue: current.downloadQueue.filter(item => item.id !== queueId) }
+        })
         const message = error instanceof Error ? error.message : String(error)
         get().addRuntimeWarning(`download enqueue failed: ${message}`)
         return false
       }
-      set((current) => ({
-        downloadTasks: { ...current.downloadTasks, ...taskUpdates },
-        downloadQueue: [...current.downloadQueue, queuedEntry],
-      }))
       return true
     },
     removeFromDownloadQueue: async (id) => {
@@ -243,6 +253,10 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
             },
           },
         })
+        // The backend chooses the new run identity. Its first/terminal event
+        // may precede that identity's reply, so reconcile an authoritative snapshot.
+        const snapshot = await invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')
+        get().restoreDownloadQueue(snapshot.queue)
       } catch (error) {
         console.error(error)
         get().addRuntimeWarning(`download resume failed: ${errorMessage(error)}`)
@@ -267,7 +281,9 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
           })
         }
         if (['queued', 'active'].includes(entry.status)) {
-          const pendingFiles = entry.files.filter(file => !['completed', 'cancelled'].includes(file.status || ''))
+          const pendingFiles = entry.files.filter(file => !['completed', 'cancelled', 'error', 'paused'].includes(
+            (file.task_id ? tasks[file.task_id]?.status : file.status) || '',
+          ))
           if (pendingFiles.length > 0) {
             restoredQueue.push({
               id: entry.id,
@@ -356,6 +372,12 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         }
       }
       set({ downloadTasks: tasks })
+      try {
+        const snapshot = await invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')
+        get().restoreDownloadQueue(snapshot.queue)
+      } catch (error) {
+        get().addRuntimeWarning(`download resume synchronization failed: ${errorMessage(error)}`)
+      }
     },
     pauseAllDownloads: async () => {
       let affected: string[] = []

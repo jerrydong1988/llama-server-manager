@@ -121,6 +121,7 @@ pub fn operations() -> Vec<Operation> {
         ("service.stop","Stop the management host and its managed workloads","admin",""),
         ("tasks.list","List recent management tasks","read",""),
         ("tasks.get","Get completion, result or failure of a management task","read","id:string"),
+        ("tasks.cancel","Cancel a queued task, including network preparation; running operations use resource stop/pause","write","id:string"),
         ("paths.list","List explicitly authorized directories","read",""),
         ("paths.authorize","Authorize an existing directory; local owner CLI only","admin","purpose:string path:string"),
         ("paths.revoke","Revoke an explicitly authorized directory; local owner CLI only","admin","purpose:string path:string"),

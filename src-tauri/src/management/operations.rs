@@ -533,12 +533,14 @@ pub(super) async fn instances(
     let id = text(args, "id");
     match name {
         "instances.list" => {
-            let instances = state.instances.lock().unwrap().clone();
+            let snapshot = global(&state);
             let runtime = crate::runtime_service::runtime_status().await.ok();
-            Ok(json!({"instances":instances,"runtime":runtime,"revision":revision(&state)}))
+            Ok(json!({"instances":snapshot.instances,"runtime":runtime,"revision":config::management_config_revision(&snapshot)}))
         }
         "instances.get" => {
-            Ok(json!({"id":id,"config":instance(&state,&id)?,"revision":revision(&state)}))
+            let snapshot = global(&state);
+            let configured = snapshot.instances.get(&id).ok_or_else(|| Failure::new("NOT_FOUND", "instance not found"))?;
+            Ok(json!({"id":id,"config":configured,"revision":config::management_config_revision(&snapshot)}))
         }
         "instances.defaults" => {
             let defaults = value(InstanceConfig::default())?;
@@ -594,34 +596,7 @@ pub(super) async fn instances(
             Ok(json!({"stopped":true}))
         }
         "instances.delete" => {
-            identity(&id)?;
-            if state.running.lock().unwrap().contains_key(&id)
-                || state.starting.lock().unwrap().contains(&id)
-            {
-                return Err(Failure::new(
-                    "CONFLICT",
-                    "stop the instance before deleting its configuration",
-                ));
-            }
-            let updated = config::management_update(&state, &text(args, "revision"), |global| {
-                if global.proxy_config.default_instance_id == id
-                    || global
-                        .proxy_config
-                        .routes
-                        .iter()
-                        .any(|route| route.target_instance_id == id)
-                {
-                    return Err("instance is referenced by router configuration; remove its routes/default target first".into());
-                }
-                if global.instances.remove(&id).is_none() {
-                    return Err("instance not found".into());
-                }
-                global.instance_order.retain(|other| other != &id);
-                Ok(())
-            })?;
-            Ok(
-                json!({"deleted":id,"revision":config::management_config_revision(&updated),"model_files_deleted":false}),
-            )
+            config::delete_instance_config(id, Some(text(args, "revision")), None, state).map_err(Failure::from)
         }
         "instances.create" | "instances.clone" | "instances.update" => {
             ensure_inventory(app).await?;
@@ -754,6 +729,15 @@ fn repository_file(
     Ok(first.clone())
 }
 
+pub(super) async fn prepare(name: &str, args: &Value) -> Result<Value, Failure> {
+    let mut prepared = args.clone();
+    if name == "downloads.add" {
+        let available = browse(&text(args, "source"), text(args, "repo")).await?;
+        prepared["_prepared_files"] = value(available)?;
+    }
+    Ok(prepared)
+}
+
 async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<Value, Failure> {
     let state = app.state::<AppState>();
     let id = text(args, "id");
@@ -763,7 +747,8 @@ async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
         "downloads.add" => {
             let source = text(args, "source");
             let repo = text(args, "repo");
-            let available = browse(&source, repo.clone()).await?;
+            let available = serde_json::from_value::<Vec<crate::models::MsFileEntry>>(args["_prepared_files"].clone())
+                .map_err(|_| Failure::new("INTERNAL", "download preparation missing"))?;
             let requested = args["files"].as_array().expect("validated");
             if requested.is_empty() {
                 return Err(Failure::new("VALIDATION", "select at least one file"));

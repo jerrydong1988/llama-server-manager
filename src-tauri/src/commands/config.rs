@@ -50,6 +50,65 @@ where F: FnOnce(&mut GlobalConfig) -> Result<(), String> {
     Ok(global)
 }
 
+pub(crate) fn validate_instance_removal(global: &GlobalConfig, id: &str) -> Result<(), String> {
+    if global.proxy_config.default_instance_id == id
+        || global.proxy_config.routes.iter().any(|route| route.target_instance_id == id)
+    {
+        return Err("INSTANCE_REFERENCED: remove the instance's routes/default target before deleting it".into());
+    }
+    Ok(())
+}
+
+// Both desktop and management clients commit deletion here. Artifacts are only
+// cleaned after this transaction succeeds; a rejected delete has no side effects.
+#[tauri::command]
+pub fn delete_instance_config(
+    instance_id: String,
+    expected_revision: Option<String>,
+    expected_management_revision: Option<u64>,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    delete_instance_configuration(&instance_id, expected_revision.as_deref(), expected_management_revision, &state)
+        .map_err(|message| {
+            let code = message.split_once(':').map(|(code, _)| code).unwrap_or("INSTANCE_DELETE_FAILED").to_string();
+            AppError::new(code, message, false)
+        })
+}
+
+fn delete_instance_configuration(
+    instance_id: &str,
+    expected_revision: Option<&str>,
+    expected_management_revision: Option<u64>,
+    state: &AppState,
+) -> Result<serde_json::Value, String> {
+    crate::commands::server::validate_instance_id(instance_id).map_err(|e| e.message)?;
+    let _guard = CONFIG_WRITE_LOCK.lock().map_err(|_| "configuration lock poisoned")?;
+    let directory = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&directory)?;
+    if expected_revision.is_some_and(|r| r != management_config_revision(&global))
+        || expected_management_revision.is_some_and(|r| r != management_revision())
+        || (expected_revision.is_none() && expected_management_revision.is_none())
+    {
+        return Err("CONFIG_CONFLICT: configuration changed; reload before deleting".into());
+    }
+    validate_instance_removal(&global, instance_id)?;
+    let running = state.running.lock().unwrap();
+    let starting = state.starting.lock().unwrap();
+    if running.contains_key(instance_id) || starting.contains(instance_id) {
+        return Err("CONFLICT: stop the instance before deleting its configuration".into());
+    }
+    if global.instances.remove(instance_id).is_none() {
+        return Err("NOT_FOUND: instance not found".into());
+    }
+    global.instance_order.retain(|id| id != instance_id);
+    persist_global_config_unlocked(&directory, &global)?;
+    *state.instances.lock().unwrap() = global.instances.clone();
+    let revision = MANAGEMENT_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    crate::runtime_service::mark_config_sync_pending();
+    Ok(serde_json::json!({"deleted":instance_id,"revision":management_config_revision(&global),
+        "management_revision":revision,"model_files_deleted":false}))
+}
+
 fn dedupe_path_dirs(directories: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     directories
@@ -457,6 +516,13 @@ pub async fn save_config(
                 config_dir.join("instances.json").display().to_string(),
             )
         })?;
+        for id in global.instances.keys().filter(|id| !instances.contains_key(*id)) {
+            validate_instance_removal(&global, id)
+                .map_err(|error| AppError::new("INSTANCE_REFERENCED", error, false))?;
+            if running_snapshot.contains_key(id) || state.starting.lock().unwrap().contains(id) {
+                return Err(AppError::new("INSTANCE_ACTIVE", "Stop the instance before deleting its configuration.", false));
+            }
+        }
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
         persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
             AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
@@ -464,12 +530,9 @@ pub async fn save_config(
                 config_dir.join("instances.json").display().to_string(),
             )
         })?;
+        *state.instances.lock().unwrap() = instances.clone();
     }
     timing.mark("persist-main");
-    {
-        let mut stored = state.instances.lock().unwrap();
-        *stored = instances.clone();
-    }
     if crate::runtime_service::manages_instances() {
         // instances.json is the durable source of truth for this operation. The app bridge
         // coalesces rapid edits and reliably retries delivery to the runtime service, so a
@@ -634,6 +697,21 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removal_rejects_default_and_disabled_route_references() {
+        let mut global = default_global_config();
+        global.proxy_config.default_instance_id = "used".into();
+        assert!(validate_instance_removal(&global, "used").is_err());
+        global.proxy_config.default_instance_id.clear();
+        global.proxy_config.routes.push(crate::models::ProxyRoute {
+            target_instance_id: "used".into(), enabled: false, ..Default::default()
+        });
+        assert!(validate_instance_removal(&global, "used").is_err());
+        assert!(validate_instance_removal(&global, "unrelated").is_ok());
+        global.proxy_config.routes.clear();
+        assert!(validate_instance_removal(&global, "used").is_ok());
+    }
 
     #[test]
     fn save_config_reports_numeric_normalization_and_preserves_manual_text() {

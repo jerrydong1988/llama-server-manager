@@ -1,5 +1,5 @@
 // Opt-in local integration test. Uses an isolated runtime directory and caller-supplied GGUFs.
-// node scripts/test-router-real-models.cjs --engine PATH --generation PATH --embedding PATH [--reranking PATH] --report PATH
+// node scripts/test-router-real-models.cjs [--bin DIR] --engine PATH --generation PATH --embedding PATH [--reranking PATH] --report PATH
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
@@ -11,7 +11,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 async function main() {
   for (const field of ['engine', 'generation', 'embedding']) assert.ok(args[field] && fs.existsSync(args[field]), `missing --${field}`)
-  const executable = path.resolve(__dirname, '../src-tauri/target/debug', process.platform === 'win32' ? 'llama-server-manager.exe' : 'llama-server-manager')
+  const executable = path.resolve(args.bin || path.join(__dirname, '../src-tauri/target/debug'), process.platform === 'win32' ? 'llama-server-manager.exe' : 'llama-server-manager')
   assert.ok(fs.existsSync(executable), 'Build the current runtime first')
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-real-models-'))
   fs.mkdirSync(path.join(dataDir, 'configs'), { recursive: true })

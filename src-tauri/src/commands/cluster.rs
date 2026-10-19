@@ -841,12 +841,15 @@ fn terminate_rpc_child(child: &mut std::process::Child) -> Result<(), String> {
     }
 }
 
-pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
+fn rpc_binary_in(directory: &std::path::Path) -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
-    const RPC_SERVER_NAME: &str = "rpc-server.exe";
+    let names = ["ggml-rpc-server.exe", "rpc-server.exe"];
     #[cfg(not(target_os = "windows"))]
-    const RPC_SERVER_NAME: &str = "rpc-server";
+    let names = ["ggml-rpc-server", "rpc-server"];
+    names.iter().map(|name| directory.join(name)).find(|path| path.is_file())
+}
 
+pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
     let exe = std::env::current_exe().unwrap_or_default();
     let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
 
@@ -854,8 +857,7 @@ pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
         exe_dir,
         exe_dir.parent().unwrap_or(std::path::Path::new(".")),
     ] {
-        let candidate = dir.join(RPC_SERVER_NAME);
-        if candidate.exists() {
+        if let Some(candidate) = rpc_binary_in(dir) {
             return Some(candidate.to_string_lossy().to_string());
         }
     }
@@ -933,16 +935,12 @@ pub async fn start_local_rpc(
         drop(availability_probe);
         let binary = if let Some(ref dir) = engine_dir {
             let path = std::path::Path::new(dir);
-            #[cfg(target_os = "windows")]
-            let exe = path.join("rpc-server.exe");
-            #[cfg(not(target_os = "windows"))]
-            let exe = path.join("rpc-server");
-            if exe.exists() {
+            if let Some(exe) = rpc_binary_in(path) {
                 crate::security::require_path_within_root(&exe, path)?
                     .to_string_lossy()
                     .to_string()
             } else {
-                return Err(format!("引擎目录下未找到 rpc-server: {}", dir));
+                return Err(format!("引擎目录下未找到 ggml-rpc-server / rpc-server: {}", dir));
             }
         } else {
             find_rpc_server_binary_internal()
@@ -1013,6 +1011,23 @@ pub async fn start_local_rpc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rpc_binary_resolves_new_and_legacy_package_layouts() {
+        let dir = std::env::temp_dir().join(format!("lsm-rpc-layout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(windows)]
+        let names = ["ggml-rpc-server.exe", "rpc-server.exe"];
+        #[cfg(not(windows))]
+        let names = ["ggml-rpc-server", "rpc-server"];
+        assert!(rpc_binary_in(&dir).is_none());
+        std::fs::write(dir.join(names[1]), b"fixture").unwrap();
+        assert_eq!(rpc_binary_in(&dir), Some(dir.join(names[1])));
+        std::fs::write(dir.join(names[0]), b"fixture").unwrap();
+        assert_eq!(rpc_binary_in(&dir), Some(dir.join(names[0])));
+        for name in names { std::fs::remove_file(dir.join(name)).unwrap(); }
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     #[test]
     fn test_workers_persistence() {

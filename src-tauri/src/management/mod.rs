@@ -2,6 +2,7 @@
 mod catalog;
 mod extended;
 mod operations;
+mod scheduling;
 #[allow(dead_code)]
 mod transport;
 #[allow(dead_code)] // Also compiled into the console client.
@@ -44,7 +45,8 @@ struct Host {
     token: String,
     directory: PathBuf,
     tasks: Mutex<Vec<Task>>,
-    mutation_lock: tokio::sync::Mutex<()>,
+    resource_locks: scheduling::ResourceLocks,
+    cancellations: Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>,
     _lock: std::fs::File,
 }
 
@@ -107,6 +109,7 @@ impl Host {
             "service.capabilities" => return Ok(json!({"protocol":wire::VERSION,"version":env!("CARGO_PKG_VERSION"),"operations":catalog::operations().iter().map(|op| json!({"name":op.name,"description":op.description,"permission":op.permission,"schema":op.schema()})).collect::<Vec<_>>() })),
             "tasks.list" => return Ok(json!(self.tasks.lock().unwrap().iter().rev().take(100).map(|task| json!({"id":task.id,"operation":task.operation,"status":task.status,"created_at":task.created_at,"updated_at":task.updated_at})).collect::<Vec<_>>())),
             "tasks.get" => return self.tasks.lock().unwrap().iter().find(|task| task.id == request.arguments["id"].as_str().unwrap_or("")).map(|task| json!(task)).ok_or_else(|| Failure::new("NOT_FOUND", "task not found")),
+            "tasks.cancel" => return self.cancel_task(request.arguments["id"].as_str().unwrap_or("")),
             _ => {},
         }
         if operation.permission == "read" {
@@ -175,14 +178,37 @@ impl Host {
         };
         let host = self.clone();
         let task_copy = task_id.clone();
+        let cancellation = Arc::new(tokio::sync::Notify::new());
+        self.cancellations.lock().unwrap().insert(task_id.clone(), cancellation.clone());
         tauri::async_runtime::spawn(async move {
-            let _guard = host.mutation_lock.lock().await;
-            if let Err(error) = host.update_task(&task_copy, "running", None) {
-                eprintln!("management task persistence failed: {}", error.message);
+            if host.tasks.lock().unwrap().iter().any(|task| task.id == task_copy && task.status == "cancelled") {
+                host.cancellations.lock().unwrap().remove(&task_copy);
                 return;
             }
-            let result = operations::dispatch(&host.app, &request.operation, &request.arguments)
-                .await
+            let pending = async {
+                let prepared = operations::prepare(&request.operation, &request.arguments).await?;
+                let guard = host.resource_locks.acquire(&request.operation, &request.arguments).await;
+                Ok::<_, Failure>((prepared, guard))
+            };
+            let preparation = tokio::select! {
+                _ = cancellation.notified() => { host.cancellations.lock().unwrap().remove(&task_copy); return; },
+                result = pending => result,
+            };
+            // Cancellation and the queued -> running transition share the task
+            // lock. Once running, side effects are never aborted mid-transaction.
+            match host.begin_task(&task_copy) {
+                Ok(true) => {},
+                Ok(false) => { host.cancellations.lock().unwrap().remove(&task_copy); return; },
+                Err(error) => {
+                    eprintln!("management task persistence failed: {}", error.message);
+                    host.cancellations.lock().unwrap().remove(&task_copy);
+                    return;
+                }
+            }
+            let result = match preparation {
+                Ok((prepared, _guard)) => operations::dispatch(&host.app, &request.operation, &prepared).await,
+                Err(error) => Err(error),
+            }
                 .map(|mut value| {
                     wire::redact(&mut value);
                     value
@@ -196,6 +222,7 @@ impl Host {
             if let Err(error) = host.update_task(&task_copy, status, Some(result)) {
                 eprintln!("management task persistence failed: {}", error.message);
             }
+            host.cancellations.lock().unwrap().remove(&task_copy);
             let download_effect = if status == "succeeded" {
                 match request.operation.as_str() {
                     "downloads.clear" => json!({"clear_statuses":request.arguments["statuses"]}),
@@ -209,6 +236,33 @@ impl Host {
             let _ = host.app.emit("management-config-changed", json!({"operation":request.operation,"revision":crate::commands::config::management_revision(),"download_effect":download_effect,"status":status,"resource_id":request.arguments.get("id")}));
         });
         Ok(json!({"task_id":task_id,"status":"queued"}))
+    }
+
+    fn begin_task(&self, id: &str) -> Result<bool, Failure> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = tasks.iter_mut().find(|task| task.id == id).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))?;
+        if task.status == "cancelled" { return Ok(false); }
+        task.status = "running".into();
+        task.updated_at = chrono::Utc::now().timestamp_millis();
+        persist_tasks(&self.directory, &tasks)?;
+        Ok(true)
+    }
+
+    fn cancel_task(&self, id: &str) -> Result<Value, Failure> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let index = tasks.iter().position(|task| task.id == id).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))?;
+        if tasks[index].status == "running" {
+            return Err(Failure::new("TASK_RUNNING", "operation has started; use the resource stop/pause command and query tasks.get"));
+        }
+        if tasks[index].status == "queued" {
+            let previous = tasks[index].clone();
+            tasks[index].status = "cancelled".into();
+            tasks[index].updated_at = chrono::Utc::now().timestamp_millis();
+            tasks[index].error = Some(Failure::new("CANCELLED", "cancelled before side effects started"));
+            if let Err(error) = persist_tasks(&self.directory, &tasks) { tasks[index] = previous; return Err(error); }
+            if let Some(cancellation) = self.cancellations.lock().unwrap().get(id) { cancellation.notify_one(); }
+        }
+        Ok(json!({"id":id,"status":tasks[index].status}))
     }
 
     fn update_task(
@@ -276,7 +330,8 @@ pub fn start(app: tauri::AppHandle) -> Result<(), String> {
         token: token.clone(),
         directory,
         tasks: Mutex::new(tasks),
-        mutation_lock: tokio::sync::Mutex::new(()),
+        resource_locks: scheduling::ResourceLocks::default(),
+        cancellations: Mutex::new(std::collections::HashMap::new()),
         _lock: lock,
     });
     tauri::async_runtime::spawn(async move {

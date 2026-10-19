@@ -82,7 +82,7 @@ async function run() {
   const engine = path.join(engineDir, `llama-server${extension}`)
   const compiled = await execute('rustc', ['--edition=2021', path.join(__dirname, 'fixtures', 'management-engine.rs'), '-o', engine])
   assert.equal(compiled.code, 0, compiled.stderr)
-  fs.copyFileSync(engine, path.join(engineDir, `rpc-server${extension}`))
+  fs.copyFileSync(engine, path.join(engineDir, `ggml-rpc-server${extension}`))
   const model = path.join(modelDir, 'fixture.gguf')
   const header = Buffer.alloc(24); header.write('GGUF'); header.writeUInt32LE(3, 4); fs.writeFileSync(model, header)
 
@@ -185,7 +185,35 @@ async function run() {
   await call('monitoring.series', { id: 'agent-fixture', range_ms: 10000 })
   assert.equal((await call('system.port', { port })).data, false)
   await mutate('routes.stop', {})
+  // Real host scheduling: a slow engine probe must not block instance controls,
+  // while a queued same-domain mutation can be cancelled durably via MCP.
+  fs.writeFileSync(path.join(engineDir, 'probe-delay-ms'), '3000', 'utf8')
+  const slowProbe = await call('engines.probe_all')
+  for (let i = 0; i < 30; i++) {
+    if ((await call('tasks.get', { id: slowProbe.data.task_id })).data.status === 'running') break
+    await wait(50)
+  }
+  const queuedRename = await call('engines.rename', { id: engineId, name: 'Cancelled rename' })
+  const schedulingMcp = await managementClient({ cli, app: executable, data }).mcp()
+  try {
+    assert.equal((await schedulingMcp.tool('tasks.cancel', { id: queuedRename.data.task_id })).status, 'cancelled')
+    assert.equal((await schedulingMcp.tool('tasks.get', { id: queuedRename.data.task_id })).status, 'cancelled')
+    const runningCancel = await schedulingMcp.tool('tasks.cancel', { id: slowProbe.data.task_id }, true)
+    assert.equal(runningCancel.result.structuredContent.error.code, 'TASK_RUNNING')
+    checks += 3
+  } finally { await schedulingMcp.close() }
+  const stopStarted = Date.now()
   await mutate('instances.stop', { id: 'agent-fixture' })
+  assert.ok(Date.now() - stopStarted < 3000, 'instance stop must not wait for the unrelated 6s probe')
+  for (let i = 0; i < 100; i++) {
+    const status = (await call('tasks.get', { id: slowProbe.data.task_id })).data.status
+    if (status === 'succeeded') break
+    assert.notEqual(status, 'failed')
+    await wait(100)
+    if (i === 99) throw new Error('slow probe did not complete')
+  }
+  fs.unlinkSync(path.join(engineDir, 'probe-delay-ms'))
+  assert.equal((await call('engines.list')).data.engines[0].name, 'Agent test engine')
   assert.equal((await call('system.port', { port })).data, true)
   await call('runtime.status')
   await mutate('runtime.clear_error', {})

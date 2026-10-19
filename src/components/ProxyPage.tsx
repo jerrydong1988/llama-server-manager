@@ -832,13 +832,14 @@ export default function ProxyPage() {
     setError('')
     setNotice('')
 
+    const submittedDraft = draft
     try {
       const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft), expectedRevision: configRevision.current })
       configRevision.current = (savedValue as { config_revision?: string } | null)?.config_revision
       const nextConfig = normalizeConfig(savedValue ?? toCommandConfig(draft))
       const nextStatusValue = await invoke<unknown>('get_proxy_status').catch(() => null)
       setConfig(nextConfig)
-      setDraft(nextConfig)
+      setDraft(current => JSON.stringify(current) === JSON.stringify(submittedDraft) ? nextConfig : current)
       setRouteTests({})
       setStatus(nextStatusValue == null
         ? { ...status, activeRoutes: nextConfig.routes.filter(route => route.enabled).length }
@@ -856,11 +857,12 @@ export default function ProxyPage() {
 
   const persistDraftConfig = async () => {
     hideRevealedSecret()
+    const submittedDraft = draft
     const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft), expectedRevision: configRevision.current })
     configRevision.current = (savedValue as { config_revision?: string } | null)?.config_revision
     const nextConfig = normalizeConfig(savedValue ?? toCommandConfig(draft))
     setConfig(nextConfig)
-    setDraft(nextConfig)
+    setDraft(current => JSON.stringify(current) === JSON.stringify(submittedDraft) ? nextConfig : current)
     setRouteTests({})
     setCommandsReady(true)
     return nextConfig
@@ -872,7 +874,7 @@ export default function ProxyPage() {
     setNotice('')
 
     try {
-      let effectiveConfig = draft
+      let effectiveConfig = config
       if (action === 'start' && dirty) {
         effectiveConfig = await persistDraftConfig()
       }
@@ -881,7 +883,13 @@ export default function ProxyPage() {
       setStatus(normalizeStatus(nextStatus, effectiveConfig))
       setStatusFresh(nextStatus != null)
       const enabled = action === 'start'
-      setConfig(current => ({ ...current, enabled }))
+      const receipt = await invoke<unknown>('get_proxy_config')
+      const savedConfig = normalizeConfig(receipt)
+      if (JSON.stringify(savedConfig) !== JSON.stringify({ ...effectiveConfig, enabled })) {
+        throw new Error(getAgentManagementLabels(lang).routerConflict)
+      }
+      configRevision.current = (receipt as { config_revision?: string } | null)?.config_revision
+      setConfig(savedConfig)
       setDraft(current => ({ ...current, enabled }))
       setCommandsReady(true)
     } catch (actionError) {

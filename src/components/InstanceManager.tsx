@@ -179,10 +179,9 @@ const InstanceManager = () => {
     if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return
     try {
       await stopInstance(id)
+      await deleteInstance(id)
       await useAppStore.getState().clearCheckpoint(id)
       await invoke('delete_instance_log', { instanceId: id })
-      deleteInstance(id)
-      await useAppStore.getState().saveConfig()
     } catch (error) {
       useAppStore.getState().addRuntimeWarning(`instance deletion cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
     }

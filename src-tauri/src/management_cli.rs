@@ -212,7 +212,7 @@ async fn wait_task(
             .unwrap_or("");
         match status {
             "succeeded" => return Ok(response),
-            "failed" | "interrupted" => {
+            "failed" | "interrupted" | "cancelled" => {
                 response.ok = false;
                 response.error = response
                     .data

@@ -5,6 +5,13 @@ use std::{
 };
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| matches!(arg.as_str(), "--version" | "--help" | "-h")) {
+        let marker = std::env::current_exe().unwrap().with_file_name("probe-delay-ms");
+        if let Ok(value) = std::fs::read_to_string(marker) {
+            let millis = value.trim().parse::<u64>().unwrap().min(4000);
+            std::thread::sleep(std::time::Duration::from_millis(millis));
+        }
+    }
     if args.iter().any(|arg| arg == "--version") {
         println!("version: 7000 (abcdef123) v0.7.0");
         return;

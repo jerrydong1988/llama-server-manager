@@ -1732,6 +1732,10 @@ pub async fn load_app_data(
 pub async fn get_cached_scan(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<CachedScan>, String> {
+    // Cache hydration publishes inventory too. Use the same order everywhere
+    // so a delayed startup snapshot cannot replace a completed live scan.
+    let _model_guard = MODEL_SCAN_LOCK.lock().await;
+    let _engine_guard = ENGINE_SCAN_LOCK.lock().await;
     let mut models = model_inventory::list_cached_models()?;
     mark_sharded_models(&mut models);
 

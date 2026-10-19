@@ -36,7 +36,7 @@ use crate::commands::cluster_mdns::{
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_ssh::ipc::{ssh_launch_rpc, stop_ssh_tunnel};
 use crate::commands::config::{
-    load_config, load_window_state, resolve_path, save_config, save_window_state,
+    delete_instance_config, load_config, load_window_state, resolve_path, save_config, save_window_state,
     update_and_persist,
 };
 use crate::commands::download::{
@@ -723,7 +723,7 @@ fn main() {
             get_checkpoint_status, list_checkpoint_statuses, clear_checkpoint,
             load_app_data, get_cached_scan,
             generate_server_command, get_checkpoint_eligibility, start_server, stop_server, delete_instance_log, open_browser,
-            save_config, load_config,
+            save_config, load_config, delete_instance_config,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, check_local_files, delete_managed_local_file,
             enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,

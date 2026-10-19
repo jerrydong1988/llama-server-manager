@@ -10,6 +10,7 @@ import { exportShellCommand, maskCommandArguments, maskStartupCommandSecrets } f
 import { createInstanceSlice } from './src/store/instanceSlice'
 import { createMonitoringSlice } from './src/store/monitoringSlice'
 import { formatConfigValue } from './src/components/ConfigPage/configWorkspace'
+globalThis.window = { __TAURI_INTERNALS__: { invoke: async () => ({ management_revision: 1 }) } } as any
 
 async function run() {
   const literals = ['', 'a b', 'a"b', "a'b", '$env:PATH', '$(echo escaped)', 'x;echo escaped', 'a|b', String.fromCharCode(96) + 'echo escaped' + String.fromCharCode(96), 'line\nvalue', 'C:\\model dir\\']
@@ -26,10 +27,11 @@ async function run() {
 
   let state: any = { instances: [{ id: 'gone' }, { id: 'live' }], checkpointStatuses: { gone: {}, live: {} }, logs: { gone: [], live: [] }, recentLogs: [{ instanceId: 'gone', timestamp: 1 }], monitoringFramesByInstance: { gone: [] }, monitoringCurrentByInstance: { gone: {} }, runningTasksByInstance: { gone: [] }, lastCompletedTaskByInstance: { gone: {} }, instanceLifecycle: { gone: {} } }
   const set = (update: any) => { state = { ...state, ...(typeof update === 'function' ? update(state) : update) } }
+  Object.assign(state, { modelDirs: [], engineDirs: [], defaultEngineId: '' })
   Object.assign(state, createInstanceSlice(set, () => state, []), createMonitoringSlice(set))
   const frame = { instanceId: 'gone', ts: 5, sessionStartedAt: 1 }
   state.ingestMonitoringFrame(frame)
-  state.deleteInstance('gone')
+  await state.deleteInstance('gone')
   state.hydrateMonitoringFrames([frame])
   state.applyPerfUpdate({ instanceId: 'gone', tasks: [], lastCompleted: {} })
   await new Promise(resolve => setTimeout(resolve, 80))
