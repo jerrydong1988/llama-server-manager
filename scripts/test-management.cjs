@@ -86,6 +86,19 @@ async function run() {
   const model = path.join(modelDir, 'fixture.gguf')
   const header = Buffer.alloc(24); header.write('GGUF'); header.writeUInt32LE(3, 4); fs.writeFileSync(model, header)
 
+  // Legacy GUI presets can share an endpoint while remaining stopped. Seed
+  // their persisted shape before starting the host, without bypassing its CAS.
+  const sharedPort = await freePort()
+  fs.mkdirSync(path.join(data, 'configs'))
+  fs.writeFileSync(path.join(data, 'configs', 'instances.json'), JSON.stringify({
+    instances: Object.fromEntries(['shared-managed', 'shared-manual'].map(id => [id, {
+      id, name: id, model_path: model, host: '127.0.0.1', port: sharedPort,
+      launch_mode: id === 'shared-manual' ? 'manual' : 'managed',
+      manual_command: `--model "${model}" --host 127.0.0.1`, explicit_overrides: [],
+    }])), instance_order: ['shared-managed', 'shared-manual'],
+    model_dirs: [], engine_dirs: [], default_engine_id: '', running: {},
+  }), 'utf8')
+
   const started = await call('service.start')
   hostPid = started.data.pid
   assert.equal(started.data.protocol, 1)
@@ -131,6 +144,44 @@ async function run() {
   assert.equal((await call('engines.rename', { id: engineId, name: 'Different' }, ['--idempotency-key', 'rename-once'], false)).error.code, 'IDEMPOTENCY_CONFLICT')
   engines = (await call('engines.list')).data
   await mutate('engines.default', { id: engineId, revision: engines.revision })
+
+  const sharedMcp = await managementClient({ cli, app: executable, data }).mcp()
+  try {
+    const before = (await call('instances.get', { id: 'shared-managed' })).data
+    await mutate('instances.update', { id: 'shared-managed', revision: before.revision,
+      patch: { name: 'Renamed shared preset', engine_id: engineId, temp: 0.72, host: '127.0.0.1', port: sharedPort } })
+    const fromCli = await sharedMcp.tool('instances.get', { id: 'shared-managed' })
+    assert.equal(fromCli.config.temp, 0.72)
+    assert.equal(fromCli.config.port, sharedPort)
+    assert.equal((await mutate('instances.update', { id: 'shared-managed', revision: before.revision,
+      patch: { temp: 0.9 } }, [], false)).error.code, 'CONFIG_CONFLICT')
+    await sharedMcp.mutate('instances.update', { id: 'shared-manual', revision: fromCli.revision,
+      patch: { engine_id: engineId, temp: 0.73 } })
+    const fromMcp = (await call('instances.get', { id: 'shared-manual' })).data
+    assert.equal(fromMcp.config.temp, 0.73)
+    assert.equal(fromMcp.config.port, sharedPort)
+    for (const [operation, args] of [
+      ['instances.create', { id: 'conflict-create', config: { engine_id: engineId,
+        model_path: model, host: '127.0.0.1', port: sharedPort } }],
+      ['instances.clone', { id: 'shared-manual', new_id: 'conflict-clone', patch: {} }],
+    ]) {
+      const refused = await mutate(operation, { ...args, revision: fromMcp.revision }, [], false)
+      assert.equal(refused.ok, false)
+      assert.match(refused.error.message, /host\/port conflicts/)
+      assert.equal((await call('service.status')).data.revision, fromMcp.revision)
+    }
+    const moved = await mutate('instances.update', { id: 'shared-managed', revision: fromMcp.revision,
+      patch: { port: await freePort() } })
+    const refused = await sharedMcp.mutate('instances.update', { id: 'shared-managed',
+      revision: moved.data.result.revision, patch: { port: sharedPort } }, true)
+    assert.equal(refused.status, 'failed')
+    assert.match(refused.error.message, /host\/port conflicts/)
+    for (const id of ['shared-managed', 'shared-manual']) {
+      const revision = (await call('service.status')).data.revision
+      await mutate('instances.delete', { id, revision })
+    }
+    checks += 3 // real MCP get/update/rejected update
+  } finally { await sharedMcp.close() }
 
   const port = await freePort()
   const secret = 'management-fixture-secret-1234567890'

@@ -21,7 +21,7 @@ mod storage_maintenance;
 mod utils;
 mod vector_policy;
 
-use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
+use crate::commands::autostart::ipc::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::commands::checkpoint::{
     clear_checkpoint, get_checkpoint_status, list_checkpoint_statuses,
 };
@@ -307,11 +307,8 @@ fn get_startup_elapsed() -> u64 {
 }
 
 #[tauri::command]
-fn show_window(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+fn show_window(app: tauri::AppHandle) -> Result<(), String> {
+    restore_main_window(&app)
 }
 
 #[tauri::command]
@@ -424,6 +421,15 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
+fn restore_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    ensure_main_window(app).map_err(|error| error.to_string())?;
+    let window = app.get_webview_window("main")
+        .ok_or_else(|| "main window is unavailable".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.unminimize().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 fn main() {
     if let Some(index) = std::env::args_os().position(|arg| arg == "--management-data-dir") {
         let Some(path) = std::env::args_os().nth(index + 1) else {
@@ -481,11 +487,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|arg| arg == "--management-service") { return; }
-            let _ = ensure_main_window(app);
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let _ = restore_main_window(app);
         }))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -543,11 +545,7 @@ fn main() {
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
                         "show" => {
-                            let _ = ensure_main_window(app);
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                            let _ = restore_main_window(app);
                         }
                         "quit" => {
                             let (workloads_active, runtime_service_enabled) =
@@ -574,11 +572,7 @@ fn main() {
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                         let app = tray.app_handle();
-                        let _ = ensure_main_window(app);
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        let _ = restore_main_window(app);
                     }
                 });
             #[cfg(target_os = "macos")]

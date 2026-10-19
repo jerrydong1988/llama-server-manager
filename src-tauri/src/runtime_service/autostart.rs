@@ -76,7 +76,7 @@ fn windows_registry_error(action: &str, code: u32) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn set_windows_autostart(command: &str) -> Result<(), String> {
+pub(crate) fn set_windows_run_entry(name: &str, command: &str) -> Result<(), String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
@@ -84,7 +84,7 @@ fn set_windows_autostart(command: &str) -> Result<(), String> {
     };
 
     let subkey = windows_wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
-    let value_name = windows_wide(WINDOWS_VALUE_NAME);
+    let value_name = windows_wide(name);
     let value = windows_wide(command);
     let mut key = std::ptr::null_mut();
     let create_result = unsafe {
@@ -102,7 +102,7 @@ fn set_windows_autostart(command: &str) -> Result<(), String> {
     };
     if create_result != ERROR_SUCCESS {
         return Err(windows_registry_error(
-            "注册后台运行时登录启动失败",
+            "注册登录启动失败",
             create_result,
         ));
     }
@@ -121,7 +121,7 @@ fn set_windows_autostart(command: &str) -> Result<(), String> {
     }
     if set_result != ERROR_SUCCESS {
         return Err(windows_registry_error(
-            "写入后台运行时登录启动项失败",
+            "写入登录启动项失败",
             set_result,
         ));
     }
@@ -129,31 +129,31 @@ fn set_windows_autostart(command: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn delete_windows_autostart() -> Result<(), String> {
+pub(crate) fn delete_windows_run_entry(name: &str) -> Result<(), String> {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
 
     let subkey = windows_wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
-    let value_name = windows_wide(WINDOWS_VALUE_NAME);
+    let value_name = windows_wide(name);
     let result =
         unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, subkey.as_ptr(), value_name.as_ptr()) };
     if matches!(result, ERROR_SUCCESS | ERROR_FILE_NOT_FOUND) {
         Ok(())
     } else {
         Err(windows_registry_error(
-            "删除后台运行时登录启动项失败",
+            "删除登录启动项失败",
             result,
         ))
     }
 }
 
 #[cfg(target_os = "windows")]
-fn read_windows_autostart() -> Result<Option<String>, String> {
+pub(crate) fn read_windows_run_entry(name: &str) -> Result<Option<String>, String> {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
 
     let subkey = windows_wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
-    let value_name = windows_wide(WINDOWS_VALUE_NAME);
+    let value_name = windows_wide(name);
     let mut byte_len = 0_u32;
     let size_result = unsafe {
         RegGetValueW(
@@ -171,7 +171,7 @@ fn read_windows_autostart() -> Result<Option<String>, String> {
     }
     if size_result != ERROR_SUCCESS {
         return Err(windows_registry_error(
-            "读取后台运行时登录启动项失败",
+            "读取登录启动项失败",
             size_result,
         ));
     }
@@ -189,7 +189,7 @@ fn read_windows_autostart() -> Result<Option<String>, String> {
     };
     if read_result != ERROR_SUCCESS {
         return Err(windows_registry_error(
-            "读取后台运行时登录启动项失败",
+            "读取登录启动项失败",
             read_result,
         ));
     }
@@ -277,7 +277,7 @@ pub fn enable_runtime_autostart() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        set_windows_autostart(&windows_command(&executable, &data_dir))?;
+        set_windows_run_entry(WINDOWS_VALUE_NAME, &windows_command(&executable, &data_dir))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -386,7 +386,7 @@ pub fn enable_runtime_autostart() -> Result<(), String> {
 pub fn disable_runtime_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        delete_windows_autostart()?;
+        delete_windows_run_entry(WINDOWS_VALUE_NAME)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -453,7 +453,7 @@ pub fn is_runtime_autostart_enabled() -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        read_windows_autostart().map(|registered| {
+        read_windows_run_entry(WINDOWS_VALUE_NAME).map(|registered| {
             registered.as_deref() == Some(&windows_command(&executable, &data_dir))
         })
     }
