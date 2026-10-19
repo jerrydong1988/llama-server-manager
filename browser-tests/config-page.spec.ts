@@ -92,6 +92,78 @@ test('decimal parameter edits retain typed fractions', async ({ page }) => {
   await expect(temp).toHaveValue('0.83')
 })
 
+test('all floating point controls accept fractions without step validation errors', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const fields = [
+    'temp', 'top_p', 'repeat_penalty', 'min_p', 'presence_penalty', 'frequency_penalty',
+    'mirostat_lr', 'mirostat_ent', 'xtc_probability', 'xtc_threshold', 'dynatemp_range',
+    'dynatemp_exp', 'typical_p', 'dry_multiplier', 'dry_base', 'adaptive_target',
+    'adaptive_decay', 'top_n_sigma', 'spec_draft_p_min', 'spec_draft_p_split',
+    'rope_scale', 'rope_freq_base', 'rope_freq_scale', 'yarn_ext_factor',
+    'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast', 'slot_prompt_similarity',
+  ]
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  for (const field of fields) {
+    await search.fill(`--${field.replace(/_/g, '-')}`)
+    const input = page.locator(`[data-config-field="${field}"] input`)
+    await input.fill('0.51')
+    expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), field).toBe(true)
+  }
+  await search.fill('--temp')
+  const temp = page.locator('[data-config-field="temp"] input')
+  for (const value of ['0.123456789', '1e-8']) {
+    await temp.fill(value)
+    expect(await temp.evaluate(element => (element as HTMLInputElement).validity.valid)).toBe(true)
+  }
+  await temp.fill('2.1')
+  expect(await temp.evaluate(element => (element as HTMLInputElement).validity.rangeOverflow)).toBe(true)
+})
+
+test('integer controls accept arbitrary integers and retain incomplete intent edits', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  for (const [field, value] of [['reasoning_budget', '256'], ['cache_ram', '8192'], ['moe_cache_mib', '513']]) {
+    await search.fill(`--${field.replace(/_/g, '-')}`)
+    const input = page.locator(`[data-config-field="${field}"] input`)
+    await input.fill(value)
+    expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), field).toBe(true)
+    await input.fill('256.5')
+    expect(await input.evaluate(element => (element as HTMLInputElement).validity.stepMismatch), field).toBe(true)
+    await input.press('Tab')
+    await expect(input).toHaveValue(value)
+  }
+  await search.fill('--ctx-size')
+  const context = page.locator('[data-config-field="ctx_size"]')
+  await context.getByRole('combobox').selectOption('manual')
+  const input = context.locator('input')
+  await input.fill('2049')
+  expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity())).toBe(true)
+  await input.fill('')
+  await input.press('Tab')
+  await expect(input).toHaveValue('2049')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].ctx_size)).toBe(2049)
+})
+
+test('initial load and document reload use the current host snapshot', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=stale-window-snapshot')
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    await expect(page.getByText('External CLI instance', { exact: true }).first()).toBeVisible()
+    await page.getByText('External CLI instance', { exact: true }).first().click()
+    await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+    await expect(page.locator('[data-config-field="temp"] input')).toHaveValue('0.51')
+    if (iteration === 0) {
+      await page.evaluate(() => localStorage.setItem('lastTab', 'instances'))
+      await page.reload()
+    }
+  }
+})
+
 test('numeric parameter edits accept negative sentinel values', async ({ page }) => {
   await openConfiguration(page, 'v070-parameters')
   await page.getByRole('textbox', { name: '参数搜索' }).fill('--adaptive-target')

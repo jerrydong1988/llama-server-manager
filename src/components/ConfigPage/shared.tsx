@@ -406,27 +406,42 @@ export const Input = ({ label, value, onChange, placeholder, type, title, disabl
     </FieldFrame>
 )}
 
-export const Num = ({ label, value, onChange, min, max, step, title, disabled, fieldKey }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
+type NumericInputProps = {
+  value: number
+  onChange: (value: number) => void
+  min?: number
+  max?: number
+  step?: number | 'any'
+  disabled?: boolean
+  className?: string
+}
+
+const NumericInput = ({ value, onChange, min, max, step, disabled, className }: NumericInputProps) => {
   // Preserve intermediate edits (empty, minus sign, decimal point/exponent).
-  // Only finite complete numbers update configuration; blur restores the last
-  // valid value. External changes such as inheritance/undo take precedence.
+  // Only finite numbers of the field's type update configuration; blur restores
+  // the last valid value. External changes such as inheritance/undo take precedence.
   const [edit, setEdit] = useState<{ value: number; text: string } | null>(null)
   const text = edit && Object.is(edit.value, value) ? edit.text : String(value)
   return (
-    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <TextInput
-        type="number" value={text} min={min} max={max} step={step ?? 1}
-        onChange={event => {
-          const next = event.target.valueAsNumber
-          const complete = Number.isFinite(next)
-          setEdit({ value: complete ? next : value, text: event.target.value })
-          if (complete) onChange(next)
-        }}
-        onBlur={() => setEdit(null)}
-        disabled={disabled} className="h-10 w-full"
-      />
-    </FieldFrame>
-)}
+    <TextInput
+      type="number" value={text} min={min} max={max} step={step ?? 1}
+      onChange={event => {
+        const next = event.target.valueAsNumber
+        const complete = Number.isFinite(next) && (step === 'any' || Number.isInteger(next))
+        setEdit({ value: complete ? next : value, text: event.target.value })
+        if (complete) onChange(next)
+      }}
+      onBlur={() => setEdit(null)}
+      disabled={disabled} className={className}
+    />
+  )
+}
+
+export const Num = ({ label, title, fieldKey, ...input }: NumericInputProps & { label: string; title?: string; fieldKey?: FieldKey }) => (
+  <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={input.disabled}>
+    <NumericInput {...input} className="h-10 w-full" />
+  </FieldFrame>
+)
 
 export const IntentNum = ({
   label,
@@ -491,13 +506,12 @@ export const IntentNum = ({
             {engineDefault ?? inheritedLabel}
           </div>
         ) : (
-          <TextInput
-            type="number"
+          <NumericInput
             value={value}
             min={min}
             max={max}
-            step={step || 1}
-            onChange={event => onChange(parseFloat(event.target.value) || 0)}
+            step={step ?? 1}
+            onChange={onChange}
             disabled={disabled}
             className="h-10 min-w-0 w-full"
           />

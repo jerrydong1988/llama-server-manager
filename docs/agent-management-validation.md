@@ -29,8 +29,10 @@ $AgentData = 'C:\LSM-Agent-Test'
 
 ## 2. PowerShell 参数助手
 
-为避免 Windows PowerShell 对 JSON 双引号的转义差异，可复制这个函数。它使用临时 UTF-8
-参数文件，退出时删除；无需修改全局 PowerShell 配置。
+在 PowerShell 7 中可复制下面的函数。它使用临时 UTF-8 参数文件，避免命令行 JSON 双引号的
+转义差异，退出时删除；无需修改全局 PowerShell 配置。响应使用区分大小写的哈希表解析，
+以保留引擎参数中的 `-C` / `-c` 等不同键；Windows PowerShell 5.1 请直接读取 CLI 的原始 JSON，
+或使用 PowerShell 7 运行此助手。
 
 ```powershell
 function Invoke-Lsm {
@@ -42,7 +44,7 @@ function Invoke-Lsm {
         if ($WaitTask) { $CommandArgs += @('--wait', '--timeout', '300') }
         $OutputJson = & .\lsm.exe @CommandArgs
         if ($LASTEXITCODE -ne 0) { throw ($OutputJson -join "`n") }
-        $OutputJson | ConvertFrom-Json
+        $OutputJson | ConvertFrom-Json -AsHashtable
     } finally { Remove-Item -LiteralPath $ArgumentFile -Force }
 }
 ```
@@ -171,6 +173,11 @@ SSH 停止的端口是返回的本地隧道端口，不是远端 RPC 端口。
    检查启动命令包含相同数值。`恢复引擎默认` 应取消固定，并从命令中去掉对应参数。
 5. 旧文件中的 `0.800000011920929` 等展开值在载入后恢复简洁显示，下次正常保存时写为简洁数字；
    不改变已记录的固定/继承意图，也不修改手动命令文本。
+6. 小数参数可输入 `0.51`、`0.123456789` 或 `1e-8`，不应出现步长不匹配提示；
+   整数参数可输入非整块大小，例如上下文 `2049`、缓存 `513`。清空整数输入后移开焦点，
+   或输入小数后移开焦点，应恢复上一个有效整数，不把空值写成零或把小数截断。
+7. CLI/MCP 创建实例或修改配置后，按 `Ctrl+R` 刷新管理窗口，列表、参数与运行状态应继续
+   使用宿主的最新配置。关闭窗口、重新显示窗口和重启管理宿主分别验证，不能只测试页面切换。
 
 统一数值序列化覆盖全部 28 个浮点配置字段（采样、RoPE/YaRN、推测解码和 slot 参数）。
 这些字段继续使用引擎侧的单精度语义；输出为能回读到同一单精度值的简洁十进制，

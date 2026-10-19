@@ -1589,4 +1589,12 @@ mockIPC((command, payload) => {
 
 window.__TAURI_BROWSER_TEST__ = control
 window.__INITIAL_CONFIG__ = clone(state)
+if (BROWSER_SCENARIO === 'stale-window-snapshot') {
+  // The host has accepted an external write since this WebView was created.
+  // On reload, its initialization script would replay the older snapshot.
+  control.state.instances['external-instance'] = {
+    ...clone(instanceConfig), name: 'External CLI instance', alias: 'external-cli', port: 18082, temp: 0.51,
+  }
+  control.state.management_revision = 1
+}
 syncAutomationProbe()

@@ -342,19 +342,15 @@ export async function loadAppBootstrap(
         return null
       })
 
-    const injected = window.__INITIAL_CONFIG__
-    let configPromise: Promise<GlobalConfigShape>
-    if (injected) {
-      window.__INITIAL_CONFIG__ = null
-      startupTimings.push({ name: 'config-source', ms: 0 })
-      configPromise = Promise.resolve(injected)
-    } else {
-      const ipcStartedAt = performance.now()
-      configPromise = invoke<GlobalConfigShape>('load_config').then((global) => {
-        startupTimings.push({ name: 'config-source', ms: Math.round(performance.now() - ipcStartedAt) })
-        return global
-      })
-    }
+    // A WebView initialization script is replayed on every document reload.
+    // Its window-creation snapshot may predate GUI, CLI or MCP writes, so always
+    // read the host's current configuration before publishing editable state.
+    window.__INITIAL_CONFIG__ = null
+    const ipcStartedAt = performance.now()
+    const configPromise = invoke<GlobalConfigShape>('load_config').then((global) => {
+      startupTimings.push({ name: 'config-source', ms: Math.round(performance.now() - ipcStartedAt) })
+      return global
+    })
 
     // Read the config and cached inventory concurrently, but always hydrate the cache before
     // processConfig starts its newer background scans. Otherwise the scan generation can advance

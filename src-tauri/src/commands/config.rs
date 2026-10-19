@@ -270,11 +270,6 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
     read_config_unlocked(config_dir)
 }
 
-pub fn management_snapshot(config_dir: &std::path::Path) -> (GlobalConfig, u64) {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
-    (read_config_unlocked(config_dir), management_revision())
-}
-
 fn read_config_unlocked(config_dir: &std::path::Path) -> GlobalConfig {
     let mut global = load_global_config_file(config_dir);
 

@@ -405,14 +405,10 @@ fn tray_icon_image() -> Result<tauri::image::Image<'static>, tauri::Error> {
 fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
     if app.get_webview_window("main").is_some() { return Ok(()); }
     let config_dir = crate::utils::get_data_dir().join("configs");
-    let (config, revision) = crate::commands::config::management_snapshot(&config_dir);
-    let mut initial = serde_json::to_value(&config)?;
-    initial["management_revision"] = serde_json::json!(revision);
-    let script = format!("window.__INITIAL_CONFIG__ = {};", initial);
     let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
         .title("Llama 服务器管理器").inner_size(1280.0, 800.0).min_inner_size(1024.0, 720.0)
         .resizable(true).fullscreen(false).visible(false)
-        .background_color(tauri::utils::config::Color(26, 26, 46, 255)).initialization_script(&script);
+        .background_color(tauri::utils::config::Color(26, 26, 46, 255));
     if let Some(state) = crate::commands::config::read_window_state_from_disk(&config_dir) {
         builder = builder.position(state.x as f64, state.y as f64).inner_size(state.width as f64, state.height as f64);
     }
@@ -582,8 +578,8 @@ fn main() {
             tray_builder.build(app.handle())?;
             timings.push(("setup-tray-done".into(), now()));
 
-            // Read config early and inject it into the frontend through initialization_script.
-            // Avoid IPC cold-start delay; frontend JS can read window.__INITIAL_CONFIG__ immediately.
+            // Read config early for host initialization and storage maintenance.
+            // The frontend obtains a fresh snapshot through load_config on every load.
             let data_dir = crate::utils::get_data_dir();
             let config_dir = data_dir.join("configs");
             let config = crate::commands::config::read_config_from_disk(&config_dir);
@@ -595,7 +591,7 @@ fn main() {
             });
             timings.push(("setup-config-read".into(), now()));
 
-            // Create the window programmatically and inject config data.
+            // Create the window programmatically.
             if !crate::management::hidden_start() { ensure_main_window(app.handle())?; }
             timings.push(("setup-window-built".into(), now()));
 
