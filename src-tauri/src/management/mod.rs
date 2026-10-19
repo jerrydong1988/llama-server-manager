@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 mod catalog;
+mod extended;
 mod operations;
 #[allow(dead_code)]
 mod transport;
@@ -199,12 +200,13 @@ impl Host {
                 match request.operation.as_str() {
                     "downloads.clear" => json!({"clear_statuses":request.arguments["statuses"]}),
                     "downloads.cancel_all" => json!({"cancel_all":true}),
+                    "downloads.delete_file" => json!({"deleted_file":request.arguments["id"]}),
                     _ => Value::Null,
                 }
             } else {
                 Value::Null
             };
-            let _ = host.app.emit("management-config-changed", json!({"operation":request.operation,"revision":crate::commands::config::management_revision(),"download_effect":download_effect}));
+            let _ = host.app.emit("management-config-changed", json!({"operation":request.operation,"revision":crate::commands::config::management_revision(),"download_effect":download_effect,"status":status,"resource_id":request.arguments.get("id")}));
         });
         Ok(json!({"task_id":task_id,"status":"queued"}))
     }

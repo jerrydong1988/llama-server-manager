@@ -26,7 +26,7 @@ fn runtime_executable() -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_quote_argument(value: &Path) -> String {
+pub(crate) fn windows_quote_argument(value: &Path) -> String {
     let mut quoted = String::from("\"");
     let mut backslashes = 0_usize;
     for character in value.to_string_lossy().chars() {

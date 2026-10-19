@@ -34,7 +34,7 @@ fn main() {
             let request = String::from_utf8_lossy(&bytes[..count]);
             let target = request.split_whitespace().nth(1).unwrap_or("/");
             let (kind, body) = if target.starts_with("/metrics") {
-                ("text/plain","llamacpp:prompt_tokens_total 100\nllamacpp:tokens_predicted_total 20\nllamacpp:requests_processing 0\n")
+                ("text/plain","llamacpp:prompt_tokens_total 100\nllamacpp:tokens_predicted_total 20\nllamacpp:requests_processing 0\nllamacpp:predicted_tokens_seconds 10\nllamacpp:prompt_tokens_seconds 100\nllamacpp:n_decode_total 20\nllamacpp:n_tokens_max 100\nllamacpp:requests_deferred 0\nllamacpp:n_busy_slots_per_decode 1\n")
             } else if target.starts_with("/slots") {
                 ("application/json", "[{\"id\":0,\"is_processing\":false}]")
             } else if target.starts_with("/v1/models") {

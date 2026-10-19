@@ -17,7 +17,7 @@ try {
     fs.copyFileSync(path.join(root, 'src-tauri', 'target', 'release', binary + extension), path.join(directory, binary + extension))
     if (process.platform !== 'win32') fs.chmodSync(path.join(directory, binary), 0o755)
   }
-  for (const doc of ['agent-management-validation.md', 'agent-management-exploration.md']) {
+  for (const doc of ['agent-management-validation.md', 'agent-management-exploration.md', 'agent-management-noncluster-validation.md']) {
     fs.copyFileSync(path.join(root, 'docs', doc), path.join(directory, doc))
   }
   fs.writeFileSync(path.join(directory, 'BUILD.json'), JSON.stringify({ exploration: true, version: require('../package.json').version, revision, platform, built_at: new Date().toISOString(), formal_release: false }, null, 2) + '\n')

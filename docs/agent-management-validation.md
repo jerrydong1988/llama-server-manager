@@ -112,9 +112,10 @@ Invoke-Lsm instances.logs @{ id='agent-test'; lines=100 }
 
 - 不加授权参数：只读工具。
 - `--allow-write`：刷新、探测、配置、下载入队、实例/路由启停。
-- `--allow-delete`：删除模型/实例/引擎库存、取消下载、清理下载记录。
+- `--allow-delete`：删除模型/实例/引擎库存或下载文件、取消下载、清理下载记录、检查点、用量与可清理存储。
 - `--allow-cluster`：节点注册/批准、发现、本地 RPC 和 SSH 管理。
-- 每项单独开放。路径授权/撤销、宿主退出属于本机所有者 CLI，不暴露给 MCP。
+- 每项单独开放。路径授权/撤销、宿主强制退出、登录启动项修改属于本机所有者 CLI，不暴露给 MCP。
+  `runtime.detach` 为已授权的后台交接，属于 write；它保留引擎与路由并退出宿主。
 
 工具名使用下划线，例如 `engines_list`、`instances_create`。建议先让 Agent 调用
 `service_capabilities`、`instances_defaults`、`engines_list`，再执行具体任务。
@@ -208,6 +209,10 @@ SSH 停止的端口是返回的本地隧道端口，不是远端 RPC 端口。
 配置修改串行执行，长时间扫描/网络操作可能使后续修改等待；等待超时不代表取消任务。
 
 ## 7. 验证范围与回退
+
+新增接口及实际 Windows 验证结果见 [非集群交叉验证](agent-management-noncluster-validation.md)。
+检查点兼容性必须先调用 `checkpoints.eligibility`；本轮 Qwen3.8 27B 返回
+`hybrid_recurrent_unsupported`，不能在该模型上强行启用检查点，也不能把冷启动算作恢复成功。
 
 自动化覆盖 CLI、MCP、认证 IPC、类型/未知字段、配置冲突、密钥脱敏、手动端口、进程生命周期、
 路由转发、任务幂等、重启恢复，以及现有浏览器/Rust/运行时回归。

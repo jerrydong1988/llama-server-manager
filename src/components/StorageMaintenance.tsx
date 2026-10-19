@@ -114,6 +114,14 @@ export default function StorageMaintenance() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const operation = (event as CustomEvent<{ operation: string }>).detail.operation
+      if (/^(storage|telemetry|paths|instances|checkpoints)\./.test(operation)) void load()
+    }
+    window.addEventListener('lsm-management-resource-changed', changed)
+    return () => window.removeEventListener('lsm-management-resource-changed', changed)
+  }, [load])
 
   const groupCopy = (id: string) => {
     const groups = labels.groups as Record<string, { title: string; description: string; warning?: string }>

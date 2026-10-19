@@ -216,12 +216,40 @@ impl DownloadDirectory {
     pub fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         let mut options = OpenOptions::new();
         options.write(true).follow(FollowSymlinks::No);
-        self.dir
-            .open_with(self.leaf(from)?, &options)?
-            .into_std()
-            .sync_all()?;
+        let source = self.dir.open_with(self.leaf(from)?, &options)?.into_std();
+        source.sync_all()?;
+        #[cfg(windows)]
+        let creation = {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+            };
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            if unsafe { GetFileInformationByHandle(source.as_raw_handle(), &mut info) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            info.ftCreationTime
+        };
         self.dir
             .rename(self.leaf(from)?, &self.dir, self.leaf(to)?)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            // NTFS filename tunneling can copy a recently deleted destination's birth
+            // time onto the renamed file. Restore our recorded birth time using the
+            // still-open source handle, never a reopened, replaceable destination.
+            if unsafe {
+                windows_sys::Win32::Storage::FileSystem::SetFileTime(
+                    source.as_raw_handle(),
+                    &creation,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
         #[cfg(unix)]
         // Directory capabilities may use O_PATH on Linux, which cannot be
         // fsynced. Reopen "." relative to the pinned directory for a readable
@@ -260,6 +288,26 @@ impl DownloadDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn publication_after_deleted_destination_preserves_owned_identity() {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("download-tunneling-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = DownloadDirectory::open(&base, false).unwrap();
+        let target = base.join("model.gguf");
+        dir.atomic_write(&target, b"foreign").unwrap();
+        dir.remove(&target).unwrap();
+        let partial = dir.stage_write(b"downloaded").unwrap();
+        let expected = dir.identity(&partial).unwrap();
+        dir.rename(&partial, &target).unwrap();
+        assert_eq!(dir.identity(&target).unwrap(), expected);
+        dir.remove_owned(&target, &[expected]).unwrap();
+        assert!(!target.exists());
+        drop(dir);
+        std::fs::remove_dir_all(base).unwrap();
+    }
     #[test]
     fn pinned_directory_never_writes_or_removes_from_replacement() {
         let base = std::env::temp_dir()

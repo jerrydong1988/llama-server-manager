@@ -41,6 +41,30 @@ Linux 的管理宿主仍需要桌面会话；真正无 DISPLAY 的 Linux daemon 
 | 路由 | 配置读取、校验/保存、状态、目标、路由测试、启停/重启 | 返回值隐藏密钥；配置修改保留未修改密钥；并发修改冲突检查 |
 | 观测 | 系统健康、运行时、监控、日志、任务与审计查询 | Prefill/Decode 的实时/阶段平均/不可用字段原样保留；任务摘要数量与输出大小限制 |
 
+### 非集群接口扩展（2026-10-19）
+
+新增 44 项操作，覆盖现有非集群后端的管理功能；具体参数以 `lsm help` 和
+`service.capabilities` 返回的 schema 为准。CLI 使用空格分隔，MCP 将点替换为下划线。
+
+| 领域 | 新增操作 | 语义 |
+| --- | --- | --- |
+| 窗口与后台 | `service.hide`、`runtime.status/clear_error/detach/stop` | 隐藏不退出；detach 完成接管和任务持久化后退出宿主；stop 停止后台实例与路由 |
+| 模型与下载 | `models.open_folder`、`downloads.local_files/delete_file` | 本地文件检查仅限授权根；删除必须证明下载所有权，并再次检查整个模型分片组的引用 |
+| 实例诊断 | `instances.clear_log/slots/metrics/test_connection/resources/open_browser` | 复用当前运行实例的健康、端点及资源数据；日志清除同步已打开窗口 |
+| 检查点 | `checkpoints.list/status/eligibility/clear` | 资格、文件恢复和请求缓存复用是不同状态；运行中不能清除；不放宽架构兼容限制 |
+| 参数模板 | `presets.list/preview/apply` | GUI 与接口使用同一份内置模板；preview 不落盘；apply 需最新 revision，仅保存、不重启 |
+| 路由用量 | `usage.summary/requests/performance/budgets/export/clear` | 逐请求、汇总、延迟、预算/硬额度及 CSV；清理历史不重置额度账本，未知 token 不伪装成零 |
+| 监控历史 | `monitoring.series`、`telemetry.overview/sessions/samples/detail/analysis/diagnostics/requests/prune/optimize` | 复用实时与持久化遥测；有界查询；清理与优化遵守原保护规则 |
+| 存储维护 | `storage.inventory/external/cleanup/webview_cleanup` | 仅已知存储组可清理；WebView 缓存按下次启动计划处理；外部文件只报告引用 |
+| 系统 | `system.port/autostart/set_autostart` | 自启动设置仅本机所有者 CLI 可改，保留独立 data-dir，GUI 接收变更通知 |
+
+删除、清理与遥测优化需要 MCP `--allow-delete`；后台交接需要 `--allow-write`。
+路径自授权、宿主强制退出和登录启动项修改仍不开放给 MCP。
+窗口布局、主题、语言、文件选择器等界面偏好继续由 GUI 管理；安装正式更新需 GUI 的安装器流程，
+裸可执行文件探索包不自动安装正式版。项目没有引擎包下载安装器，不声明这项能力已实现。
+
+实测矩阵、复现命令和已知边界见 [非集群交叉验证](agent-management-noncluster-validation.md)。
+
 ## 一致性和执行语义
 
 - 修改操作使用宿主内统一锁；按对象修改和 GUI 快照保存共享配置边界。

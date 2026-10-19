@@ -184,9 +184,16 @@ export function registerGlobalStoreListeners(
 ) {
   let managementReloadPending = false
   let managementReloadAgain = false
-  registerListener<{ operation: string; revision: number; download_effect?: { clear_statuses?: string[]; cancel_all?: boolean } | null }>(store, 'management-config-changed', (event) => {
+  registerListener<{ operation: string; revision: number; status?: string; resource_id?: string; download_effect?: { clear_statuses?: string[]; cancel_all?: boolean; deleted_file?: string } | null }>(store, 'management-config-changed', (event) => {
     const operation = event.payload.operation
     const report = (error: unknown) => store.getState().addRuntimeWarning(`管理状态同步失败：${String(error)}`)
+    if (event.payload.status === 'succeeded') {
+      window.dispatchEvent(new CustomEvent('lsm-management-resource-changed', { detail: { operation } }))
+      if (operation === 'instances.clear_log' && event.payload.resource_id) {
+        const id = event.payload.resource_id
+        store.setState(state => ({ logs: { ...state.logs, [id]: [] }, recentLogs: state.recentLogs.filter(entry => entry.instanceId !== id) }))
+      }
+    }
     if (operation.startsWith('engines.')) {
       void invoke<AppState['engines']>('get_engines').then(engines => store.setState({ engines })).catch(report)
     }
@@ -203,7 +210,7 @@ export function registerGlobalStoreListeners(
         store.setState(state => {
           const tasks = { ...state.downloadTasks }
           for (const [id, task] of Object.entries(tasks)) {
-            if (effect.clear_statuses?.includes(task.status)) delete tasks[id]
+            if (effect.deleted_file === id || effect.clear_statuses?.includes(task.status)) delete tasks[id]
             else if (effect.cancel_all && ['active', 'paused', 'pausing', 'queued'].includes(task.status)) {
               tasks[id] = { ...task, status: 'cancelled', speed: 0 }
             }

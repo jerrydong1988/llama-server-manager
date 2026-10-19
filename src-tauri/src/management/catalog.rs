@@ -17,11 +17,15 @@ impl Operation {
             let (name, kind) = field.split_once(':').expect("catalog field");
             let optional = name.ends_with('?');
             let name = name.trim_end_matches('?');
-            let schema = match kind {
-                "strings" => json!({"type":"array","items":{"type":"string"},"maxItems":1000}),
-                "integer" => json!({"type":"integer","minimum":0}),
-                "string" => json!({"type":"string","minLength":1,"maxLength":32768}),
-                _ => json!({"type":kind}),
+            let schema = if name == "query" && self.name.starts_with("usage.") {
+                usage_query_schema(self.name == "usage.requests")
+            } else {
+                match kind {
+                    "strings" => json!({"type":"array","items":{"type":"string"},"maxItems":1000}),
+                    "integer" => json!({"type":"integer","minimum":0}),
+                    "string" => json!({"type":"string","minLength":1,"maxLength":32768}),
+                    _ => json!({"type":kind}),
+                }
             };
             properties.insert(name.into(), schema);
             if !optional {
@@ -81,11 +85,39 @@ impl Operation {
     }
 }
 
+fn usage_query_schema(requests: bool) -> Value {
+    let mut properties = serde_json::Map::new();
+    for name in ["from", "to"] {
+        properties.insert(name.into(), json!({"type":"integer","minimum":0,"maximum":i64::MAX,"description":"Unix time in milliseconds; summary/performance/export require UTC midnight boundaries"}));
+    }
+    for name in ["keyId", "model", "instanceId", "endpoint", "kind"] {
+        properties.insert(name.into(), json!({"type":"string","maxLength":1024}));
+    }
+    if requests {
+        for name in ["outcome", "failureCode", "requestId"] {
+            properties.insert(name.into(), json!({"type":"string","maxLength":128}));
+        }
+        for name in ["minDurationMs", "minQueueMs", "minFirstOutputMs"] {
+            properties.insert(
+                name.into(),
+                json!({"type":"integer","minimum":0,"maximum":u32::MAX}),
+            );
+        }
+        properties.insert("cursor".into(),json!({"type":"object","properties":{"completedAt":{"type":"integer","minimum":0},"requestId":{"type":"string","maxLength":128},"snapshotRowId":{"type":"integer","minimum":0}},"required":["completedAt","requestId","snapshotRowId"],"additionalProperties":false}));
+    }
+    json!({"type":"object","properties":properties,"required":["from","to"],"additionalProperties":false})
+}
+
 pub fn operations() -> Vec<Operation> {
     let entries = [
         ("service.status","Management host and inference runtime status","read",""),
         ("service.capabilities","Discover supported management operations and schemas","read",""),
         ("service.show","Show the desktop window","write",""),
+        ("service.hide","Hide the desktop window without stopping workloads","write",""),
+        ("runtime.status","Read independent runtime status without enabling background mode","read",""),
+        ("runtime.clear_error","Acknowledge the last runtime error","write",""),
+        ("runtime.detach","Enable background/login recovery, acknowledge handoff, then exit the management host","write","enable:boolean"),
+        ("runtime.stop","Disable background mode and stop the independent runtime and workloads","write",""),
         ("service.stop","Stop the management host and its managed workloads","admin",""),
         ("tasks.list","List recent management tasks","read",""),
         ("tasks.get","Get completion, result or failure of a management task","read","id:string"),
@@ -95,6 +127,7 @@ pub fn operations() -> Vec<Operation> {
         ("models.list","List discovered local models","read",""),
         ("models.refresh","Refresh configured model directories","write",""),
         ("models.metadata","Read GGUF model metadata","read","path:string"),
+        ("models.open_folder","Open an authorized model folder","write","path:string"),
         ("models.delete_preview","Inspect model files that would be deleted","read","path:string"),
         ("models.delete","Delete a model using managed file ownership checks","delete","path:string"),
         ("engines.list","List engines, default engine and configured directories","read",""),
@@ -111,6 +144,8 @@ pub fn operations() -> Vec<Operation> {
         ("directories.remove","Remove a scan directory without deleting its files","write","purpose:string path:string revision:string"),
         ("downloads.browse","List downloadable files in a Hugging Face or ModelScope repository","read","source:string repo:string"),
         ("downloads.list","Read durable download queue and scheduling limits","read",""),
+        ("downloads.local_files","Inspect sizes of files in authorized model/download directories","read","paths:strings"),
+        ("downloads.delete_file","Delete a downloaded file by its durable task identity, respecting references","delete","id:string"),
         ("downloads.add","Queue selected repository files for download","write","source:string repo:string files:strings directory:string"),
         ("downloads.pause","Pause one file in a download task","write","id:string file:string"),
         ("downloads.resume","Resume a durable download task","write","id:string"),
@@ -133,6 +168,19 @@ pub fn operations() -> Vec<Operation> {
         ("instances.stop","Stop an instance","write","id:string"),
         ("instances.health","Read current inference health and phase metrics","read","id:string"),
         ("instances.logs","Read a bounded tail of an instance log","read","id:string lines?:integer"),
+        ("instances.clear_log","Delete the persisted log of a stopped instance","delete","id:string"),
+        ("instances.slots","Read actual engine slot state","read","id:string"),
+        ("instances.metrics","Read actual engine metrics; null means unavailable","read","id:string"),
+        ("instances.test_connection","Test the running endpoint using its actual host, port, prefix and credentials","read","id:string"),
+        ("instances.resources","Read process and hardware resource measurements for a running instance","read","id:string"),
+        ("instances.open_browser","Open the running instance web interface","write","id:string"),
+        ("checkpoints.list","List checkpoint states; absence does not mean a saved checkpoint exists","read",""),
+        ("checkpoints.status","Read one instance checkpoint state","read","id:string"),
+        ("checkpoints.eligibility","Assess checkpoint support for the configured instance and engine","read","id:string"),
+        ("checkpoints.clear","Clear a stopped instance checkpoint through the owning runtime","delete","id:string"),
+        ("presets.list","List built-in configuration templates shared with the GUI","read",""),
+        ("presets.preview","Preview template differences and validated launch command without saving","read","id:string preset:string"),
+        ("presets.apply","Apply a built-in template to saved configuration; does not restart the instance","write","id:string preset:string revision:string"),
         ("cluster.list","List configured RPC workers","read",""),
         ("cluster.scan","Discover RPC workers on local networks","cluster",""),
         ("cluster.test","Test a worker address","read","host:string port:integer"),
@@ -155,6 +203,29 @@ pub fn operations() -> Vec<Operation> {
         ("routes.start","Start the API router","write",""),
         ("routes.stop","Stop the API router","write",""),
         ("routes.restart","Restart the API router","write",""),
+        ("usage.summary","Read router usage for UTC-aligned day boundaries in milliseconds","read","query:object"),
+        ("usage.requests","Read a cursor-paginated request ledger with millisecond time bounds","read","query:object"),
+        ("usage.performance","Read route latency and throughput aggregates for UTC days","read","query:object"),
+        ("usage.budgets","Read key budgets, enforced quotas and accounting health","read",""),
+        ("usage.export","Return CSV summary content; does not write arbitrary local files","read","query:object group?:string"),
+        ("usage.clear","Clear usage history in UTC day range; does not reset enforced quotas","delete","from:integer to:integer"),
+        ("monitoring.series","Read recent monitoring frames including distinct Prefill and Decode phases","read","id?:string range_ms?:integer"),
+        ("telemetry.overview","Read persistent telemetry storage and session overview","read",""),
+        ("telemetry.sessions","List recent persisted inference sessions","read","limit?:integer"),
+        ("telemetry.samples","Read bounded metric samples for a session","read","id:string limit?:integer"),
+        ("telemetry.detail","Read session samples, requests, analysis and diagnostics","read","id:string sample_limit?:integer request_limit?:integer"),
+        ("telemetry.analysis","Read session performance analysis","read","id:string"),
+        ("telemetry.diagnostics","Read session diagnostic findings","read","id:string"),
+        ("telemetry.requests","Read bounded inference request history","read","id:string limit?:integer"),
+        ("telemetry.prune","Prune telemetry older than retention_days (1..365)","delete","retention_days:integer"),
+        ("telemetry.optimize","Optimize telemetry storage while all instances are stopped","delete",""),
+        ("storage.inventory","Inspect owned storage groups, cleanup blockers and external references","read",""),
+        ("storage.external","Inspect external artifacts referenced by instance configuration","read",""),
+        ("storage.cleanup","Clean one known disposable storage group; protected data stays protected","delete","group:string"),
+        ("storage.webview_cleanup","Schedule or cancel WebView cache cleanup on next startup","delete","enabled:boolean"),
+        ("system.port","Check whether a host/port is available for binding","read","port:integer host?:string"),
+        ("system.autostart","Read desktop application login startup status","read",""),
+        ("system.set_autostart","Set desktop login startup; local owner CLI only","admin","enabled:boolean"),
         ("system.health","Read local CPU, GPU and memory health","read",""),
     ];
     entries

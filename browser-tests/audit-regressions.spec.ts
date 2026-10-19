@@ -16,6 +16,40 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('referenced engine removal reports the backend refusal and keeps inventory', async ({ page }) => {
+  await openTab(page, 'engine', 'engine-delete-referenced')
+  await page.getByRole('button', { name: '移出列表', exact: true }).last().click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.some(call => (
+    call.command === 'plugin:dialog|message' && String((call.payload as { message?: unknown })?.message).includes('Engine is default, referenced or running')
+  )))).toBe(true)
+  await expect(page.getByRole('button', { name: '移出列表', exact: true }).last()).toBeVisible()
+})
+
+test('external autostart changes update the open desktop toggle', async ({ page }) => {
+  await openTab(page, 'instances')
+  const toggle = page.getByRole('switch', { name: '开机自启动', exact: true })
+  await expect(toggle).not.toBeChecked()
+  await page.evaluate(async () => {
+    window.__TAURI_BROWSER_TEST__.osAutoStart = true
+    await window.__TAURI_BROWSER_TEST__.emitEvent('management-config-changed', {
+      operation: 'system.set_autostart', status: 'succeeded', revision: 0,
+    })
+  })
+  await expect(toggle).toBeChecked()
+  await page.evaluate(() => {
+    window.__TAURI_BROWSER_TEST__.osAutoStart = false
+    window.dispatchEvent(new Event('focus'))
+  })
+  await expect(toggle).not.toBeChecked()
+})
+
+test('portable executables do not request an incompatible installer update', async ({ page }) => {
+  await openTab(page, 'instances', 'updater-unbundled')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'plugin:app|bundle_type'))).toBe(true)
+  await page.getByRole('button', { name: '检查更新', exact: true }).click()
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.updaterCheckCount)).toBe(0)
+})
+
 test('checkpoint file verification does not invent request cache hits', async ({ page }) => {
   await openTab(page, 'instances', 'checkpoint-observation')
   await expect(page.getByText('检查点状态', { exact: true })).toBeVisible()
@@ -141,6 +175,20 @@ test('external cancel all updates paused download cards', async ({ page }) => {
   })
   await expect(page.getByTitle('▶ 继续')).toBeHidden()
   await expect(page.getByText('已取消', { exact: true }).first()).toBeVisible()
+})
+
+test('external owned file deletion removes the matching download card', async ({ page }) => {
+  await openTab(page, 'downloads', 'download-resume')
+  await expect(page.getByRole('button', { name: '已暂停 browser-model.gguf' })).toBeVisible()
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.downloadQueueOverride = []
+    await backend.emitEvent('management-config-changed', {
+      operation: 'downloads.delete_file', revision: 0, status: 'succeeded',
+      download_effect: { deleted_file: 'browser-download-task' },
+    })
+  })
+  await expect(page.getByText('browser-model.gguf', { exact: true })).toHaveCount(0)
 })
 
 test('external download settings refresh open policy controls', async ({ page }) => {

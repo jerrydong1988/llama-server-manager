@@ -212,7 +212,16 @@ async fn prepare_background_exit(
     app: &tauri::AppHandle,
     enable_runtime: bool,
 ) -> Result<(), String> {
-    let _handoff = ExitHandoffGuard::acquire()?;
+    let _handoff = prepare_background_handoff(app, enable_runtime).await?;
+    finalize_app_exit(app, true);
+    Ok(())
+}
+
+async fn prepare_background_handoff(
+    app: &tauri::AppHandle,
+    enable_runtime: bool,
+) -> Result<ExitHandoffGuard, String> {
+    let handoff = ExitHandoffGuard::acquire()?;
     if crate::commands::cluster_ssh::has_active_ssh_tunnels() {
         return Err(
             "仍有由主程序托管的 SSH Worker；请先停止这些 Worker，再退出并保留后台运行时"
@@ -286,8 +295,7 @@ async fn prepare_background_exit(
     }
 
     persist_runtime_state(app);
-    finalize_app_exit(app, true);
-    Ok(())
+    Ok(handoff)
 }
 
 #[tauri::command]

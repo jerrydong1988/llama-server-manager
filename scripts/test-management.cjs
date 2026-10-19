@@ -7,6 +7,7 @@ const fs = require('node:fs')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
+const { managementClient } = require('./lib/management-client.cjs')
 
 const root = path.resolve(__dirname, '..')
 const extension = process.platform === 'win32' ? '.exe' : ''
@@ -175,8 +176,122 @@ async function run() {
   await mutate('routes.start', {})
   const routed = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'fixture', messages: [{ role: 'user', content: 'fixture' }] }) }).then(response => response.json())
   assert.equal(routed.choices[0].message.content, 'fixture-ok')
+  assert.equal((await mutate('instances.clear_log', { id: 'agent-fixture' }, [], false)).ok, false)
+  assert.equal((await mutate('checkpoints.clear', { id: 'agent-fixture' }, [], false)).ok, false)
+  assert.equal((await call('instances.slots', { id: 'agent-fixture' })).data.length, 1)
+  await call('instances.metrics', { id: 'agent-fixture' })
+  await call('instances.test_connection', { id: 'agent-fixture' })
+  await call('instances.resources', { id: 'agent-fixture' })
+  await call('monitoring.series', { id: 'agent-fixture', range_ms: 10000 })
+  assert.equal((await call('system.port', { port })).data, false)
   await mutate('routes.stop', {})
   await mutate('instances.stop', { id: 'agent-fixture' })
+  assert.equal((await call('system.port', { port })).data, true)
+  await call('runtime.status')
+  await mutate('runtime.clear_error', {})
+  await call('system.autostart')
+  await call('checkpoints.list')
+  await call('checkpoints.status', { id: 'agent-fixture' })
+  assert.equal((await call('checkpoints.eligibility', { id: 'agent-fixture' })).data.eligible, false)
+  await mutate('checkpoints.clear', { id: 'agent-fixture' })
+  await call('instances.logs', { id: 'agent-fixture', lines: 10 })
+  await mutate('instances.clear_log', { id: 'agent-fixture' })
+  assert.equal((await call('instances.logs', { id: 'agent-fixture' }, [], false)).ok, false)
+  const presets = (await call('presets.list')).data.presets
+  assert.equal(Object.keys(presets).length, 6)
+  assert.equal((await call('presets.preview', { id: 'agent-fixture', preset: 'safe-start' }, [], false)).ok, false, 'manual mode cannot apply managed presets')
+  revision = (await call('instances.get', { id: 'agent-fixture' })).data.revision
+  await mutate('instances.update', { id: 'agent-fixture', revision, patch: { launch_mode: 'managed' } })
+  const preview = (await call('presets.preview', { id: 'agent-fixture', preset: 'safe-start' })).data
+  assert.equal(preview.saved, false)
+  assert.equal(preview.patch.parallel, 1)
+  revision = (await call('instances.get', { id: 'agent-fixture' })).data.revision
+  await mutate('presets.apply', { id: 'agent-fixture', preset: 'safe-start', revision })
+  const presetConfig = (await call('instances.get', { id: 'agent-fixture' })).data
+  assert.equal(presetConfig.config.ctx_size, 4096)
+  assert.equal(presetConfig.config.api_key, '[REDACTED]')
+  assert.equal((await mutate('presets.apply', { id: 'agent-fixture', preset: 'low-vram', revision }, [], false)).error.code, 'CONFIG_CONFLICT')
+  await mutate('instances.update', { id: 'agent-fixture', revision: presetConfig.revision, patch: { launch_mode: 'manual' } })
+  const day = Math.floor(Date.now() / 86400000) * 86400000
+  const query = { from: day, to: day + 86400000 }
+  let summary
+  for (let i = 0; i < 30; i++) {
+    summary = (await call('usage.summary', { query })).data
+    if (summary.summary.requests) break
+    await wait(100)
+  }
+  assert.equal(summary.summary.input, routed.usage.prompt_tokens)
+  assert.equal(summary.summary.output, routed.usage.completion_tokens)
+  assert.equal(summary.summary.requests, 1)
+  const requestPage = (await call('usage.requests', { query })).data
+  assert.equal(requestPage.records.length, 1)
+  assert.equal(requestPage.records[0].outcome, 'success')
+  await call('usage.performance', { query })
+  await call('usage.budgets')
+  const csv = (await call('usage.export', { query, group: 'models' })).data.content
+  assert.ok(csv.includes('fixture'))
+  const mcpClient = await managementClient({ cli, app: executable, data }).mcp()
+  try {
+    const tools = (await mcpClient.request('tools/list')).result.tools
+    const expected = schemas.filter(op => ['read', 'write', 'delete'].includes(op.permission))
+    assert.deepEqual(tools.map(t => t.name).sort(), expected.map(op => op.name.replaceAll('.', '_')).sort())
+    for (const [op, args] of [
+      ['usage.summary', { query }], ['usage.requests', { query }], ['usage.performance', { query }],
+      ['usage.budgets', {}], ['usage.export', { query, group: 'models' }], ['presets.list', {}],
+      ['checkpoints.list', {}], ['checkpoints.status', { id: 'agent-fixture' }], ['checkpoints.eligibility', { id: 'agent-fixture' }],
+      ['runtime.status', {}], ['telemetry.overview', {}], ['telemetry.sessions', { limit: 2 }],
+      ['storage.inventory', {}], ['storage.external', {}], ['system.autostart', {}], ['system.port', { port }],
+      ['downloads.local_files', { paths: [model] }],
+    ]) {
+      const result = await mcpClient.tool(op, args)
+      if (op === 'usage.summary') assert.deepEqual(result.summary, summary.summary)
+      if (op === 'usage.export') assert.equal(result.content, csv)
+      checks++
+    }
+    await mcpClient.mutate('runtime.clear_error')
+    await mcpClient.mutate('checkpoints.clear', { id: 'agent-fixture' })
+    const sessions = await mcpClient.tool('telemetry.sessions', { limit: 10 })
+    assert.ok(sessions.length)
+    for (const op of ['telemetry.samples', 'telemetry.detail', 'telemetry.analysis', 'telemetry.diagnostics', 'telemetry.requests']) {
+      await mcpClient.tool(op, { id: sessions[0].id }); checks++
+    }
+    await mcpClient.mutate('telemetry.prune', { retention_days: 365 })
+    await mcpClient.mutate('telemetry.optimize')
+    await mcpClient.mutate('storage.cleanup', { group: 'private-scratch' })
+    checks += 3
+    if (process.platform === 'win32') {
+      await mcpClient.mutate('storage.webview_cleanup', { enabled: true })
+      assert.equal((await call('storage.inventory')).data.scheduledWebviewCleanup, true)
+      await mutate('storage.webview_cleanup', { enabled: false })
+      assert.equal((await mcpClient.tool('storage.inventory')).scheduledWebviewCleanup, false)
+      checks += 2
+    }
+    const denied = await mcpClient.mutate('models.delete', { path: model }, true)
+    assert.equal(denied.status, 'failed')
+    assert.ok(fs.existsSync(model))
+    checks += 3
+  } finally { await mcpClient.close() }
+  assert.equal((await call('usage.summary', { query: { ...query, keyid: 'typo' } }, [], false)).error.code, 'VALIDATION')
+  assert.equal((await call('usage.requests', { query: { ...query, cursor: { ...requestPage.firstCursor, typo: 1 } } }, [], false)).error.code, 'VALIDATION')
+  const telemetry = (await call('telemetry.sessions', { limit: 10 })).data
+  assert.ok(telemetry.length)
+  const sessionId = telemetry[0].id
+  for (const op of ['telemetry.samples', 'telemetry.detail', 'telemetry.analysis', 'telemetry.diagnostics', 'telemetry.requests']) await call(op, { id: sessionId })
+  await call('telemetry.overview')
+  assert.equal((await call('telemetry.sessions', { limit: 4294967297 }, [], false)).error.code, 'VALIDATION')
+  const storage = (await call('storage.inventory')).data
+  assert.ok(storage.groups.some(group => group.id === 'private-scratch'))
+  await call('storage.external')
+  assert.equal((await mutate('storage.cleanup', { group: '../configs' }, [], false)).ok, false)
+  await mutate('storage.cleanup', { group: 'private-scratch' })
+  await mutate('telemetry.prune', { retention_days: 365 })
+  await mutate('telemetry.optimize', {})
+  assert.deepEqual((await call('downloads.local_files', { paths: [model, path.join(modelDir, 'missing.gguf')] })).data, [24, null])
+  assert.equal((await call('models.delete_preview', { path: model })).data.referencedBy.length, 1)
+  assert.equal((await mutate('models.delete', { path: model }, [], false)).ok, false)
+  assert.ok(fs.existsSync(model))
+  await mutate('usage.clear', query)
+  assert.equal((await call('usage.summary', { query })).data.summary.requests, 0)
   await mutate('downloads.settings', { concurrency: 2, bytes_per_second: 1048576, resume_policy: 'manual' })
   assert.equal((await call('downloads.list')).data.max_concurrent, 2)
   assert.equal((await call('cluster.list')).data.length, 0)

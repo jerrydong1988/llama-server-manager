@@ -13,7 +13,7 @@ use tauri::Manager;
 pub fn value<T: Serialize>(value: T) -> Result<Value, Failure> {
     serde_json::to_value(value).map_err(|e| Failure::new("SERIALIZATION", e.to_string()))
 }
-fn text(args: &Value, key: &str) -> String {
+pub(super) fn text(args: &Value, key: &str) -> String {
     args[key].as_str().unwrap_or("").to_string()
 }
 fn optional(args: &Value, key: &str) -> Option<String> {
@@ -101,7 +101,7 @@ fn reject_dropped_fields(input: &Value, output: &Value) -> Result<(), Failure> {
     Ok(())
 }
 
-fn patch_instance(target: &mut Value, changes: &Value) -> Result<(), Failure> {
+pub(super) fn patch_instance(target: &mut Value, changes: &Value) -> Result<(), Failure> {
     const METADATA: &[&str] = &[
         "launch_mode",
         "manual_command",
@@ -198,7 +198,7 @@ fn preserve_router_keys(current: &Value, patch: &mut Value) -> Result<(), Failur
     Ok(())
 }
 
-fn instance(state: &AppState, id: &str) -> Result<InstanceConfig, Failure> {
+pub(super) fn instance(state: &AppState, id: &str) -> Result<InstanceConfig, Failure> {
     state
         .instances
         .lock()
@@ -208,7 +208,7 @@ fn instance(state: &AppState, id: &str) -> Result<InstanceConfig, Failure> {
         .ok_or_else(|| Failure::new("NOT_FOUND", "instance not found"))
 }
 
-fn engine(state: &AppState, configured: &str) -> Result<EngineInfo, Failure> {
+pub(super) fn engine(state: &AppState, configured: &str) -> Result<EngineInfo, Failure> {
     let configured = if configured.is_empty() {
         global(state).default_engine_id
     } else {
@@ -236,53 +236,7 @@ fn engine(state: &AppState, configured: &str) -> Result<EngineInfo, Failure> {
         })
 }
 
-fn references(state: &AppState, id: &str) -> Value {
-    let global = global(state);
-    let fallback = if global.default_engine_id.is_empty() {
-        state
-            .engines
-            .lock()
-            .unwrap()
-            .first()
-            .map(|engine| engine.id.clone())
-            .unwrap_or_default()
-    } else {
-        global.default_engine_id.clone()
-    };
-    let instances = global
-        .instances
-        .iter()
-        .filter(|(_, instance)| {
-            let effective = if instance.engine_id.is_empty() {
-                &fallback
-            } else {
-                &instance.engine_id
-            };
-            crate::path_utils::paths_equal(Path::new(effective), Path::new(id))
-        })
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    let running = state
-        .running
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(_, running)| {
-            running.launch_config.as_ref().is_some_and(|config| {
-                let selected = if config.engine_id.is_empty() {
-                    &fallback
-                } else {
-                    &config.engine_id
-                };
-                crate::path_utils::paths_equal(Path::new(selected), Path::new(id))
-            })
-        })
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    json!({"instances":instances,"running":running,"default":crate::path_utils::paths_equal(Path::new(&global.default_engine_id),Path::new(id))})
-}
-
-async fn ensure_inventory(app: &tauri::AppHandle) -> Result<(), Failure> {
+pub(super) async fn ensure_inventory(app: &tauri::AppHandle) -> Result<(), Failure> {
     let state = app.state::<AppState>();
     if state.engines.lock().unwrap().is_empty() {
         let paths = global(&state).engine_dirs;
@@ -382,11 +336,11 @@ pub async fn dispatch(app: &tauri::AppHandle, name: &str, args: &Value) -> Resul
         "engines.references" | "engines.delete_preview" => {
             let selected = engine(&state, &id)?;
             Ok(
-                json!({"engine":selected,"references":references(&state,&id),"effect":"remove_inventory_entry","files_deleted":false,"note":"A later scan can rediscover this engine. Remove its scan directory to stop discovering it."}),
+                json!({"engine":selected,"references":scanner::engine_references(&state,&id),"effect":"remove_inventory_entry","files_deleted":false,"note":"A later scan can rediscover this engine. Remove its scan directory to stop discovering it."}),
             )
         }
         "engines.delete" => {
-            let refs = references(&state, &id);
+            let refs = scanner::engine_references(&state, &id);
             if refs["default"] == true
                 || refs["instances"].as_array().is_some_and(|v| !v.is_empty())
                 || refs["running"].as_array().is_some_and(|v| !v.is_empty())
@@ -559,7 +513,7 @@ pub async fn dispatch(app: &tauri::AppHandle, name: &str, args: &Value) -> Resul
         "routes.stop" => value(proxy::stop_proxy(state).await?),
         "routes.restart" => value(proxy::restart_proxy(state, app.clone()).await?),
         "system.health" => value(server::get_system_health().await?),
-        _ => Err(Failure::new("NOT_FOUND", "operation has no implementation")),
+        _ => super::extended::dispatch(app, name, args).await,
     }
 }
 
@@ -570,7 +524,11 @@ fn require_worker_trust(args: &Value) -> Result<(), Failure> {
     Ok(())
 }
 
-async fn instances(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<Value, Failure> {
+pub(super) async fn instances(
+    app: &tauri::AppHandle,
+    name: &str,
+    args: &Value,
+) -> Result<Value, Failure> {
     let state = app.state::<AppState>();
     let id = text(args, "id");
     match name {
@@ -758,7 +716,7 @@ async fn instances(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
                 Ok(json!({"id":id,"started":true,"health":"pending"}))
             }
         }
-        _ => Err(Failure::new("NOT_FOUND", "unknown instance operation")),
+        _ => super::extended::dispatch(app, name, args).await,
     }
 }
 
@@ -771,6 +729,29 @@ async fn browse(source: &str, repo: String) -> Result<Vec<crate::models::MsFileE
             "source must be huggingface or modelscope",
         )),
     }
+}
+
+fn repository_file(
+    available: &[crate::models::MsFileEntry],
+    requested: &str,
+) -> Result<crate::models::MsFileEntry, Failure> {
+    if let Some(exact) = available.iter().find(|file| file.path == requested) {
+        return Ok(exact.clone());
+    }
+    let mut by_name = available.iter().filter(|file| file.name == requested);
+    let first = by_name.next().ok_or_else(|| {
+        Failure::new(
+            "NOT_FOUND",
+            format!("repository file not found: {requested}"),
+        )
+    })?;
+    if by_name.next().is_some() {
+        return Err(Failure::new(
+            "VALIDATION",
+            "ambiguous file name; use the complete repository path",
+        ));
+    }
+    Ok(first.clone())
 }
 
 async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<Value, Failure> {
@@ -788,15 +769,16 @@ async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
                 return Err(Failure::new("VALIDATION", "select at least one file"));
             }
             let mut files = Vec::new();
+            let mut selected_paths = std::collections::HashSet::new();
             for path in requested {
                 let path = path.as_str().expect("validated");
-                let mut file = available
-                    .iter()
-                    .find(|file| file.path == path || file.name == path)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Failure::new("NOT_FOUND", format!("repository file not found: {path}"))
-                    })?;
+                let mut file = repository_file(&available, path)?;
+                if !selected_paths.insert(file.path.clone()) {
+                    return Err(Failure::new(
+                        "VALIDATION",
+                        "duplicate repository file selection",
+                    ));
+                }
                 file.task_id = Some(uuid::Uuid::new_v4().to_string());
                 // Control requests can arrive before the first progress event.
                 file.run_id = Some(uuid::Uuid::new_v4().to_string());
@@ -867,9 +849,11 @@ async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
         "downloads.cancel_all" => value(download::cancel_all_downloads(state, app.clone()).await?),
         "downloads.clear" => {
             let selected = args["statuses"].as_array().expect("validated");
-            if selected.is_empty() || selected.iter().any(|status| {
-                !matches!(status.as_str(), Some("completed" | "error" | "cancelled"))
-            }) {
+            if selected.is_empty()
+                || selected.iter().any(|status| {
+                    !matches!(status.as_str(), Some("completed" | "error" | "cancelled"))
+                })
+            {
                 return Err(Failure::new("VALIDATION", "clear supports completed, error and cancelled records only; cancel active or paused tasks explicitly"));
             }
             let statuses = args["statuses"]
@@ -909,13 +893,34 @@ async fn downloads(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<V
             }
             value(download::get_download_manager_snapshot(state).await?)
         }
-        _ => Err(Failure::new("NOT_FOUND", "unknown download operation")),
+        _ => super::extended::dispatch(app, name, args).await,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repository_selection_uses_exact_paths_and_rejects_ambiguous_basenames() {
+        let file = |path: &str| {
+            serde_json::from_value(
+                json!({"name":"model.gguf","path":path,"size":1,"file_type":"model"}),
+            )
+            .unwrap()
+        };
+        let mut files = vec![file("a/model.gguf"), file("b/model.gguf")];
+        assert!(repository_file(&files, "model.gguf").is_err());
+        assert_eq!(
+            repository_file(&files, "b/model.gguf").unwrap().path,
+            "b/model.gguf"
+        );
+        files.push(file("model.gguf"));
+        assert_eq!(
+            repository_file(&files, "model.gguf").unwrap().path,
+            "model.gguf"
+        );
+        assert!(repository_file(&files, "missing.gguf").is_err());
+    }
     #[test]
     fn patches_do_not_silently_ignore_unknown_fields_or_redacted_secrets() {
         let mut target = json!({"name":"a","nested":{"port":8080},"api_key":"private"});
@@ -978,6 +983,8 @@ mod tests {
         let mut reloaded = value(parsed).unwrap();
         patch_instance(&mut reloaded, &json!({"explicit_overrides":[]})).unwrap();
         let inherited: InstanceConfig = serde_json::from_value(reloaded).unwrap();
-        assert!(!server::generate_command(&inherited, "llama-server").iter().any(|arg| arg == "--temp"));
+        assert!(!server::generate_command(&inherited, "llama-server")
+            .iter()
+            .any(|arg| arg == "--temp"));
     }
 }

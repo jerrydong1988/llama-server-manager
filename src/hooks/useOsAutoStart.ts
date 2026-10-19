@@ -8,15 +8,31 @@ export function useOsAutoStart() {
   const confirmedRef = useRef(false)
 
   useEffect(() => {
-    const generation = mutationGenerationRef.current
-    invoke<boolean>('is_autostart_enabled')
-      .then(actual => {
-        if (mutationGenerationRef.current === generation) {
-          confirmedRef.current = actual
-          setEnabled(actual)
-        }
-      })
-      .catch(() => {})
+    let disposed = false
+    let readGeneration = 0
+    const refresh = () => {
+      const generation = mutationGenerationRef.current
+      const read = ++readGeneration
+      void invoke<boolean>('is_autostart_enabled')
+        .then(actual => {
+          if (!disposed && read === readGeneration && mutationGenerationRef.current === generation) {
+            confirmedRef.current = actual
+            setEnabled(actual)
+          }
+        })
+        .catch(() => {})
+    }
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<{ operation?: string }>).detail?.operation === 'system.set_autostart') refresh()
+    }
+    refresh()
+    window.addEventListener('lsm-management-resource-changed', changed)
+    window.addEventListener('focus', refresh)
+    return () => {
+      disposed = true
+      window.removeEventListener('lsm-management-resource-changed', changed)
+      window.removeEventListener('focus', refresh)
+    }
   }, [])
 
   const updateEnabled = (next: boolean) => {

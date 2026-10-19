@@ -42,7 +42,9 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
     try {
       const bundleType = await getBundleType()
       const update = await (async () => {
-        if (bundleType === BundleType.Deb || bundleType === BundleType.Rpm) return null
+        // Tauri returns null for an unbundled/portable executable despite the
+        // JS return type. Installer updates cannot replace that deployment.
+        if (!bundleType || bundleType === BundleType.Deb || bundleType === BundleType.Rpm) return null
         const target = bundleType === BundleType.Nsis
           ? 'windows-x86_64-nsis'
           : bundleType === BundleType.Msi

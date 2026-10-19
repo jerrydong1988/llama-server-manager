@@ -14,6 +14,9 @@ async function main() {
   const executable = path.resolve(__dirname, '../src-tauri/target/debug', process.platform === 'win32' ? 'llama-server-manager.exe' : 'llama-server-manager')
   assert.ok(fs.existsSync(executable), 'Build the current runtime first')
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-real-models-'))
+  fs.mkdirSync(path.join(dataDir, 'configs'), { recursive: true })
+  fs.writeFileSync(path.join(dataDir, 'configs', 'authorized-paths.json'), JSON.stringify({ engine_roots: [path.dirname(fs.realpathSync(args.engine))], model_roots: [args.generation, args.embedding, args.reranking].filter(Boolean).map(file => path.dirname(fs.realpathSync(file))) }))
+  const executableSha256 = require('node:crypto').createHash('sha256').update(fs.readFileSync(args.engine)).digest('hex')
   let service = spawnRuntime(executable, dataDir)
   let control, token, heartbeat
   const observations = []
@@ -50,7 +53,7 @@ async function main() {
       const instance = { name: id, alias: id, host: '127.0.0.1', port, model_path: args[workload], context_size: 4096 }
       config.routes = [{ id, enabled: true, model_alias: id, target_instance_id: id }]
       await command({ command: 'sync_config', payload: { revision: ++revision, proxy_config: config, instances: { [id]: instance } } })
-      await command({ command: 'start_instance', payload: { spec: { instance_id: id, config: instance, engine_backend: 'cpu', command: engineArgs, command_display: engineArgs.join(' '), workload: workload === 'generation' ? 'inference' : workload === 'reranking' ? 'reranker' : 'embedding', working_directory: path.dirname(args.engine) } } })
+      await command({ command: 'start_instance', payload: { spec: { instance_id: id, config: instance, engine_backend: 'cpu', executable_sha256: executableSha256, command: engineArgs, command_display: engineArgs.join(' '), workload: workload === 'generation' ? 'inference' : workload === 'reranking' ? 'reranker' : 'embedding', working_directory: path.dirname(args.engine) } } })
       const deadline = Date.now() + 120000
       for (;;) {
         try { if ((await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })).ok) break } catch { /* loading */ }

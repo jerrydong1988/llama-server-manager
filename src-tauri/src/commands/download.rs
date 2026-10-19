@@ -221,14 +221,20 @@ fn active_download_slot_count(state: &AppState) -> usize {
     }
 }
 
-fn take_bandwidth_tokens(available: &mut f64, bytes: u64, limit: u64) -> Option<std::time::Duration> {
+fn take_bandwidth_tokens(
+    available: &mut f64,
+    bytes: u64,
+    limit: u64,
+) -> Option<std::time::Duration> {
     if *available >= bytes as f64 {
         *available -= bytes as f64;
         None
     } else {
         // Keep partial credit. Clearing it makes successive deficit waits
         // oscillate indefinitely when a chunk is larger than the balance.
-        Some(std::time::Duration::from_secs_f64((bytes as f64 - *available) / limit as f64))
+        Some(std::time::Duration::from_secs_f64(
+            (bytes as f64 - *available) / limit as f64,
+        ))
     }
 }
 
@@ -238,7 +244,14 @@ async fn throttle_download_bytes(state: &AppState, bytes: u64, run_id: &str) -> 
     }
 
     loop {
-        if state.cancel_flags.lock().unwrap().get(run_id).copied().unwrap_or(false) {
+        if state
+            .cancel_flags
+            .lock()
+            .unwrap()
+            .get(run_id)
+            .copied()
+            .unwrap_or(false)
+        {
             return false;
         }
         let wait = {
@@ -861,6 +874,22 @@ struct DownloadTaskContext {
 
 impl DownloadTaskContext {
     fn emit(&self, app: &tauri::AppHandle, event: &str, extra: serde_json::Value) {
+        // Early failures (ownership, path validation) must be durable even when no GUI
+        // is listening. Keep the queue state authoritative before publishing the event.
+        if event == "download-error" {
+            update_manager_file_state(
+                &app.state::<AppState>(),
+                &self.task_id,
+                FileStatePatch {
+                    version: Some(self.version),
+                    status: Some("error".into()),
+                    error: Some(Some(
+                        extra["error"].as_str().unwrap_or("Download failed").into(),
+                    )),
+                    ..Default::default()
+                },
+            );
+        }
         let mut payload = serde_json::Map::new();
         payload.insert(
             "taskId".into(),
@@ -2169,11 +2198,15 @@ fn take_queued_file_for_pause(
     run_id: Option<&str>,
 ) -> Option<PersistedQueueEntry> {
     let (entry_index, file_index) = queue.iter().enumerate().find_map(|(index, entry)| {
-        entry.files.iter().position(|file| {
-            file.task_id.as_deref() == Some(task_id)
-                && run_id.map_or(true, |id| file.run_id.as_deref() == Some(id))
-                && !is_terminal_download_file(file)
-        }).map(|file_index| (index, file_index))
+        entry
+            .files
+            .iter()
+            .position(|file| {
+                file.task_id.as_deref() == Some(task_id)
+                    && run_id.map_or(true, |id| file.run_id.as_deref() == Some(id))
+                    && !is_terminal_download_file(file)
+            })
+            .map(|file_index| (index, file_index))
     })?;
     let mut paused = queue[entry_index].clone();
     let mut file = queue[entry_index].files.remove(file_index);
@@ -2452,6 +2485,32 @@ pub async fn delete_managed_local_file(
     task_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let _scheduler = state
+        .download_scheduler_lock
+        .lock()
+        .map_err(|_| "download scheduler lock is poisoned".to_string())?;
+    if state.download_queue.lock().unwrap().iter().any(|entry| {
+        entry
+            .files
+            .iter()
+            .any(|file| file.task_id.as_deref() == Some(task_id.as_str()))
+    }) || state
+        .download_active_entries
+        .lock()
+        .unwrap()
+        .values()
+        .any(|entry| {
+            entry.files.iter().any(|file| {
+                file.task_id.as_deref() == Some(task_id.as_str())
+                    && matches!(
+                        file.status.as_deref(),
+                        Some("active" | "queued" | "pausing")
+                    )
+            })
+        })
+    {
+        return Err("Pause or cancel the active download before deleting its output".into());
+    }
     let mut entries = load_download_state(&state)?;
     entries.extend(load_download_artifact_entries(&state)?);
     entries.extend(state.download_queue.lock().unwrap().clone());
@@ -2680,7 +2739,10 @@ fn merge_download_snapshot(
         .collect();
     for entry in &mut persisted {
         entry.files.retain(|file| {
-            !file.task_id.as_ref().is_some_and(|id| live_ids.contains(id))
+            !file
+                .task_id
+                .as_ref()
+                .is_some_and(|id| live_ids.contains(id))
         });
         entry.status = derive_entry_status(entry);
     }
@@ -3060,6 +3122,26 @@ fn pending_download_files(files: Vec<MsFileEntry>) -> Vec<MsFileEntry> {
         .collect()
 }
 
+fn settle_unfinished_download_files(
+    entry: &mut PersistedQueueEntry,
+    error: Option<&str>,
+) -> Vec<MsFileEntry> {
+    let mut failed = Vec::new();
+    for file in &mut entry.files {
+        if matches!(file.status.as_deref(), Some("active" | "queued")) {
+            file.status = Some("error".into());
+            file.error = Some(
+                error
+                    .unwrap_or("Download worker exited without a final result")
+                    .into(),
+            );
+            failed.push(file.clone());
+        }
+    }
+    entry.status = derive_entry_status(entry);
+    failed
+}
+
 fn refresh_paused_entry_for_resume(
     entry: &mut PersistedQueueEntry,
 ) -> Vec<ResumeDownloadTaskResult> {
@@ -3315,7 +3397,17 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
                 .unwrap()
                 .get(&batch_id)
                 .cloned();
-            let terminal_persisted = if let Some(entry) = latest_entry {
+            let terminal_persisted = if let Some(mut entry) = latest_entry {
+                for file in settle_unfinished_download_files(
+                    &mut entry,
+                    result.as_ref().err().map(String::as_str),
+                ) {
+                    build_task_context(&file, &entry.repo_id, &entry.source).emit(
+                        &app,
+                        "download-error",
+                        serde_json::json!({"error": file.error, "retryable": retryable_result}),
+                    );
+                }
                 match persist_terminal_entry(&state, entry) {
                     Ok(()) => true,
                     Err(error) => {
@@ -4258,7 +4350,10 @@ mod audit_remediation_tests {
     #[test]
     fn bandwidth_limiter_keeps_partial_credit_until_chunk_is_ready() {
         let mut available = 32.0;
-        assert_eq!(take_bandwidth_tokens(&mut available, 100, 64), Some(std::time::Duration::from_secs_f64(68.0 / 64.0)));
+        assert_eq!(
+            take_bandwidth_tokens(&mut available, 100, 64),
+            Some(std::time::Duration::from_secs_f64(68.0 / 64.0))
+        );
         assert_eq!(available, 32.0);
         available += 68.0;
         assert_eq!(take_bandwidth_tokens(&mut available, 100, 64), None);
@@ -4277,20 +4372,47 @@ mod audit_remediation_tests {
                     "size": 100, "file_type": "model", "task_id": task,
                     "status": status, "downloaded": bytes
                 })).collect::<Vec<_>>()
-            })).unwrap()
+            }))
+            .unwrap()
         };
         let snapshot = merge_download_snapshot(
-            vec![entry("original", &[("a", "paused", 10), ("b", "completed", 100)]),
-                 entry("history", &[("c", "error", 20)])],
+            vec![
+                entry("original", &[("a", "paused", 10), ("b", "completed", 100)]),
+                entry("history", &[("c", "error", 20)]),
+            ],
             vec![entry("resumed", &[("a", "active", 60)])],
         );
         let files: Vec<_> = snapshot.iter().flat_map(|entry| &entry.files).collect();
         assert_eq!(files.len(), 3);
-        assert_eq!(files.iter().find(|file| file.task_id.as_deref() == Some("a")).unwrap().downloaded, Some(60));
-        assert_eq!(snapshot.iter().find(|entry| entry.id == "original").unwrap().status, "completed");
-        assert_eq!(snapshot.iter().find(|entry| entry.id == "resumed").unwrap().status, "active");
+        assert_eq!(
+            files
+                .iter()
+                .find(|file| file.task_id.as_deref() == Some("a"))
+                .unwrap()
+                .downloaded,
+            Some(60)
+        );
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == "original")
+                .unwrap()
+                .status,
+            "completed"
+        );
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == "resumed")
+                .unwrap()
+                .status,
+            "active"
+        );
         let same_batch = merge_download_snapshot(
-            vec![entry("same", &[("a", "paused", 10), ("b", "completed", 100)])],
+            vec![entry(
+                "same",
+                &[("a", "paused", 10), ("b", "completed", 100)],
+            )],
             vec![entry("same", &[("a", "active", 70)])],
         );
         assert_eq!(same_batch.len(), 1);
@@ -4914,7 +5036,7 @@ mod audit_remediation_tests {
             run_id: None,
             version: None,
         };
-        let entry = PersistedQueueEntry {
+        let mut entry = PersistedQueueEntry {
             id: "terminal-entry".into(),
             repo_id: "org/model".into(),
             source: "huggingface".into(),
@@ -4928,6 +5050,21 @@ mod audit_remediation_tests {
         };
 
         assert_eq!(derive_entry_status(&entry), "cancelled");
+        entry
+            .files
+            .extend([file("active"), file("paused"), file("error")]);
+        let failed = settle_unfinished_download_files(&mut entry, Some("destination unavailable"));
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].error.as_deref(), Some("destination unavailable"));
+        assert_eq!(
+            entry
+                .files
+                .iter()
+                .map(|f| f.status.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["completed", "cancelled", "error", "paused", "error"]
+        );
+        assert_eq!(entry.status, "error");
     }
 
     #[test]

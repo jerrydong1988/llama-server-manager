@@ -3015,7 +3015,7 @@ impl CheckpointCoordinator {
         expected_pid: u32,
         slot: &crate::commands::telemetry::SlotSnapshotRecord,
     ) {
-        if slot.slot_id != 0 || slot.is_processing {
+        if slot.slot_id != 0 {
             return;
         }
         let (Some(task_id), Some(cached_tokens), Some(processed_tokens)) =
@@ -3023,6 +3023,12 @@ impl CheckpointCoordinator {
         else {
             return;
         };
+        // Recent engines reset prompt counters when a slot becomes idle. A pair
+        // of reset zeros is absence of a measurement, not proof of a cache miss.
+        // Active decoding already exposes the completed prefill counters.
+        if cached_tokens == 0 && processed_tokens == 0 {
+            return;
+        }
         let Ok(mut entries) = self.entries.lock() else {
             return;
         };
@@ -3038,7 +3044,11 @@ impl CheckpointCoordinator {
             .status
             .reuse_observation
             .as_ref()
-            .is_some_and(|value| value.task_id == task_id)
+            .is_some_and(|value| {
+                value.task_id == task_id
+                    && value.cached_tokens == cached_tokens
+                    && value.processed_tokens == processed_tokens
+            })
         {
             return;
         }
@@ -6277,7 +6287,7 @@ mod tests {
     }
 
     #[test]
-    fn reuse_observation_requires_an_idle_request_from_the_restored_process() {
+    fn reuse_observation_requires_measured_counters_from_the_restored_process() {
         let sandbox = TestSandbox::new("reuse-observation");
         let store = sandbox.store();
         let fingerprint = test_fingerprint(&eligible_config());
@@ -6305,13 +6315,16 @@ mod tests {
             .unwrap();
         coordinator.observe_restored_request("observed", 300, &slot);
         slot.is_processing = true;
+        slot.cached_tokens = Some(0);
+        slot.processed_tokens = Some(0);
         coordinator.observe_restored_request("observed", 301, &slot);
         assert!(coordinator
             .status("observed")
             .unwrap()
             .reuse_observation
             .is_none());
-        slot.is_processing = false;
+        slot.cached_tokens = Some(700);
+        slot.processed_tokens = Some(1);
         coordinator.observe_restored_request("observed", 301, &slot);
         assert_eq!(
             coordinator
@@ -6322,8 +6335,35 @@ mod tests {
                 .cached_tokens,
             700
         );
+        // A sample during prefill must not freeze the first partial observation.
+        slot.processed_tokens = Some(68);
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert_eq!(
+            coordinator
+                .status("observed")
+                .unwrap()
+                .reuse_observation
+                .unwrap()
+                .processed_tokens,
+            68
+        );
+        slot.is_processing = false;
+        slot.cached_tokens = Some(0);
+        slot.processed_tokens = Some(0);
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert_eq!(
+            coordinator
+                .status("observed")
+                .unwrap()
+                .reuse_observation
+                .unwrap()
+                .cached_tokens,
+            700,
+            "idle reset must not erase a measured cache hit"
+        );
         slot.task_id = Some(6);
         slot.cached_tokens = Some(0);
+        slot.processed_tokens = Some(68);
         coordinator.observe_restored_request("observed", 301, &slot);
         assert_eq!(
             coordinator

@@ -53,12 +53,26 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|_| "无法获取 HOME 目录".to_string())
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn desktop_data_arguments(data: Option<&std::path::Path>) -> Result<String, String> {
+    data.map(|path| desktop_exec_value(path).map(|quoted| format!(" --data-dir {quoted}")))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
 pub fn enable_autostart() -> Result<(), String> {
     let exe = exe_path()?;
 
     #[cfg(target_os = "windows")]
     {
-        let quoted = format!("\"{}\"", exe);
+        let mut quoted =
+            crate::runtime_service::autostart::windows_quote_argument(std::path::Path::new(&exe));
+        if let Some(data) = crate::utils::data_dir_override() {
+            quoted.push_str(" --data-dir ");
+            quoted.push_str(&crate::runtime_service::autostart::windows_quote_argument(
+                data,
+            ));
+        }
         let output = std::process::Command::new("reg")
             .args([
                 "add",
@@ -89,16 +103,29 @@ pub fn enable_autostart() -> Result<(), String> {
             .replace('>', "&gt;")
             .replace('"', "&quot;")
             .replace('\'', "&apos;");
+        let data_arguments = crate::utils::data_dir_override()
+            .map(|data| {
+                format!(
+                    "<string>--data-dir</string><string>{}</string>",
+                    data.to_string_lossy()
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;")
+                        .replace('"', "&quot;")
+                        .replace('\'', "&apos;")
+                )
+            })
+            .unwrap_or_default();
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>Label</key><string>com.llama-server-manager</string>
-    <key>ProgramArguments</key><array><string>{}</string></array>
+    <key>ProgramArguments</key><array><string>{}</string>{}</array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><false/>
 </dict></plist>"#,
-            escaped
+            escaped, data_arguments
         );
         let agents = home_dir()?.join("Library/LaunchAgents");
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
@@ -111,10 +138,12 @@ pub fn enable_autostart() -> Result<(), String> {
         let current_exe = PathBuf::from(&exe);
         let executable =
             linux_autostart_executable(std::env::var_os("APPIMAGE").as_deref(), &current_exe);
+        let arguments = desktop_data_arguments(crate::utils::data_dir_override())?;
         let desktop = format!(
-            "[Desktop Entry]\nType=Application\nName=Llama Server Manager\nExec={}\n\
+            "[Desktop Entry]\nType=Application\nName=Llama Server Manager\nExec={}{}\n\
              Hidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
-            desktop_exec_value(&executable)?
+            desktop_exec_value(&executable)?,
+            arguments
         );
         let dir = home_dir()?.join(".config/autostart");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -186,7 +215,13 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
         match out {
             Ok(o) => {
                 let stdout = String::from_utf8_lossy(&o.stdout);
-                Ok(stdout.contains(APP_NAME) && stdout.contains(&exe_path()?))
+                let data_matches = crate::utils::data_dir_override().map_or(true, |data| {
+                    stdout.contains(&format!(
+                        "--data-dir {}",
+                        crate::runtime_service::autostart::windows_quote_argument(data)
+                    ))
+                });
+                Ok(stdout.contains(APP_NAME) && stdout.contains(&exe_path()?) && data_matches)
             }
             Err(_) => Ok(false),
         }
@@ -210,7 +245,11 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
             let current_exe = PathBuf::from(exe_path()?);
             let executable =
                 linux_autostart_executable(std::env::var_os("APPIMAGE").as_deref(), &current_exe);
-            let expected = format!("Exec={}", desktop_exec_value(&executable)?);
+            let expected = format!(
+                "Exec={}{}",
+                desktop_exec_value(&executable)?,
+                desktop_data_arguments(crate::utils::data_dir_override())?
+            );
             Ok(std::fs::read_to_string(path)
                 .map(|contents| contents.lines().any(|line| line == expected))
                 .unwrap_or(false))
@@ -245,6 +284,15 @@ mod tests {
     fn desktop_exec_rejects_control_characters() {
         assert!(desktop_exec_value(std::path::Path::new("/home/app\nname")).is_err());
         assert!(desktop_exec_value(std::path::Path::new("/home/app\tname")).is_err());
+    }
+
+    #[test]
+    fn desktop_autostart_retains_the_isolated_data_directory() {
+        assert_eq!(desktop_data_arguments(None).unwrap(), "");
+        assert_eq!(
+            desktop_data_arguments(Some(std::path::Path::new("/home/Test Data"))).unwrap(),
+            " --data-dir \"/home/Test Data\""
+        );
     }
 }
 

@@ -667,6 +667,7 @@ type BrowserTestControl = {
   failProxyTargets: boolean
   failRuntimeStatus: boolean
   updaterCheckCount: number
+  osAutoStart: boolean
   activeProbeCount: number
   peakProbeCount: number
   state: GlobalConfigShape
@@ -737,6 +738,7 @@ const control: BrowserTestControl = {
   failProxyTargets: false,
   failRuntimeStatus: false,
   updaterCheckCount: 0,
+  osAutoStart: false,
   activeProbeCount: 0,
   peakProbeCount: 0,
   state,
@@ -1022,7 +1024,7 @@ mockIPC((command, payload) => {
   const args = (payload ?? {}) as Record<string, unknown>
 
   switch (command) {
-    case 'plugin:app|bundle_type': return 'nsis'
+    case 'plugin:app|bundle_type': return BROWSER_SCENARIO === 'updater-unbundled' ? null : 'nsis'
     case 'plugin:updater|check':
       control.updaterCheckCount += 1
       if (BROWSER_SCENARIO === 'updater-retry' && control.updaterCheckCount === 1) {
@@ -1183,6 +1185,9 @@ mockIPC((command, payload) => {
       return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
         ? []
         : clone(engines)
+    case 'delete_engine':
+      if (BROWSER_SCENARIO === 'engine-delete-referenced') throw new Error('Engine is default, referenced or running')
+      return null
     case 'rename_engine': {
       const engineId = String(args.id ?? '')
       const name = String(args.name ?? '')
@@ -1482,7 +1487,7 @@ mockIPC((command, payload) => {
     case 'clear_runtime_service_error':
       runtimeStatus.lastError = null
       return null
-    case 'is_autostart_enabled': return false
+    case 'is_autostart_enabled': return control.osAutoStart
     case 'is_mdns_discovery_active': return mdnsDiscoveryActive
     case 'start_mdns_discovery':
       mdnsDiscoveryActive = true
@@ -1560,8 +1565,8 @@ mockIPC((command, payload) => {
       runId: 'browser-download-resumed-run',
       version: 2,
     }
-    case 'enable_autostart':
-    case 'disable_autostart':
+    case 'enable_autostart': control.osAutoStart = true; return null
+    case 'disable_autostart': control.osAutoStart = false; return null
     case 'show_window':
     case 'hide_window':
     case 'open_browser': return null
