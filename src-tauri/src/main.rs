@@ -717,6 +717,9 @@ fn main() {
             restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
         })
         .invoke_handler(tauri::generate_handler![
+            management::desktop::list_management_tasks,
+            management::desktop::get_management_task,
+            management::desktop::cancel_management_task,
             scan_models, get_models, preview_model_deletion, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
             probe_engine_capabilities,

@@ -5,6 +5,7 @@ import { defaultInstanceConfig } from '../src/store/defaults'
 import { normalizeSpeculativeTypes } from '../src/speculativeTypes'
 import { routerUsageMock, clearUsageMock, routerUsageRequestsMock } from './routerUsageMock'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
+import { managementTasksMock } from './managementTasksMock'
 import type {
   CheckpointStatus,
   EngineInfo,
@@ -1024,6 +1025,9 @@ mockIPC((command, payload) => {
   const args = (payload ?? {}) as Record<string, unknown>
 
   switch (command) {
+    case 'list_management_tasks':
+    case 'get_management_task':
+    case 'cancel_management_task': return managementTasksMock(command, args)
     case 'plugin:app|bundle_type': return BROWSER_SCENARIO === 'updater-unbundled' ? null : 'nsis'
     case 'plugin:updater|check':
       control.updaterCheckCount += 1
