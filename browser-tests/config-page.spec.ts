@@ -84,6 +84,160 @@ test('manual mode explains and persists the fallback instance port', async ({ pa
   expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])).toMatchObject({ launch_mode: 'manual', port: 19091, manual_command: '-m model.gguf' })
 })
 
+test('decimal parameter edits retain typed fractions', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const temp = page.locator('[data-config-field="temp"] input')
+  await temp.fill('')
+  await temp.pressSequentially('0.83')
+  await expect(temp).toHaveValue('0.83')
+})
+
+test('all floating point controls accept fractions without step validation errors', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const fields = [
+    'temp', 'top_p', 'repeat_penalty', 'min_p', 'presence_penalty', 'frequency_penalty',
+    'mirostat_lr', 'mirostat_ent', 'xtc_probability', 'xtc_threshold', 'dynatemp_range',
+    'dynatemp_exp', 'typical_p', 'dry_multiplier', 'dry_base', 'adaptive_target',
+    'adaptive_decay', 'top_n_sigma', 'spec_draft_p_min', 'spec_draft_p_split',
+    'rope_scale', 'rope_freq_base', 'rope_freq_scale', 'yarn_ext_factor',
+    'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast', 'slot_prompt_similarity',
+  ]
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  for (const field of fields) {
+    await search.fill(`--${field.replace(/_/g, '-')}`)
+    const input = page.locator(`[data-config-field="${field}"] input`)
+    await input.fill('0.51')
+    expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), field).toBe(true)
+  }
+  await search.fill('--temp')
+  const temp = page.locator('[data-config-field="temp"] input')
+  for (const value of ['0.123456789', '1e-8']) {
+    await temp.fill(value)
+    expect(await temp.evaluate(element => (element as HTMLInputElement).validity.valid)).toBe(true)
+  }
+  await temp.fill('2.1')
+  expect(await temp.evaluate(element => (element as HTMLInputElement).validity.rangeOverflow)).toBe(true)
+})
+
+test('integer controls accept arbitrary integers and retain incomplete intent edits', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  for (const [field, value] of [['reasoning_budget', '256'], ['cache_ram', '8192'], ['moe_cache_mib', '513']]) {
+    await search.fill(`--${field.replace(/_/g, '-')}`)
+    const input = page.locator(`[data-config-field="${field}"] input`)
+    await input.fill(value)
+    expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity()), field).toBe(true)
+    await input.fill('256.5')
+    expect(await input.evaluate(element => (element as HTMLInputElement).validity.stepMismatch), field).toBe(true)
+    await input.press('Tab')
+    await expect(input).toHaveValue(value)
+  }
+  await search.fill('--ctx-size')
+  const context = page.locator('[data-config-field="ctx_size"]')
+  await context.getByRole('combobox').selectOption('manual')
+  const input = context.locator('input')
+  await input.fill('2049')
+  expect(await input.evaluate(element => (element as HTMLInputElement).checkValidity())).toBe(true)
+  await input.fill('')
+  await input.press('Tab')
+  await expect(input).toHaveValue('2049')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].ctx_size)).toBe(2049)
+})
+
+test('initial load and document reload use the current host snapshot', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=stale-window-snapshot')
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    await expect(page.getByText('External CLI instance', { exact: true }).first()).toBeVisible()
+    await page.getByText('External CLI instance', { exact: true }).first().click()
+    await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+    await expect(page.locator('[data-config-field="temp"] input')).toHaveValue('0.51')
+    if (iteration === 0) {
+      await page.evaluate(() => localStorage.setItem('lastTab', 'instances'))
+      await page.reload()
+    }
+  }
+})
+
+test('numeric parameter edits accept negative sentinel values', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  await page.getByRole('textbox', { name: '参数搜索' }).fill('--adaptive-target')
+  const target = page.locator('[data-config-field="adaptive_target"] input')
+  await target.fill('')
+  await target.pressSequentially('-1')
+  await expect(target).toHaveValue('-1')
+})
+
+test('decimal values survive mode switches, save, navigation and restoring inheritance', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  const temp = page.locator('[data-config-field="temp"]')
+  await temp.locator('input').fill('0.12345679')
+  for (const [field, flag, value] of [
+    ['top_p', '--top-p', '0.95'], ['mirostat_lr', '--mirostat-lr', '0.1'],
+    ['xtc_threshold', '--xtc-threshold', '0.1'], ['adaptive_decay', '--adaptive-decay', '0.9'],
+  ]) {
+    await search.fill(flag)
+    const input = page.locator(`[data-config-field="${field}"] input`)
+    await input.fill('0.2')
+    await input.fill(value)
+  }
+  await page.getByRole('button', { name: /手动启动命令/ }).click()
+  await page.getByRole('textbox', { name: '完整启动命令或可执行文件后的参数' }).fill('-m model.gguf --temp 0.7')
+  await page.getByRole('button', { name: /托管参数模式/ }).click()
+  await search.fill('--temp')
+  await expect(temp.locator('input')).toHaveValue('0.12345679')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  const saved = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])
+  expect(saved).toMatchObject({ temp: 0.12345679, top_p: 0.95, mirostat_lr: 0.1, xtc_threshold: 0.1, adaptive_decay: 0.9, manual_command: '-m model.gguf --temp 0.7' })
+  expect(saved.explicit_overrides).toEqual(expect.arrayContaining(['temp', 'top_p', 'mirostat_lr', 'xtc_threshold', 'adaptive_decay']))
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.locator('[data-nav-id="config"]').click()
+  await expect(temp.locator('input')).toHaveValue('0.12345679')
+  await expect(temp.locator('[data-config-status="changed"]')).toHaveCount(0)
+  await temp.getByRole('button', { name: /参数说明/ }).click()
+  await page.getByRole('button', { name: '恢复引擎默认', exact: true }).click()
+  await expect(temp.locator('input')).toHaveValue('0.8')
+  await expect(temp).toHaveAttribute('data-config-source', 'inherited')
+})
+
+test('incomplete numeric edits do not replace a valid value with zero', async ({ page }) => {
+  await openConfiguration(page, 'v070-parameters')
+  const temp = page.locator('[data-config-field="temp"] input')
+  await temp.fill('0.82')
+  await temp.fill('')
+  await expect(temp).toHaveValue('')
+  await temp.press('Tab')
+  await expect(temp).toHaveValue('0.82')
+  await temp.fill('')
+  await temp.pressSequentially('1e-8')
+  await temp.press('Tab')
+  await expect(temp).toHaveValue('1e-8')
+})
+
+test('saving a normalized decimal stays clean and accepts subsequent MCP changes', async ({ page }) => {
+  await openConfiguration(page, 'parameter-float-normalization')
+  const temp = page.locator('[data-config-field="temp"]')
+  await temp.locator('input').fill('0.123456789')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  await expect(temp.locator('input')).toHaveValue('0.12345679')
+  await expect(temp.locator('[data-config-status="changed"]')).toHaveCount(0)
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.state.instances['browser-test-instance'].temp = 0.44
+    backend.state.management_revision = 1
+    await backend.emitEvent('management-config-changed', { operation: 'instances.update', revision: 1 })
+  })
+  await expect(temp.locator('input')).toHaveValue('0.44')
+})
+
 for (const english of [false, true]) {
   test(`v0.7.0 parameter help and layout in ${english ? 'English' : 'Chinese'}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: english ? 1440 : 1024, height: 900 })
@@ -146,6 +300,41 @@ test('unsaved configuration survives page navigation and saves against the origi
   await page.locator('[data-nav-id="config"]').click()
   await expect(temperature.locator('input')).toHaveValue('0.91')
   await expect(temperature.locator('[data-config-status="changed"]')).toHaveCount(0)
+})
+
+test('external management preserves a dirty parameter draft and refuses its stale save', async ({ page }) => {
+  await openConfiguration(page)
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await temperature.fill('0.91')
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.state.instances['browser-test-instance'].temp = 0.42
+    backend.state.management_revision = 1
+    await backend.emitEvent('management-config-changed', { operation: 'instances.update', revision: 1 })
+  })
+  await expect(temperature).toHaveValue('0.91')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'save_config').length)).toBe(1)
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].temp)).toBe(0.42)
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.saveCount)).toBe(0)
+  await expect(temperature).toHaveValue('0.91')
+})
+
+test('external management refreshes a clean parameter page with its new revision', async ({ page }) => {
+  await openConfiguration(page)
+  await page.evaluate(async () => {
+    const backend = window.__TAURI_BROWSER_TEST__
+    backend.state.instances['browser-test-instance'].temp = 0.42
+    backend.state.management_revision = 1
+    await backend.emitEvent('management-config-changed', { operation: 'instances.update', revision: 1 })
+  })
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await expect(temperature).toHaveValue('0.42')
+  await temperature.fill('0.72')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  const save = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.find(call => call.command === 'save_config'))
+  expect(save?.payload).toMatchObject({ expectedManagementRevision: 1 })
 })
 
 test('switching instances keeps their configuration drafts independent', async ({ page }) => {

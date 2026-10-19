@@ -850,6 +850,10 @@ pub fn get_data_dir() -> PathBuf {
     get_app_dir()
 }
 
+pub fn data_dir_override() -> Option<&'static Path> {
+    DATA_DIR_OVERRIDE.get().map(PathBuf::as_path)
+}
+
 pub fn get_default_models_dir() -> PathBuf {
     get_data_dir().join(DEFAULT_MODELS_DIR_NAME)
 }

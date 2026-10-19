@@ -6,6 +6,7 @@ import {
   reconcileInstancesWithModels,
 } from './bootstrap'
 import { createLatestSaveCoordinator } from './configSaveCoordinator'
+import { getManagementRevision, hasUnsavedManagementChanges, managementSignature, markManagementSaved, setManagementRevision } from './managementRevision'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
@@ -58,6 +59,7 @@ const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
   }))
 }
 type ConfigSaveSnapshot = {
+  expectedManagementRevision: number
   revision: number
   instances: Record<string, InstanceConfig>
   modelDirs: string[]
@@ -77,10 +79,18 @@ let latestConfigSaveRevision = 0
 let latestAppliedConfigSaveRevision = 0
 
 const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot, PersistedConfigResult>(
-  async ({ revision, ...snapshot }) => ({
-    revision,
-    instances: await invoke<Record<string, InstanceConfig>>('save_config', snapshot),
-  }),
+  async ({ revision, ...snapshot }) => {
+    const instances = await invoke<Record<string, InstanceConfig>>('save_config', snapshot)
+    // The saved baseline must include backend normalization (notably f32
+    // precision and managed aliases), or later MCP events look like conflicts.
+    markManagementSaved(managementSignature({
+      instances: snapshot.instanceOrder.map(id => ({ id, config: instances[id] ?? snapshot.instances[id] })),
+      modelDirs: snapshot.modelDirs,
+      engineDirs: snapshot.engineDirs,
+      defaultEngineId: snapshot.defaultEngineId,
+    }))
+    return { revision, instances }
+  },
 )
 
 export function createInstanceSlice(
@@ -118,25 +128,35 @@ export function createInstanceSlice(
         return synchronizeInstanceSummary({ ...instance, ...partial })
       }),
     })),
-    deleteInstance: (id) => set((state) => {
-      const withoutInstance = <T,>(items: Record<string, T>) => {
-        const next = { ...items }
-        delete next[id]
-        return next
-      }
-      return {
-        instances: state.instances.filter((instance) => instance.id !== id),
-        instancesHydrated: true,
-        checkpointStatuses: withoutInstance(state.checkpointStatuses),
-        logs: withoutInstance(state.logs),
-        recentLogs: state.recentLogs.filter(entry => entry.instanceId !== id),
-        monitoringFramesByInstance: withoutInstance(state.monitoringFramesByInstance),
-        monitoringCurrentByInstance: withoutInstance(state.monitoringCurrentByInstance),
-        runningTasksByInstance: withoutInstance(state.runningTasksByInstance),
-        lastCompletedTaskByInstance: withoutInstance(state.lastCompletedTaskByInstance),
-        instanceLifecycle: withoutInstance(state.instanceLifecycle),
-      }
-    }),
+    deleteInstance: async (id) => {
+      await configSaveCoordinator.waitForIdle()
+      const before = get()
+      const baseline = managementSignature({ ...before, instances: before.instances.filter(instance => instance.id !== id) })
+      const result = await invoke<{ management_revision: number }>('delete_instance_config', {
+        instanceId: id, expectedManagementRevision: getManagementRevision(),
+      })
+      setManagementRevision(result.management_revision)
+      if (!hasUnsavedManagementChanges(before)) markManagementSaved(baseline)
+      set((state) => {
+        const withoutInstance = <T,>(items: Record<string, T>) => {
+          const next = { ...items }
+          delete next[id]
+          return next
+        }
+        return {
+          instances: state.instances.filter((instance) => instance.id !== id),
+          instancesHydrated: true,
+          checkpointStatuses: withoutInstance(state.checkpointStatuses),
+          logs: withoutInstance(state.logs),
+          recentLogs: state.recentLogs.filter(entry => entry.instanceId !== id),
+          monitoringFramesByInstance: withoutInstance(state.monitoringFramesByInstance),
+          monitoringCurrentByInstance: withoutInstance(state.monitoringCurrentByInstance),
+          runningTasksByInstance: withoutInstance(state.runningTasksByInstance),
+          lastCompletedTaskByInstance: withoutInstance(state.lastCompletedTaskByInstance),
+          instanceLifecycle: withoutInstance(state.instanceLifecycle),
+        }
+      })
+    },
     moveInstance: (id, direction, orderedIds) => {
       const state = get()
       const index = state.instances.findIndex((instance) => instance.id === id)
@@ -339,6 +359,7 @@ export function createInstanceSlice(
 
       const revision = ++latestConfigSaveRevision
       const operation = configSaveCoordinator.save({
+        expectedManagementRevision: getManagementRevision(),
         revision,
         instances: instancesById,
         modelDirs: state.modelDirs,

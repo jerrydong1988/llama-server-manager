@@ -9,6 +9,7 @@ mod error;
 mod external_artifacts;
 mod model_artifacts;
 mod models;
+mod management;
 mod operation_timing;
 mod path_utils;
 mod persistence;
@@ -35,7 +36,7 @@ use crate::commands::cluster_mdns::{
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_ssh::ipc::{ssh_launch_rpc, stop_ssh_tunnel};
 use crate::commands::config::{
-    load_config, load_window_state, resolve_path, save_config, save_window_state,
+    delete_instance_config, load_config, load_window_state, resolve_path, save_config, save_window_state,
     update_and_persist,
 };
 use crate::commands::download::{
@@ -211,7 +212,16 @@ async fn prepare_background_exit(
     app: &tauri::AppHandle,
     enable_runtime: bool,
 ) -> Result<(), String> {
-    let _handoff = ExitHandoffGuard::acquire()?;
+    let _handoff = prepare_background_handoff(app, enable_runtime).await?;
+    finalize_app_exit(app, true);
+    Ok(())
+}
+
+async fn prepare_background_handoff(
+    app: &tauri::AppHandle,
+    enable_runtime: bool,
+) -> Result<ExitHandoffGuard, String> {
+    let handoff = ExitHandoffGuard::acquire()?;
     if crate::commands::cluster_ssh::has_active_ssh_tunnels() {
         return Err(
             "仍有由主程序托管的 SSH Worker；请先停止这些 Worker，再退出并保留后台运行时"
@@ -285,8 +295,7 @@ async fn prepare_background_exit(
     }
 
     persist_runtime_state(app);
-    finalize_app_exit(app, true);
-    Ok(())
+    Ok(handoff)
 }
 
 #[tauri::command]
@@ -401,7 +410,36 @@ fn tray_icon_image() -> Result<tauri::image::Image<'static>, tauri::Error> {
     tauri::image::Image::from_bytes(TRAY_ICON_BYTES)
 }
 
+fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
+    if app.get_webview_window("main").is_some() { return Ok(()); }
+    let config_dir = crate::utils::get_data_dir().join("configs");
+    let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+        .title("Llama 服务器管理器").inner_size(1280.0, 800.0).min_inner_size(1024.0, 720.0)
+        .resizable(true).fullscreen(false).visible(false)
+        .background_color(tauri::utils::config::Color(26, 26, 46, 255));
+    if let Some(state) = crate::commands::config::read_window_state_from_disk(&config_dir) {
+        builder = builder.position(state.x as f64, state.y as f64).inner_size(state.width as f64, state.height as f64);
+    }
+    builder.build()?;
+    Ok(())
+}
+
 fn main() {
+    if let Some(index) = std::env::args_os().position(|arg| arg == "--management-data-dir") {
+        let Some(path) = std::env::args_os().nth(index + 1) else {
+            eprintln!("--management-data-dir requires an absolute path"); std::process::exit(1);
+        };
+        let path = std::path::PathBuf::from(path);
+        let configured = (|| -> Result<(), String> {
+            if !path.is_absolute() { return Err("management data directory must be absolute".into()); }
+            std::fs::create_dir_all(&path).map_err(|error|error.to_string())?;
+            // Native Windows atomic replacement uses extended paths, where forward
+            // slashes are not accepted. Canonicalize before any persistence starts.
+            let canonical = std::fs::canonicalize(&path).map_err(|error|error.to_string())?;
+            crate::utils::set_data_dir_override(canonical)
+        })();
+        if let Err(error) = configured { eprintln!("{error}"); std::process::exit(1); }
+    }
     if crate::runtime_service::is_runtime_service_invocation() {
         if let Err(error) = crate::runtime_service::configure_runtime_data_dir_from_args() {
             eprintln!("Runtime service configuration failed: {error}");
@@ -430,12 +468,20 @@ fn main() {
     }
     let initial_workers = load_workers();
 
+    let mut context = tauri::generate_context!();
+    if std::env::args_os().any(|arg| arg == "--management-data-dir")
+        && crate::management::wire::data_identity(&data_dir) != crate::management::wire::data_identity(&crate::management::wire::default_data_dir()) {
+        let digest = crate::management::wire::digest(crate::management::wire::data_identity(&crate::utils::get_data_dir()).as_bytes());
+        context.config_mut().identifier = format!("com.llama.manager.exploration.{}", &digest[..16]);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg == "--management-service") { return; }
+            let _ = ensure_main_window(app);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -497,6 +543,7 @@ fn main() {
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
                         "show" => {
+                            let _ = ensure_main_window(app);
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
@@ -527,6 +574,7 @@ fn main() {
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                         let app = tray.app_handle();
+                        let _ = ensure_main_window(app);
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -538,8 +586,8 @@ fn main() {
             tray_builder.build(app.handle())?;
             timings.push(("setup-tray-done".into(), now()));
 
-            // Read config early and inject it into the frontend through initialization_script.
-            // Avoid IPC cold-start delay; frontend JS can read window.__INITIAL_CONFIG__ immediately.
+            // Read config early for host initialization and storage maintenance.
+            // The frontend obtains a fresh snapshot through load_config on every load.
             let data_dir = crate::utils::get_data_dir();
             let config_dir = data_dir.join("configs");
             let config = crate::commands::config::read_config_from_disk(&config_dir);
@@ -549,33 +597,10 @@ fn main() {
                     maintenance_running_count,
                 );
             });
-            let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
             timings.push(("setup-config-read".into(), now()));
 
-            // Create the window programmatically and inject config data.
-            let init_script = format!(
-                "window.__INITIAL_CONFIG__ = {};\nif(window.__lsm_setInitialConfig)window.__lsm_setInitialConfig(window.__INITIAL_CONFIG__);",
-                config_json
-            );
-            let window_state = crate::commands::config::read_window_state_from_disk(&config_dir);
-            let mut window_builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                .title("Llama 服务器管理器")
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(1024.0, 720.0)
-                .resizable(true)
-                .fullscreen(false)
-                .visible(false)
-                .background_color(tauri::utils::config::Color(26, 26, 46, 255))
-                .initialization_script(&init_script);
-
-            // Restore window position.
-            if let Some(ws) = window_state {
-                window_builder = window_builder
-                    .position(ws.x as f64, ws.y as f64)
-                    .inner_size(ws.width as f64, ws.height as f64);
-            }
-
-            window_builder.build()?;
+            // Create the window programmatically.
+            if !crate::management::hidden_start() { ensure_main_window(app.handle())?; }
             timings.push(("setup-window-built".into(), now()));
 
             // Synchronize AppState; process restoration also runs asynchronously in load_config IPC.
@@ -625,6 +650,7 @@ fn main() {
             }
 
             crate::runtime_service::start_app_bridge(app.handle().clone());
+            crate::management::start(app.handle().clone()).map_err(std::io::Error::other)?;
 
             if !crate::runtime_service::manages_instances() && config.proxy_config.enabled {
                 let app_handle = app.handle().clone();
@@ -697,7 +723,7 @@ fn main() {
             get_checkpoint_status, list_checkpoint_statuses, clear_checkpoint,
             load_app_data, get_cached_scan,
             generate_server_command, get_checkpoint_eligibility, start_server, stop_server, delete_instance_log, open_browser,
-            save_config, load_config,
+            save_config, load_config, delete_instance_config,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, check_local_files, delete_managed_local_file,
             enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,
@@ -747,7 +773,7 @@ fn main() {
             crate::storage_maintenance::cleanup_storage_group,
             crate::storage_maintenance::schedule_webview_cache_cleanup,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 

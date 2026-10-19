@@ -59,6 +59,13 @@ export default function ProxyUsagePanel() {
   const [revision, setRevision] = useState(0)
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
+  useEffect(() => {
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<{ operation: string }>).detail.operation === 'usage.clear') setRevision(r => r + 1)
+    }
+    window.addEventListener('lsm-management-resource-changed', changed)
+    return () => window.removeEventListener('lsm-management-resource-changed', changed)
+  }, [])
   const query = useMemo(() => ({ from: Date.parse(`${from}T00:00:00Z`), to: Date.parse(`${to}T00:00:00Z`) + DAY,
     keyId: keyId || null, model: model || null, instanceId: instanceId || null, endpoint: endpoint || null, kind: kind || null }),
   [from, to, keyId, model, instanceId, endpoint, kind])

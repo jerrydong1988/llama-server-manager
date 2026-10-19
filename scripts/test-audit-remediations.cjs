@@ -111,7 +111,7 @@ const clusterMdnsSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'c
 
 assert.match(downloadSource, /fn verified_managed_cleanup_path/, 'cleanup must canonicalize managed download paths')
 assert.match(downloadSource, /download_shutting_down\.load\(Ordering::SeqCst\)/, 'the scheduler must stop admitting work during shutdown')
-assert.match(downloadSource, /let terminal_persisted = if let Some\(entry\)/, 'inflight recovery must remain until terminal state is durable')
+assert.match(downloadSource, /let terminal_persisted = if let Some\((?:mut )?entry\)/, 'inflight recovery must remain until terminal state is durable')
 assert.match(downloadSource, /fn quarantine_corrupt_state/, 'a corrupt queue must be preserved before creating replacement state')
 assert.match(downloadSource, /Some\("completed" \| "cancelled"\)/, 'cancelled files must be terminal and excluded from retries')
 assert.match(downloadSource, /MAX_HUGGINGFACE_TREE_PAGES/, 'Hugging Face browse must follow bounded pagination')

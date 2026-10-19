@@ -15,6 +15,8 @@ import type {
   MonitoringFrame,
   SystemMetrics,
   WorkerInfo,
+  PersistedQueueEntry,
+  DownloadManagerSnapshot,
 } from '../src/store/types'
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
@@ -660,9 +662,12 @@ type BrowserTestControl = {
   lastGenerated: GeneratedServerCommand | null
   commandOverride: string[] | null
   failProxyStatus: boolean
+  downloadQueueOverride: PersistedQueueEntry[] | null
+  downloadSettingsOverride: Partial<DownloadManagerSnapshot> | null
   failProxyTargets: boolean
   failRuntimeStatus: boolean
   updaterCheckCount: number
+  osAutoStart: boolean
   activeProbeCount: number
   peakProbeCount: number
   state: GlobalConfigShape
@@ -728,9 +733,12 @@ const control: BrowserTestControl = {
   lastGenerated: null,
   commandOverride: null,
   failProxyStatus: false,
+  downloadQueueOverride: null,
+  downloadSettingsOverride: null,
   failProxyTargets: false,
   failRuntimeStatus: false,
   updaterCheckCount: 0,
+  osAutoStart: false,
   activeProbeCount: 0,
   peakProbeCount: 0,
   state,
@@ -1016,7 +1024,7 @@ mockIPC((command, payload) => {
   const args = (payload ?? {}) as Record<string, unknown>
 
   switch (command) {
-    case 'plugin:app|bundle_type': return 'nsis'
+    case 'plugin:app|bundle_type': return BROWSER_SCENARIO === 'updater-unbundled' ? null : 'nsis'
     case 'plugin:updater|check':
       control.updaterCheckCount += 1
       if (BROWSER_SCENARIO === 'updater-retry' && control.updaterCheckCount === 1) {
@@ -1177,6 +1185,9 @@ mockIPC((command, payload) => {
       return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
         ? []
         : clone(engines)
+    case 'delete_engine':
+      if (BROWSER_SCENARIO === 'engine-delete-referenced') throw new Error('Engine is default, referenced or running')
+      return null
     case 'rename_engine': {
       const engineId = String(args.id ?? '')
       const name = String(args.name ?? '')
@@ -1206,6 +1217,9 @@ mockIPC((command, payload) => {
       })
     }
     case 'get_download_manager_snapshot':
+      if (control.downloadQueueOverride !== null) {
+        return { queue: clone(control.downloadQueueOverride), active_count: 0, max_concurrent: 3, resume_policy: 'manual', bandwidth_limit_bytes_per_sec: 0, low_priority_throttle: false, ...control.downloadSettingsOverride }
+      }
       if (IS_DOCS_SCENARIO) {
         return {
           queue: [
@@ -1418,7 +1432,7 @@ mockIPC((command, payload) => {
       if (new URLSearchParams(window.location.search).get('connection') === 'fail') throw new Error('Connection refused')
       return 'HTTP 200'
     case 'process_download_queue': return null
-    case 'get_proxy_config': return clone(proxyConfig)
+    case 'get_proxy_config': return { ...clone(proxyConfig), config_revision: JSON.stringify(proxyConfig) }
     case 'get_router_performance': return routerPerformanceMock((args.query || {}) as Record<string, unknown>)
     case 'get_router_budgets': return routerBudgetsMock(proxyConfig.api_keys)
     case 'get_router_usage': return routerUsageMock((args.query || {}) as Record<string, unknown>)
@@ -1444,6 +1458,9 @@ mockIPC((command, payload) => {
       throw new Error('no running instance matches the requested model')
     }
     case 'save_proxy_config': {
+      if (args.expectedRevision !== undefined && args.expectedRevision !== JSON.stringify(proxyConfig)) {
+        throw { code: 'CONFIG_CONFLICT', message: 'Router configuration changed; reload before saving', retryable: false }
+      }
       const next = clone(args.config as BrowserProxyConfig)
       next.api_keys = next.api_keys.map(apiKey => ({
         ...apiKey,
@@ -1457,7 +1474,7 @@ mockIPC((command, payload) => {
         ? enabledRoutes.filter(route => proxyTargets.some(target => target.instance_id === route.target_instance_id && target.running)).length
         : proxyTargets.filter(target => target.running).length
       proxyStatus.unhealthy_routes = Math.max(0, proxyStatus.active_routes - proxyStatus.healthy_routes)
-      return clone(proxyConfig)
+      return { ...clone(proxyConfig), config_revision: JSON.stringify(proxyConfig) }
     }
     case 'start_proxy':
       proxyConfig.enabled = true
@@ -1473,7 +1490,7 @@ mockIPC((command, payload) => {
     case 'clear_runtime_service_error':
       runtimeStatus.lastError = null
       return null
-    case 'is_autostart_enabled': return false
+    case 'is_autostart_enabled': return control.osAutoStart
     case 'is_mdns_discovery_active': return mdnsDiscoveryActive
     case 'start_mdns_discovery':
       mdnsDiscoveryActive = true
@@ -1491,14 +1508,35 @@ mockIPC((command, payload) => {
       syncAutomationProbe()
       return generated
     }
+    case 'delete_instance_config': {
+      const id = String(args.instanceId)
+      if (args.expectedManagementRevision !== (control.state.management_revision ?? 0)) throw new Error('CONFIG_CONFLICT')
+      if (proxyConfig.default_instance_id === id || proxyConfig.routes.some(route => route.target_instance_id === id)) {
+        throw new Error('INSTANCE_REFERENCED: remove routes/default target first')
+      }
+      if (control.state.running[id]) throw new Error('INSTANCE_ACTIVE')
+      if (!control.state.instances[id]) throw new Error('NOT_FOUND')
+      delete control.state.instances[id]
+      control.state.instance_order = control.state.instance_order.filter(other => other !== id)
+      control.state.management_revision = (control.state.management_revision ?? 0) + 1
+      return { deleted: id, management_revision: control.state.management_revision }
+    }
+    case 'delete_instance_log': return 0
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
+      if (BROWSER_SCENARIO === 'parameter-float-normalization') {
+        // Model the Rust save response when a JS number needs f32 normalization.
+        instances[INSTANCE_ID].temp = 0.12345679
+      }
       const persist = () => {
+        if ((args.expectedManagementRevision ?? 0) !== (control.state.management_revision ?? 0)) {
+          throw { code: 'CONFIG_CONFLICT', message: 'Configuration changed outside this window', retryable: false }
+        }
         control.state.instances = instances
         if (Array.isArray(args.modelDirs)) control.state.model_dirs = clone(args.modelDirs as string[])
         control.saveCount += 1
         syncAutomationProbe()
-        return instances
+        return clone(instances)
       }
       if (BROWSER_SCENARIO === 'delayed-config-save') {
         return new Promise((resolve, reject) => {
@@ -1510,6 +1548,10 @@ mockIPC((command, payload) => {
         })
       }
       return persist()
+    }
+    case 'stop_server': {
+      delete control.state.running[String(args.instanceId)]
+      return null
     }
     case 'start_server': {
       const instanceId = String(args.instanceId ?? '')
@@ -1544,8 +1586,8 @@ mockIPC((command, payload) => {
       runId: 'browser-download-resumed-run',
       version: 2,
     }
-    case 'enable_autostart':
-    case 'disable_autostart':
+    case 'enable_autostart': control.osAutoStart = true; return null
+    case 'disable_autostart': control.osAutoStart = false; return null
     case 'show_window':
     case 'hide_window':
     case 'open_browser': return null
@@ -1573,4 +1615,12 @@ mockIPC((command, payload) => {
 
 window.__TAURI_BROWSER_TEST__ = control
 window.__INITIAL_CONFIG__ = clone(state)
+if (BROWSER_SCENARIO === 'stale-window-snapshot') {
+  // The host has accepted an external write since this WebView was created.
+  // On reload, its initialization script would replay the older snapshot.
+  control.state.instances['external-instance'] = {
+    ...clone(instanceConfig), name: 'External CLI instance', alias: 'external-cli', port: 18082, temp: 0.51,
+  }
+  control.state.management_revision = 1
+}
 syncAutomationProbe()

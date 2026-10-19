@@ -1,4 +1,5 @@
 import type { InstanceConfig } from '../store'
+import presetChanges from '../configPresets.json'
 
 export type ConfigTemplate = {
   id: string
@@ -178,7 +179,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['新模型首测', '不确定显存余量', '排查启动失败'] : ['First model test', 'Unknown VRAM headroom', 'Startup troubleshooting'],
       highlights: zh ? ['固定 4K 上下文', '降低 batch 与并发', '开启 metrics / props / slots'] : ['Fixed 4K context', 'Lower batch and concurrency', 'Enable metrics / props / slots'],
       tone: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200',
-      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 1024, ubatch_size: 256, parallel: 1, flash_attn: 'auto', cont_batching: true, cache_ram: 4096, metrics: true, props: true, slots_enabled: true },
+      changes: presetChanges['safe-start'] as Partial<InstanceConfig>,
       risks: zh ? ['吞吐会低于并发服务型配置。', '固定 4K 上下文不适合长文档任务。'] : ['Throughput will be lower than service-oriented configs.', 'Fixed 4K context is not ideal for long-document tasks.'],
     },
     {
@@ -189,7 +190,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['本机聊天', '长时间单会话', '稳定低延迟'] : ['Local chat', 'Long single sessions', 'Stable latency'],
       highlights: zh ? ['使用模型原生上下文', 'parallel 设为 1', '保留连续批处理'] : ['Use native model context', 'Set parallel to 1', 'Keep continuous batching'],
       tone: 'border-sky-500/25 bg-sky-500/10 text-sky-200',
-      changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 2048, ubatch_size: 512, parallel: 1, cont_batching: true, flash_attn: 'auto', cache_ram: 8192, metrics: true, props: true, slots_enabled: true, n_predict: -1 },
+      changes: presetChanges['single-chat'] as Partial<InstanceConfig>,
       risks: zh ? ['多客户端并发时响应会排队。', '自动上下文可能占用较多 KV cache。'] : ['Multiple clients may queue behind each other.', 'Automatic context can consume more KV cache.'],
     },
     {
@@ -200,7 +201,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['多客户端 API', '工具链调用', '请求吞吐测试'] : ['Multi-client API', 'Tool integrations', 'Throughput testing'],
       highlights: zh ? ['parallel 设为 4', 'batch 提高到 4096', '优先启用 Flash Attention'] : ['Set parallel to 4', 'Raise batch to 4096', 'Prefer Flash Attention'],
       tone: 'border-blue-500/25 bg-blue-500/10 text-blue-200',
-      changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 4096, ubatch_size: 1024, parallel: 4, cont_batching: true, flash_attn: 'on', cache_ram: 8192, metrics: true, props: true, slots_enabled: true },
+      changes: presetChanges['api-service'] as Partial<InstanceConfig>,
       risks: zh ? ['需要更多显存和 KV cache 空间。', '不支持 Flash Attention 的后端可能出现警告或降速。'] : ['Needs more VRAM and KV cache headroom.', 'Backends without Flash Attention support may warn or slow down.'],
     },
     {
@@ -211,7 +212,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['长文档摘要', '代码库阅读', '长多轮对话'] : ['Document summarization', 'Codebase reading', 'Long conversations'],
       highlights: zh ? ['固定 32K 上下文', '提高 cache_ram', '启用 context shift'] : ['Fixed 32K context', 'Increase cache_ram', 'Enable context shift'],
       tone: 'border-violet-500/25 bg-violet-500/10 text-violet-200',
-      changes: { ctx_size_auto: false, ctx_size: 32768, batch_size: 2048, ubatch_size: 512, parallel: 1, cache_ram: 16384, ctx_checkpoints: 64, flash_attn: 'auto', context_shift: true, metrics: true, props: true },
+      changes: presetChanges['long-context'] as Partial<InstanceConfig>,
       risks: zh ? ['KV cache 会明显增加内存或显存压力。', '超过模型原生上下文时，质量可能下降。'] : ['KV cache can substantially increase RAM or VRAM pressure.', 'Quality may degrade beyond the model native context.'],
     },
     {
@@ -222,7 +223,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['显存接近上限', '模型较大', '先启动后调优'] : ['VRAM near limit', 'Large models', 'Start before tuning'],
       highlights: zh ? ['保留自动 GPU 层数', '缩小 batch / ubatch', '限制 4K 上下文'] : ['Keep automatic GPU layers', 'Shrink batch / ubatch', 'Limit context to 4K'],
       tone: 'border-amber-500/25 bg-amber-500/10 text-amber-200',
-      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 512, ubatch_size: 128, parallel: 1, cache_ram: 2048, flash_attn: 'auto', no_kv_offload: false, metrics: true, props: true, slots_enabled: true },
+      changes: presetChanges['low-vram'] as Partial<InstanceConfig>,
       risks: zh ? ['长输入和高并发性能会明显受限。', '如果仍然 OOM，需要再手动降低 GPU 层数或上下文。'] : ['Long prompts and high concurrency will be limited.', 'If OOM persists, manually lower GPU layers or context size.'],
     },
     {
@@ -233,7 +234,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['内置 MTP 模型', '草稿模型实验', '吞吐对比'] : ['Built-in MTP models', 'Draft model experiments', 'Throughput comparison'],
       highlights: zh ? ['spec_type 设为 draft-mtp', '草稿 token 设为 3', '保留观测指标'] : ['Set spec_type to draft-mtp', 'Use 3 draft tokens', 'Keep observability enabled'],
       tone: 'border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-200',
-      changes: { spec_type: 'draft-mtp', draft_tokens: 3, spec_draft_n_min: 1, batch_size: 4096, ubatch_size: 1024, cont_batching: true, metrics: true, props: true, slots_enabled: true },
+      changes: presetChanges['spec-draft-mtp'] as Partial<InstanceConfig>,
       risks: zh ? ['非 MTP 模型可能需要外部草稿模型。', '推测接受率过低时可能没有加速收益。'] : ['Non-MTP models may need an external draft model.', 'Low draft acceptance can remove the speed benefit.'],
     },
   ]

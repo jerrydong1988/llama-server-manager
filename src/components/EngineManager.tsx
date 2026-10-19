@@ -155,9 +155,15 @@ const EngineManager = () => {
     const confirmed = await confirm(t.engineMgr.removeConfirm, { title: t.engineMgr.remove, kind: 'warning' })
     if (!confirmed) return
 
-    await deleteEngine(id)
-    if (defaultEngineId && pathsEqual(defaultEngineId, id)) {
-      setDefaultEngineId(null)
+    try {
+      await deleteEngine(id)
+      if (defaultEngineId && pathsEqual(defaultEngineId, id)) {
+        setDefaultEngineId(null)
+      }
+    } catch (error) {
+      const detail = String(error)
+      addRuntimeWarning(detail)
+      await message(detail, { title: t.engineMgr.remove, kind: 'error' })
     }
   }
 

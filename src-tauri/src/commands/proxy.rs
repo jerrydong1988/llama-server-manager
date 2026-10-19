@@ -3458,9 +3458,14 @@ pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<Proxy
     Ok(state.proxy_config.lock().unwrap().clone())
 }
 
+pub(crate) fn config_revision(config: &ProxyConfig) -> String {
+    crate::management::wire::digest(serde_json::to_value(config).expect("proxy config serializes").to_string().as_bytes())
+}
+
 pub async fn save_proxy_config(
     config: ProxyConfig,
     state: tauri::State<'_, AppState>,
+    expected_revision: Option<String>,
 ) -> Result<ProxyConfig, String> {
     let config = {
         let instances = state.instances.lock().unwrap();
@@ -3468,6 +3473,9 @@ pub async fn save_proxy_config(
     };
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let current = state.proxy_config.lock().unwrap().clone();
+    if expected_revision.as_ref().is_some_and(|revision| revision != &config_revision(&current)) {
+        return Err("CONFIG_CONFLICT: router configuration changed; reload before saving".into());
+    }
     let runtime_status = if crate::runtime_service::manages_instances() {
         Some(crate::runtime_service::ensure_runtime_service().await?)
     } else {
@@ -7187,20 +7195,23 @@ pub mod ipc {
     #[tauri::command]
     pub async fn get_proxy_config(
         state: tauri::State<'_, AppState>,
-    ) -> crate::error::AppResult<ProxyConfig> {
-        super::get_proxy_config(state)
-            .await
-            .map_err(crate::error::AppError::from)
+    ) -> crate::error::AppResult<serde_json::Value> {
+        let config = super::get_proxy_config(state).await.map_err(crate::error::AppError::from)?;
+        let mut value = serde_json::to_value(&config).map_err(|error| crate::error::AppError::new("SERIALIZATION", error.to_string(), false))?;
+        value["config_revision"] = serde_json::json!(super::config_revision(&config));
+        Ok(value)
     }
 
     #[tauri::command]
     pub async fn save_proxy_config(
         config: ProxyConfig,
         state: tauri::State<'_, AppState>,
-    ) -> crate::error::AppResult<ProxyConfig> {
-        super::save_proxy_config(config, state)
-            .await
-            .map_err(crate::error::AppError::from)
+        expected_revision: Option<String>,
+    ) -> crate::error::AppResult<serde_json::Value> {
+        let config = super::save_proxy_config(config, state, expected_revision).await.map_err(crate::error::AppError::from)?;
+        let mut value = serde_json::to_value(&config).map_err(|error| crate::error::AppError::new("SERIALIZATION", error.to_string(), false))?;
+        value["config_revision"] = serde_json::json!(super::config_revision(&config));
+        Ok(value)
     }
 
     #[tauri::command]

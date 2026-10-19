@@ -639,7 +639,7 @@ export interface AppState {
   setDefaultEngineId: (id: string | null) => void
   addInstance: (instance: Instance) => void
   updateInstance: (id: string, partial: Partial<Instance>) => void
-  deleteInstance: (id: string) => void
+  deleteInstance: (id: string) => Promise<void>
   moveInstance: (id: string, direction: 'up' | 'down', orderedIds?: string[]) => void
   renameInstance: (id: string, name: string) => void
   addLog: (entry: LogEntry) => void

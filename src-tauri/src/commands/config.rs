@@ -12,6 +12,102 @@ use tauri::Emitter;
 // Unified config write helpers.
 
 static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static MANAGEMENT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn management_revision() -> u64 {
+    MANAGEMENT_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub fn management_config_revision(global: &GlobalConfig) -> String {
+    let roots = |directories: &[String]| {
+        let mut seen=HashSet::new();
+        directories.iter().map(|directory| {
+            let path=std::path::PathBuf::from(directory);
+            crate::path_utils::path_identity_key(&if path.is_relative() {crate::utils::get_data_dir().join(path)}else{path})
+        }).filter(|path|seen.insert(path.clone())).collect::<Vec<_>>()
+    };
+    let value = serde_json::json!({
+        "instances": global.instances, "model_dirs": roots(&global.model_dirs),
+        "engine_dirs": roots(&global.engine_dirs), "default_engine_id": global.default_engine_id,
+        "instance_order": global.instance_order, "proxy_config": global.proxy_config,
+        "engine_names": global.engine_names,
+    });
+    crate::management::wire::digest(value.to_string().as_bytes())
+}
+
+pub fn management_update<F>(state: &AppState, expected: &str, update: F) -> Result<GlobalConfig, String>
+where F: FnOnce(&mut GlobalConfig) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().map_err(|_| "configuration lock poisoned")?;
+    let directory = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&directory)?;
+    if management_config_revision(&global) != expected { return Err("CONFIG_CONFLICT: configuration changed; read it again before applying this operation".into()); }
+    update(&mut global)?;
+    global.instances = normalize_instances_for_save(global.instances).all;
+    persist_global_config_unlocked(&directory, &global)?;
+    *state.instances.lock().unwrap() = global.instances.clone();
+    MANAGEMENT_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    crate::runtime_service::mark_config_sync_pending();
+    Ok(global)
+}
+
+pub(crate) fn validate_instance_removal(global: &GlobalConfig, id: &str) -> Result<(), String> {
+    if global.proxy_config.default_instance_id == id
+        || global.proxy_config.routes.iter().any(|route| route.target_instance_id == id)
+    {
+        return Err("INSTANCE_REFERENCED: remove the instance's routes/default target before deleting it".into());
+    }
+    Ok(())
+}
+
+// Both desktop and management clients commit deletion here. Artifacts are only
+// cleaned after this transaction succeeds; a rejected delete has no side effects.
+#[tauri::command]
+pub fn delete_instance_config(
+    instance_id: String,
+    expected_revision: Option<String>,
+    expected_management_revision: Option<u64>,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    delete_instance_configuration(&instance_id, expected_revision.as_deref(), expected_management_revision, &state)
+        .map_err(|message| {
+            let code = message.split_once(':').map(|(code, _)| code).unwrap_or("INSTANCE_DELETE_FAILED").to_string();
+            AppError::new(code, message, false)
+        })
+}
+
+fn delete_instance_configuration(
+    instance_id: &str,
+    expected_revision: Option<&str>,
+    expected_management_revision: Option<u64>,
+    state: &AppState,
+) -> Result<serde_json::Value, String> {
+    crate::commands::server::validate_instance_id(instance_id).map_err(|e| e.message)?;
+    let _guard = CONFIG_WRITE_LOCK.lock().map_err(|_| "configuration lock poisoned")?;
+    let directory = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&directory)?;
+    if expected_revision.is_some_and(|r| r != management_config_revision(&global))
+        || expected_management_revision.is_some_and(|r| r != management_revision())
+        || (expected_revision.is_none() && expected_management_revision.is_none())
+    {
+        return Err("CONFIG_CONFLICT: configuration changed; reload before deleting".into());
+    }
+    validate_instance_removal(&global, instance_id)?;
+    let running = state.running.lock().unwrap();
+    let starting = state.starting.lock().unwrap();
+    if running.contains_key(instance_id) || starting.contains(instance_id) {
+        return Err("CONFLICT: stop the instance before deleting its configuration".into());
+    }
+    if global.instances.remove(instance_id).is_none() {
+        return Err("NOT_FOUND: instance not found".into());
+    }
+    global.instance_order.retain(|id| id != instance_id);
+    persist_global_config_unlocked(&directory, &global)?;
+    *state.instances.lock().unwrap() = global.instances.clone();
+    let revision = MANAGEMENT_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    crate::runtime_service::mark_config_sync_pending();
+    Ok(serde_json::json!({"deleted":instance_id,"revision":management_config_revision(&global),
+        "management_revision":revision,"model_files_deleted":false}))
+}
 
 fn dedupe_path_dirs(directories: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -96,15 +192,6 @@ fn persist_global_config_unlocked(
     )
     .map_err(|error| format!("保存失败: {error}"))?;
     Ok(true)
-}
-
-/// Atomically writes instances.json; all config writes should go through this helper to avoid races.
-pub fn persist_global_config(
-    config_dir: &std::path::Path,
-    global: &GlobalConfig,
-) -> Result<(), String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
-    persist_global_config_unlocked(config_dir, global).map(|_| ())
 }
 
 /// Reads existing config, mutates it, then writes atomically for non-save_config paths.
@@ -238,6 +325,11 @@ fn load_global_config_for_update_unlocked(
 
 /// Reads config from disk and resolves paths without AppState so main.rs setup() can call it early.
 pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    read_config_unlocked(config_dir)
+}
+
+fn read_config_unlocked(config_dir: &std::path::Path) -> GlobalConfig {
     let mut global = load_global_config_file(config_dir);
 
     // Resolve relative paths.
@@ -291,7 +383,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
                 "restore-cleanup",
             );
         }
-        if let Err(error) = persist_global_config(config_dir, &global) {
+        if let Err(error) = persist_global_config_unlocked(config_dir, &global) {
             eprintln!("Failed to persist stale runtime cleanup: {error}");
         }
     }
@@ -351,20 +443,48 @@ fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> N
     NormalizedInstances { all, changed }
 }
 
+// Keep the submitted JSON until numeric normalization has been compared. A
+// typed command argument would lose the original JS precision before this
+// comparison, leaving the GUI showing a value that was never stored.
+fn normalize_submitted_instances(
+    submitted: HashMap<String, serde_json::Value>,
+) -> Result<NormalizedInstances, String> {
+    let mut instances = HashMap::with_capacity(submitted.len());
+    let mut numeric_changes = HashSet::new();
+    for (id, input) in submitted {
+        let config: InstanceConfig = serde_json::from_value(input.clone())
+            .map_err(|error| format!("invalid instance configuration: {error}"))?;
+        let canonical = serde_json::to_value(&config).map_err(|error| error.to_string())?;
+        if input.as_object().is_some_and(|fields| fields.iter().any(|(key, value)| {
+            value.is_number() && value.as_f64() != canonical[key].as_f64()
+        })) {
+            numeric_changes.insert(id.clone());
+        }
+        instances.insert(id, config);
+    }
+    let mut normalized = normalize_instances_for_save(instances);
+    for id in numeric_changes {
+        normalized.changed.insert(id.clone(), normalized.all[&id].clone());
+    }
+    Ok(normalized)
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri expands IPC fields into command parameters.
 pub async fn save_config(
-    instances: HashMap<String, InstanceConfig>,
+    instances: HashMap<String, serde_json::Value>,
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
     default_engine_id: String,
     instance_order: Vec<String>,
     last_tab: String,
     dark_mode: bool,
+    expected_management_revision: Option<u64>,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<HashMap<String, InstanceConfig>> {
     let mut timing = crate::operation_timing::OperationTiming::new("save_config");
-    let normalized = normalize_instances_for_save(instances);
+    let normalized = normalize_submitted_instances(instances)
+        .map_err(|error| AppError::new("INVALID_CONFIG", error, false))?;
     let instances = normalized.all;
     let config_dir = state.config_dir.lock().unwrap().clone();
     let snapshot = FrontendConfigSnapshot {
@@ -383,6 +503,9 @@ pub async fn save_config(
     })?;
     {
         let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        if expected_management_revision.unwrap_or(0) != management_revision() {
+            return Err(AppError::new("CONFIG_CONFLICT", "配置已被外部管理客户端修改，请重新加载后再保存。", false));
+        }
         // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
         // concurrent start/stop can persist newer state and then be overwritten here.
         let running_snapshot = state.running.lock().unwrap().clone();
@@ -393,6 +516,13 @@ pub async fn save_config(
                 config_dir.join("instances.json").display().to_string(),
             )
         })?;
+        for id in global.instances.keys().filter(|id| !instances.contains_key(*id)) {
+            validate_instance_removal(&global, id)
+                .map_err(|error| AppError::new("INSTANCE_REFERENCED", error, false))?;
+            if running_snapshot.contains_key(id) || state.starting.lock().unwrap().contains(id) {
+                return Err(AppError::new("INSTANCE_ACTIVE", "Stop the instance before deleting its configuration.", false));
+            }
+        }
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
         persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
             AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
@@ -400,12 +530,9 @@ pub async fn save_config(
                 config_dir.join("instances.json").display().to_string(),
             )
         })?;
+        *state.instances.lock().unwrap() = instances.clone();
     }
     timing.mark("persist-main");
-    {
-        let mut stored = state.instances.lock().unwrap();
-        *stored = instances.clone();
-    }
     if crate::runtime_service::manages_instances() {
         // instances.json is the durable source of truth for this operation. The app bridge
         // coalesces rapid edits and reliably retries delivery to the runtime service, so a
@@ -420,25 +547,26 @@ pub async fn save_config(
 pub async fn load_config(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<GlobalConfig, String> {
+) -> Result<serde_json::Value, String> {
     let t0 = std::time::Instant::now();
     let config_dir = state.config_dir.lock().unwrap().clone();
 
     // Read config through read_config_from_disk, including process liveness checks.
-    let global = read_config_from_disk(&config_dir);
-
-    // Update AppState.
-    {
-        let mut stored = state.instances.lock().unwrap();
-        *stored = global.instances.clone();
-    }
-    *state.engine_names.lock().unwrap() = global.engine_names.clone();
-    *state.running.lock().unwrap() = global.running.clone();
-    *state.download_max_concurrent.lock().unwrap() = global.download_max_concurrent.max(1);
-    *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() =
-        global.download_bandwidth_limit_bytes_per_sec;
-    *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
-    *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    let (global, management_revision) = {
+        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        let global = read_config_unlocked(&config_dir);
+        // Publish the snapshot before allowing another management write.
+        *state.instances.lock().unwrap() = global.instances.clone();
+        *state.engine_names.lock().unwrap() = global.engine_names.clone();
+        *state.running.lock().unwrap() = global.running.clone();
+        *state.download_max_concurrent.lock().unwrap() = global.download_max_concurrent.max(1);
+        *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() = global.download_bandwidth_limit_bytes_per_sec;
+        *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
+        *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
+        (global, management_revision())
+    };
+    drop(_transition);
 
     // Restore log capture, metrics, and the single authoritative health monitor.
     let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
@@ -489,7 +617,9 @@ pub async fn load_config(
             "name": "load-config-rust", "ms": t_total
         }),
     );
-    Ok(global)
+    let mut result = serde_json::to_value(global).map_err(|e| e.to_string())?;
+    result["management_revision"] = serde_json::json!(management_revision);
+    Ok(result)
 }
 
 // Window state.
@@ -567,6 +697,50 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removal_rejects_default_and_disabled_route_references() {
+        let mut global = default_global_config();
+        global.proxy_config.default_instance_id = "used".into();
+        assert!(validate_instance_removal(&global, "used").is_err());
+        global.proxy_config.default_instance_id.clear();
+        global.proxy_config.routes.push(crate::models::ProxyRoute {
+            target_instance_id: "used".into(), enabled: false, ..Default::default()
+        });
+        assert!(validate_instance_removal(&global, "used").is_err());
+        assert!(validate_instance_removal(&global, "unrelated").is_ok());
+        global.proxy_config.routes.clear();
+        assert!(validate_instance_removal(&global, "used").is_ok());
+    }
+
+    #[test]
+    fn save_config_reports_numeric_normalization_and_preserves_manual_text() {
+        let original = normalize_for_launch(InstanceConfig {
+            alias: "test".into(), explicit_overrides: Some(vec!["temp".into()]),
+            ..InstanceConfig::default()
+        }).into_config();
+        let mut submitted = serde_json::to_value(&original).unwrap();
+        submitted["temp"] = serde_json::json!(0.123456789);
+        submitted["manual_command"] = serde_json::json!("--temp 0.123456789");
+        let normalized = normalize_submitted_instances(HashMap::from([("test".into(), submitted)])).unwrap();
+        assert_eq!(serde_json::to_value(&normalized.changed["test"]).unwrap()["temp"], 0.12345679);
+        assert_eq!(normalized.all["test"].manual_command, "--temp 0.123456789");
+        let canonical = serde_json::to_value(&normalized.all["test"]).unwrap();
+        let unchanged = normalize_submitted_instances(HashMap::from([("test".into(), canonical)])).unwrap();
+        assert!(unchanged.changed.is_empty());
+        assert!(normalize_submitted_instances(HashMap::from([("test".into(), serde_json::json!({"temp":"invalid"}))])).is_err());
+    }
+
+    #[test]
+    fn management_revision_normalizes_relative_absolute_and_duplicate_roots() {
+        let mut original = default_global_config();
+        let mut equivalent = default_global_config();
+        let absolute = crate::utils::get_data_dir().join("models").to_string_lossy().into_owned();
+        equivalent.model_dirs = vec![absolute.clone(), absolute];
+        assert_eq!(management_config_revision(&original), management_config_revision(&equivalent));
+        original.default_engine_id = "changed".into();
+        assert_ne!(management_config_revision(&original), management_config_revision(&equivalent));
+    }
 
     #[test]
     fn engine_names_are_not_published_when_persistence_fails() {
@@ -876,7 +1050,7 @@ pub mod ipc {
     pub async fn load_config(
         state: tauri::State<'_, AppState>,
         app: tauri::AppHandle,
-    ) -> crate::error::AppResult<GlobalConfig> {
+    ) -> crate::error::AppResult<serde_json::Value> {
         super::load_config(state, app)
             .await
             .map_err(crate::error::AppError::from)

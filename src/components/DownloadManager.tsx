@@ -85,14 +85,25 @@ export default function DownloadManager() {
     return `${prefix}: ${message}`
   }
   useEffect(() => {
-    const meta = (window as any).__downloadSnapshotMeta
-    if (meta) {
+    let active = true
+    let externallyUpdated = false
+    const applyMeta = (meta: NonNullable<Window['__downloadSnapshotMeta']>) => {
       setResumePolicy(normalizeResumePolicy(meta.resume_policy || 'manual'))
       setConcurrency(clampConcurrency(meta.max_concurrent || 1))
       const bandwidth = preferredBandwidthDisplay(meta.bandwidth_limit_bytes_per_sec || 0, initialBandwidthUnitRef.current)
       setBandwidthLimit(bandwidth.limit)
       setBandwidthUnit(bandwidth.unit)
       setLowPriorityThrottle(!!meta.low_priority_throttle)
+      setSettingsError('')
+    }
+    const refreshSettings = () => {
+      externallyUpdated = true
+      if (window.__downloadSnapshotMeta) applyMeta(window.__downloadSnapshotMeta)
+    }
+    window.addEventListener('lsm-download-settings-changed', refreshSettings)
+    const meta = window.__downloadSnapshotMeta
+    if (meta) {
+      applyMeta(meta)
     } else {
       void Promise.all([
         invoke<string>('get_download_resume_policy'),
@@ -101,6 +112,7 @@ export default function DownloadManager() {
         invoke<boolean>('get_download_low_priority_throttle'),
       ])
         .then(([policy, concurrent, bytes, throttle]) => {
+          if (!active || externallyUpdated) return
           setResumePolicy(normalizeResumePolicy(policy || 'manual'))
           setConcurrency(clampConcurrency(concurrent || 1))
           const bandwidth = preferredBandwidthDisplay(bytes || 0, initialBandwidthUnitRef.current)
@@ -110,10 +122,16 @@ export default function DownloadManager() {
           setSettingsError('')
         })
         .catch((error) => {
+          if (!active || externallyUpdated) return
           setSettingsError(settingsFailureText(settingsLoadFailedRef.current, error))
         })
     }
-    setTimeout(() => setInitialLoading(false), 300)
+    const loadingTimer = setTimeout(() => setInitialLoading(false), 300)
+    return () => {
+      active = false
+      clearTimeout(loadingTimer)
+      window.removeEventListener('lsm-download-settings-changed', refreshSettings)
+    }
   }, [])
   useEffect(() => {
     try {

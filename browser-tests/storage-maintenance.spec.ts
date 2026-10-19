@@ -4,6 +4,17 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('external maintenance refreshes an already open storage inventory', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('lastTab', 'storage'))
+  await page.goto('/?scenario=storage-maintenance')
+  await expect(page.locator('[data-storage-group="private-scratch"]')).toBeVisible()
+  const previous = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(c => c.command === 'get_storage_maintenance_inventory').length)
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent('management-config-changed', {
+    operation: 'storage.cleanup', revision: 0, status: 'succeeded',
+  }))
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(c => c.command === 'get_storage_maintenance_inventory').length)).toBeGreaterThan(previous)
+})
+
 test('storage maintenance separates cleanup, restart scheduling, revocation, and inventory-only output', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')

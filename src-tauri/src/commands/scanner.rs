@@ -448,16 +448,38 @@ fn model_artifact_references(instance: &InstanceConfig) -> Result<ModelArtifactR
 fn model_reference_matches_target(references: &ModelArtifactReferences, target: &Path) -> bool {
     let target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
     let target_identity = engine_path_identity(&target);
-    references
-        .exact_paths
-        .iter()
-        .any(|candidate| engine_path_identity(Path::new(candidate)) == target_identity)
-        || references.model_directories.iter().any(|directory| {
-            let directory = Path::new(directory);
-            let directory =
-                std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
-            path_is_within(&target, &directory)
-        })
+    references.exact_paths.iter().any(|candidate| {
+        let candidate = Path::new(candidate);
+        if engine_path_identity(candidate) == target_identity {
+            return true;
+        }
+        // Download deletion/replacement checks a single physical file, while
+        // an instance usually names only the first shard. Protect siblings
+        // even when a download is incomplete and cannot yet be fully resolved.
+        let shard = |path: &Path| {
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .and_then(crate::model_artifacts::parse_model_shard_name)
+        };
+        match (
+            shard(candidate),
+            shard(&target),
+            candidate.parent(),
+            target.parent(),
+        ) {
+            (Some(left), Some(right), Some(left_dir), Some(right_dir)) => {
+                left.base == right.base
+                    && left.total == right.total
+                    && engine_path_identity(left_dir) == engine_path_identity(right_dir)
+            }
+            _ => false,
+        }
+    }) || references.model_directories.iter().any(|directory| {
+        let directory = Path::new(directory);
+        let directory =
+            std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+        path_is_within(&target, &directory)
+    })
 }
 
 pub(crate) fn instances_referencing_models(
@@ -1710,6 +1732,10 @@ pub async fn load_app_data(
 pub async fn get_cached_scan(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<CachedScan>, String> {
+    // Cache hydration publishes inventory too. Use the same order everywhere
+    // so a delayed startup snapshot cannot replace a completed live scan.
+    let _model_guard = MODEL_SCAN_LOCK.lock().await;
+    let _engine_guard = ENGINE_SCAN_LOCK.lock().await;
     let mut models = model_inventory::list_cached_models()?;
     mark_sharded_models(&mut models);
 
@@ -2169,6 +2195,28 @@ mod incremental_scan_tests {
             .unwrap(),
             vec!["Draft"]
         );
+    }
+
+    #[test]
+    fn a_first_shard_reference_protects_other_members_even_before_download_finishes() {
+        let instances = HashMap::from([(
+            "sharded".into(),
+            InstanceConfig {
+                name: "Sharded instance".into(),
+                model_path: "/models/Qwen-00001-of-00003.gguf".into(),
+                ..InstanceConfig::default()
+            },
+        )]);
+        let references = |path| {
+            instances_referencing_models(&instances, &HashMap::new(), &[PathBuf::from(path)])
+                .unwrap()
+        };
+        assert_eq!(
+            references("/models/Qwen-00002-of-00003.gguf"),
+            vec!["Sharded instance"]
+        );
+        assert!(references("/other/Qwen-00002-of-00003.gguf").is_empty());
+        assert!(references("/models/Other-00002-of-00003.gguf").is_empty());
     }
 
     #[cfg(windows)]
@@ -2804,7 +2852,65 @@ mod incremental_scan_tests {
     }
 }
 
+pub(crate) fn engine_references(state: &AppState, id: &str) -> serde_json::Value {
+    let directory = state.config_dir.lock().unwrap().clone();
+    let global = crate::commands::config::read_config_from_disk(&directory);
+    let fallback = if global.default_engine_id.is_empty() {
+        state
+            .engines
+            .lock()
+            .unwrap()
+            .first()
+            .map(|engine| engine.id.clone())
+            .unwrap_or_default()
+    } else {
+        global.default_engine_id.clone()
+    };
+    let instances = global
+        .instances
+        .iter()
+        .filter(|(_, instance)| {
+            let effective = if instance.engine_id.is_empty() {
+                &fallback
+            } else {
+                &instance.engine_id
+            };
+            crate::path_utils::paths_equal(Path::new(effective), Path::new(id))
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let running = state
+        .running
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, running)| {
+            running.launch_config.as_ref().is_some_and(|config| {
+                let selected = if config.engine_id.is_empty() {
+                    &fallback
+                } else {
+                    &config.engine_id
+                };
+                crate::path_utils::paths_equal(Path::new(selected), Path::new(id))
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    serde_json::json!({"instances":instances,"running":running,"default":crate::path_utils::paths_equal(Path::new(&global.default_engine_id),Path::new(id))})
+}
+
 pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let references = engine_references(&state, &id);
+    if references["default"] == true
+        || references["instances"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty())
+        || references["running"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty())
+    {
+        return Err("Engine is default, referenced or running".into());
+    }
     let referenced_by = instances_referencing_engine(&state.instances.lock().unwrap(), &id);
     if !referenced_by.is_empty() {
         return Err(format!(

@@ -1,0 +1,8 @@
+{
+  "safe-start": { "ctx_size_auto": false, "ctx_size": 4096, "gpu_layers_auto": true, "batch_size": 1024, "ubatch_size": 256, "parallel": 1, "flash_attn": "auto", "cont_batching": true, "cache_ram": 4096, "metrics": true, "props": true, "slots_enabled": true },
+  "single-chat": { "ctx_size_auto": true, "gpu_layers_auto": true, "batch_size": 2048, "ubatch_size": 512, "parallel": 1, "cont_batching": true, "flash_attn": "auto", "cache_ram": 8192, "metrics": true, "props": true, "slots_enabled": true, "n_predict": -1 },
+  "api-service": { "ctx_size_auto": true, "gpu_layers_auto": true, "batch_size": 4096, "ubatch_size": 1024, "parallel": 4, "cont_batching": true, "flash_attn": "on", "cache_ram": 8192, "metrics": true, "props": true, "slots_enabled": true },
+  "long-context": { "ctx_size_auto": false, "ctx_size": 32768, "batch_size": 2048, "ubatch_size": 512, "parallel": 1, "cache_ram": 16384, "ctx_checkpoints": 64, "flash_attn": "auto", "context_shift": true, "metrics": true, "props": true },
+  "low-vram": { "ctx_size_auto": false, "ctx_size": 4096, "gpu_layers_auto": true, "batch_size": 512, "ubatch_size": 128, "parallel": 1, "cache_ram": 2048, "flash_attn": "auto", "no_kv_offload": false, "metrics": true, "props": true, "slots_enabled": true },
+  "spec-draft-mtp": { "spec_type": "draft-mtp", "draft_tokens": 3, "spec_draft_n_min": 1, "batch_size": 4096, "ubatch_size": 1024, "cont_batching": true, "metrics": true, "props": true, "slots_enabled": true }
+}
