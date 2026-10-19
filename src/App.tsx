@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, Component, ReactNode } from 'react'
 import { Activity, BarChart3, BookOpen, Cpu, Database, Download, HardDrive, Monitor, Network, Route, Server, Settings, Terminal } from 'lucide-react'
 import { version } from '../package.json'
 import { invokeApp as invoke } from './lib/ipc'
@@ -134,6 +134,7 @@ function AppInner() {
   const [autoStartRetryGeneration, setAutoStartRetryGeneration] = useState(0)
   const appDisposedRef = useRef(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
+  const closeCommandCenter = useCallback(() => setCommandCenterOpen(false), [])
   const [proxyExitConfirmOpen, setProxyExitConfirmOpen] = useState(false)
   const [proxyExitBusy, setProxyExitBusy] = useState(false)
   const [proxyExitError, setProxyExitError] = useState('')
@@ -440,7 +441,7 @@ function AppInner() {
         open={commandCenterOpen}
         issues={productIssues}
         commands={commandActions}
-        onClose={() => setCommandCenterOpen(false)}
+        onClose={closeCommandCenter}
       />
       <RuntimeExitDialogs
         confirmationOpen={proxyExitConfirmOpen}

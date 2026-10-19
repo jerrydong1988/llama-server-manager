@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 mod catalog;
+pub(crate) mod desktop;
 mod extended;
 mod operations;
 mod scheduling;
@@ -56,6 +57,13 @@ fn persist_tasks(directory: &std::path::Path, tasks: &[Task]) -> Result<(), Fail
         .map_err(Failure::from)
 }
 
+fn task_summaries(tasks: &[Task]) -> Value {
+    json!(tasks.iter().rev().map(|task| json!({
+        "id":task.id,"operation":task.operation,"status":task.status,
+        "created_at":task.created_at,"updated_at":task.updated_at
+    })).collect::<Vec<_>>())
+}
+
 impl Host {
     async fn request(self: Arc<Self>, request: Request) -> Response {
         let id = request.id.clone();
@@ -107,8 +115,8 @@ impl Host {
         operation.validate(&request.arguments)?;
         match operation.name {
             "service.capabilities" => return Ok(json!({"protocol":wire::VERSION,"version":env!("CARGO_PKG_VERSION"),"operations":catalog::operations().iter().map(|op| json!({"name":op.name,"description":op.description,"permission":op.permission,"schema":op.schema()})).collect::<Vec<_>>() })),
-            "tasks.list" => return Ok(json!(self.tasks.lock().unwrap().iter().rev().take(100).map(|task| json!({"id":task.id,"operation":task.operation,"status":task.status,"created_at":task.created_at,"updated_at":task.updated_at})).collect::<Vec<_>>())),
-            "tasks.get" => return self.tasks.lock().unwrap().iter().find(|task| task.id == request.arguments["id"].as_str().unwrap_or("")).map(|task| json!(task)).ok_or_else(|| Failure::new("NOT_FOUND", "task not found")),
+            "tasks.list" => return Ok(self.list_tasks()),
+            "tasks.get" => return self.get_task(request.arguments["id"].as_str().unwrap_or("")),
             "tasks.cancel" => return self.cancel_task(request.arguments["id"].as_str().unwrap_or("")),
             _ => {},
         }
@@ -176,6 +184,7 @@ impl Host {
             }
             id
         };
+        self.notify_tasks_changed(&task_id);
         let host = self.clone();
         let task_copy = task_id.clone();
         let cancellation = Arc::new(tokio::sync::Notify::new());
@@ -238,6 +247,21 @@ impl Host {
         Ok(json!({"task_id":task_id,"status":"queued"}))
     }
 
+    fn list_tasks(&self) -> Value {
+        // Return the entire bounded journal, including older tasks still queued
+        // behind a slow operation. A latest-100 slice can hide cancellable work.
+        task_summaries(&self.tasks.lock().unwrap())
+    }
+
+    fn get_task(&self, id: &str) -> Result<Value, Failure> {
+        self.tasks.lock().unwrap().iter().find(|task| task.id == id)
+            .map(|task| json!(task)).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))
+    }
+
+    fn notify_tasks_changed(&self, id: &str) {
+        let _ = self.app.emit("management-task-changed", json!({"id":id}));
+    }
+
     fn begin_task(&self, id: &str) -> Result<bool, Failure> {
         let mut tasks = self.tasks.lock().unwrap();
         let task = tasks.iter_mut().find(|task| task.id == id).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))?;
@@ -245,6 +269,8 @@ impl Host {
         task.status = "running".into();
         task.updated_at = chrono::Utc::now().timestamp_millis();
         persist_tasks(&self.directory, &tasks)?;
+        drop(tasks);
+        self.notify_tasks_changed(id);
         Ok(true)
     }
 
@@ -262,7 +288,10 @@ impl Host {
             if let Err(error) = persist_tasks(&self.directory, &tasks) { tasks[index] = previous; return Err(error); }
             if let Some(cancellation) = self.cancellations.lock().unwrap().get(id) { cancellation.notify_one(); }
         }
-        Ok(json!({"id":id,"status":tasks[index].status}))
+        let result = json!({"id":id,"status":tasks[index].status});
+        drop(tasks);
+        self.notify_tasks_changed(id);
+        Ok(result)
     }
 
     fn update_task(
@@ -291,7 +320,10 @@ impl Host {
             Some(Err(error)) => task.error = Some(error),
             None => {}
         }
-        persist_tasks(&self.directory, &tasks)
+        persist_tasks(&self.directory, &tasks)?;
+        drop(tasks);
+        self.notify_tasks_changed(id);
+        Ok(())
     }
 }
 
@@ -318,6 +350,7 @@ pub fn start(app: tauri::AppHandle) -> Result<(), String> {
     for task in &mut tasks {
         if task.status == "running" || task.status == "queued" {
             task.status = "interrupted".into();
+            task.updated_at = chrono::Utc::now().timestamp_millis();
             task.error = Some(Failure::new(
                 "INTERRUPTED",
                 "host exited before recording completion; inspect resource state before retrying",
@@ -334,6 +367,7 @@ pub fn start(app: tauri::AppHandle) -> Result<(), String> {
         cancellations: Mutex::new(std::collections::HashMap::new()),
         _lock: lock,
     });
+    app.manage(host.clone());
     tauri::async_runtime::spawn(async move {
         if hidden_start() {
             let state = app.state::<crate::models::AppState>();
@@ -363,4 +397,25 @@ fn safe_error(mut error: Failure) -> Failure {
     error.message = crate::commands::server::redact_command_secrets(&error.message);
     error.message = error.message.chars().take(4096).collect();
     error
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    #[test]
+    fn journal_listing_keeps_old_active_tasks_visible_and_omits_heavy_details() {
+        let tasks: Vec<_> = (0..200).map(|index| Task {
+            id: index.to_string(), operation: "engines.probe_all".into(),
+            request_digest: "digest".into(), idempotency_key: None,
+            status: if index == 0 { "queued" } else { "succeeded" }.into(),
+            created_at: index, updated_at: index, result: Some(json!({"large":"snapshot"})), error: None,
+        }).collect();
+        let value = task_summaries(&tasks);
+        let rows = value.as_array().unwrap();
+        assert_eq!(rows.len(), 200);
+        assert_eq!(rows[0]["id"], "199");
+        assert_eq!(rows[199]["status"], "queued");
+        assert!(rows.iter().all(|row| row.get("result").is_none() && row.get("request_digest").is_none()));
+    }
 }

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Search, X } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { Badge, Button, TextInput } from '../ui'
+import { BackgroundTasksPanel } from '../backgroundTasks/BackgroundTasksPanel'
+import { getBackgroundTaskLabels } from '../../i18n/backgroundTasks'
 
 export type ProductIssue = {
   id: string
@@ -32,18 +34,34 @@ export function CommandCenter({
   commands: CommandAction[]
   onClose: () => void
 }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const copy = t.commandCenter
+  const taskCopy = getBackgroundTaskLabels(lang)
   const [query, setQuery] = useState('')
+  const [view, setView] = useState<'shortcuts' | 'tasks'>('shortcuts')
+  const dialog = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     setQuery('')
+    const previousFocus = document.activeElement
     const handler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
+      if (event.key !== 'Tab') return
+      const elements = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input, select, [tabindex="0"]') ?? [])
+        .filter(element => element.getClientRects().length > 0)
+      const first = elements[0], last = elements[elements.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
     }
     window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    if (!dialog.current?.contains(document.activeElement)) {
+      dialog.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+    }
+    return () => {
+      window.removeEventListener('keydown', handler)
+      if (previousFocus instanceof HTMLElement) previousFocus.focus()
+    }
   }, [open, onClose])
 
   const filteredCommands = useMemo(() => {
@@ -70,13 +88,13 @@ export function CommandCenter({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/55 px-4 py-12 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <div className="w-full max-w-4xl overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100">
+    <div ref={dialog} tabIndex={-1} className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/55 px-4 py-6 sm:py-12 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="command-center-title">
+      <div className={`w-full ${view === 'tasks' ? 'max-w-6xl' : 'max-w-4xl'} overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100`}>
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Search className="h-5 w-5 text-blue-500" />
-              <h2 className="text-lg font-semibold">{copy.title}</h2>
+              <h2 id="command-center-title" className="text-lg font-semibold">{copy.title}</h2>
               {issues.length > 0
                 ? <Badge tone="amber">{issues.length} {copy.needAttention}</Badge>
                 : <Badge tone="emerald">{copy.healthy}</Badge>}
@@ -93,14 +111,29 @@ export function CommandCenter({
           </button>
         </div>
 
-        <div className="grid max-h-[74vh] overflow-y-auto lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div role="tablist" aria-label={copy.title} className="flex gap-2 border-b border-slate-200 px-5 py-2 dark:border-slate-800"
+          onKeyDown={event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+            event.preventDefault()
+            const next = event.key === 'Home' ? 'shortcuts' : event.key === 'End' ? 'tasks' : view === 'tasks' ? 'shortcuts' : 'tasks'
+            setView(next)
+            document.getElementById(`command-tab-${next}`)?.focus()
+          }}>
+          {(['shortcuts', 'tasks'] as const).map(tab => <button type="button" role="tab" key={tab} id={`command-tab-${tab}`}
+            aria-selected={view === tab} aria-controls={`command-panel-${tab}`} tabIndex={view === tab ? 0 : -1}
+            onClick={() => setView(tab)} className={`min-h-11 rounded-md px-4 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${view === tab ? 'bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'text-slate-600 dark:text-slate-300'}`}>
+            {tab === 'tasks' ? taskCopy.title : taskCopy.shortcuts}
+          </button>)}
+        </div>
+        {view === 'tasks' ? <div role="tabpanel" id="command-panel-tasks" aria-labelledby="command-tab-tasks" className="max-h-[68vh] overflow-y-auto">
+          <BackgroundTasksPanel onClose={onClose} />
+        </div> : <div role="tabpanel" id="command-panel-shortcuts" aria-labelledby="command-tab-shortcuts" className="grid max-h-[68vh] overflow-y-auto lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="min-w-0 space-y-4 p-5">
             <TextInput
               value={query}
               onChange={event => setQuery(event.target.value)}
               placeholder={copy.search}
               leadingIcon={<Search className="h-4 w-4" />}
-              autoFocus
             />
 
             <section className="space-y-2">
@@ -162,7 +195,7 @@ export function CommandCenter({
               </div>
             )}
           </aside>
-        </div>
+        </div>}
       </div>
     </div>
   )

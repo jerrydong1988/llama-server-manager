@@ -357,6 +357,15 @@ async function run() {
 
   await mutate('service.stop', {})
   await wait(3000)
+  // A crash can leave queued/running records on disk. Recovery must preserve
+  // terminal history, mark unfinished work interrupted, and advance its timestamp.
+  const journalPath = path.join(data, 'management', 'tasks.json')
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'))
+  for (const status of ['queued', 'running']) journal.push({
+    id: `journal-${status}`, operation: 'models.refresh', request_digest: `journal-${status}`,
+    idempotency_key: null, status, created_at: 1, updated_at: 1, result: null, error: null,
+  })
+  fs.writeFileSync(journalPath, JSON.stringify(journal), 'utf8')
   // Terminal and paused tasks live on disk, outside the active scheduler queue.
   const history = ['paused', 'completed', 'error'].map((status, index) => ({
     id: `history-${status}`, repo_id: 'fixture/history', source: 'huggingface',
@@ -369,6 +378,13 @@ async function run() {
   const restarted = await call('service.start', {}, ['--data-dir', data.replaceAll('\\', '/')])
   assert.notEqual(restarted.data.pid, hostPid)
   hostPid = restarted.data.pid
+  for (const status of ['queued', 'running']) {
+    const task = (await call('tasks.get', { id: `journal-${status}` })).data
+    assert.equal(task.status, 'interrupted')
+    assert.equal(task.error.code, 'INTERRUPTED')
+    assert.ok(task.updated_at > 1)
+    assert.equal((await call('tasks.cancel', { id: task.id })).data.status, 'interrupted')
+  }
   assertDecimals((await call('instances.get', { id: 'agent-fixture' })).data.config, { ...decimalDefaults, ...decimalPatch })
   assert.equal((await call('downloads.list')).data.max_concurrent, 2)
   const restoredFiles = (await call('downloads.list')).data.queue.flatMap(entry => entry.files)
