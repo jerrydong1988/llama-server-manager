@@ -1,6 +1,6 @@
 # 功能审计修复与交叉验证
 
-基线：`codex/agent-management-exploration` 的 `1ca1d455`。本轮继续在探索分支验证，不合并 master、不发布正式版本。
+审计基线：`codex/agent-management-exploration` 的 `1ca1d455`。以下记录探索分支的修复与验证；后续集成状态以 PR 和测试包 `BUILD.json` 为准，正式版本另行发布。
 
 ## 修复映射
 

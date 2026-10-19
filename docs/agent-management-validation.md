@@ -1,6 +1,6 @@
-# CLI / MCP 探索版人工验证
+# CLI / MCP 测试包人工验证
 
-本包来自 `codex/agent-management-exploration`，不是正式版本。确切提交、平台和时间见包内
+本包由 PR 或 master 的 CI 构建，不是正式版本。确切提交、平台和时间见包内
 `BUILD.json`，二进制与文档的 SHA256 见 `SHA256SUMS.txt`；压缩包旁还有独立校验文件。
 完整架构、覆盖矩阵和后续边界见 `agent-management-exploration.md`。
 
