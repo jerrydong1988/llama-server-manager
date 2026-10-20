@@ -30,3 +30,13 @@ pub async fn get_management_task(app: tauri::AppHandle, id: String) -> AppResult
 pub async fn cancel_management_task(app: tauri::AppHandle, id: String) -> AppResult<Value> {
     host(&app)?.cancel_task(&id).map_err(desktop_error)
 }
+
+#[tauri::command]
+pub async fn delete_management_task(app: tauri::AppHandle, id: String) -> AppResult<Value> {
+    host(&app)?.delete_task(&id).map_err(desktop_error)
+}
+
+#[tauri::command]
+pub async fn clear_management_tasks(app: tauri::AppHandle, statuses: Option<Vec<String>>) -> AppResult<Value> {
+    host(&app)?.clear_tasks(statuses.as_deref()).map_err(desktop_error)
+}

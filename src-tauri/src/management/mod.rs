@@ -2,6 +2,7 @@
 mod catalog;
 pub(crate) mod desktop;
 mod extended;
+mod history;
 mod operations;
 mod scheduling;
 #[allow(dead_code)]
@@ -118,6 +119,18 @@ impl Host {
             "tasks.list" => return Ok(self.list_tasks()),
             "tasks.get" => return self.get_task(request.arguments["id"].as_str().unwrap_or("")),
             "tasks.cancel" => return self.cancel_task(request.arguments["id"].as_str().unwrap_or("")),
+            "tasks.delete" | "tasks.clear" => {
+                if request.idempotency_key.is_some() {
+                    return Err(Failure::new("VALIDATION", "task history cleanup does not accept idempotency keys"));
+                }
+                return if operation.name == "tasks.delete" {
+                    self.delete_task(request.arguments["id"].as_str().unwrap_or(""))
+                } else {
+                    let statuses: Option<Vec<String>> = request.arguments.get("statuses")
+                        .map(|value| serde_json::from_value(value.clone()).expect("validated status array"));
+                    self.clear_tasks(statuses.as_deref())
+                };
+            }
             _ => {},
         }
         if operation.permission == "read" {
@@ -190,7 +203,7 @@ impl Host {
         let cancellation = Arc::new(tokio::sync::Notify::new());
         self.cancellations.lock().unwrap().insert(task_id.clone(), cancellation.clone());
         tauri::async_runtime::spawn(async move {
-            if host.tasks.lock().unwrap().iter().any(|task| task.id == task_copy && task.status == "cancelled") {
+            if !host.tasks.lock().unwrap().iter().any(|task| task.id == task_copy && task.status == "queued") {
                 host.cancellations.lock().unwrap().remove(&task_copy);
                 return;
             }
@@ -256,6 +269,22 @@ impl Host {
     fn get_task(&self, id: &str) -> Result<Value, Failure> {
         self.tasks.lock().unwrap().iter().find(|task| task.id == id)
             .map(|task| json!(task)).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))
+    }
+
+    fn delete_task(&self, id: &str) -> Result<Value, Failure> {
+        self.remove_task_history(history::Selection::One(id))
+    }
+
+    fn clear_tasks(&self, statuses: Option<&[String]>) -> Result<Value, Failure> {
+        self.remove_task_history(history::Selection::Finished(statuses))
+    }
+
+    fn remove_task_history(&self, selection: history::Selection<'_>) -> Result<Value, Failure> {
+        let result = history::remove(&self.directory, &mut self.tasks.lock().unwrap(), selection)?;
+        if result["deleted_count"].as_u64().unwrap_or(0) > 0 {
+            self.notify_tasks_changed("");
+        }
+        Ok(result)
     }
 
     fn notify_tasks_changed(&self, id: &str) {

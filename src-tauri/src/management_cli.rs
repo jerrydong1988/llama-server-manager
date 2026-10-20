@@ -251,7 +251,7 @@ async fn mcp_call(options: &Options, message: Value) -> Option<Value> {
                 } else {
                     "2025-11-25"
                 };
-            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"llama-server-manager","version":env!("CARGO_PKG_VERSION")},"instructions":"Mutations return durable task_id values. Query tasks_get until completion. Refresh revision before configuration changes. Readiness is distinct from process startup. Do not retry an interrupted task without inspecting resource state."})
+            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"llama-server-manager","version":env!("CARGO_PKG_VERSION")},"instructions":"Most mutations return durable task_id values. Query tasks_get until completion. tasks_cancel, tasks_delete and tasks_clear return results immediately. Deleting task history also removes its idempotency keys; retrying the original operation can execute it again. Refresh revision before configuration changes. Readiness is distinct from process startup. Do not retry an interrupted task without inspecting resource state."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -329,7 +329,7 @@ async fn mcp(options: &Options) -> Result<(), String> {
 
 async fn run(options: Options) -> Result<bool, String> {
     if options.words.is_empty() || options.words[0] == "help" {
-        println!("lsm <group> <operation> [--args JSON|@file] [--wait] [--json]\nlsm service start [--app PATH] [--data-dir PATH]\nlsm schema [group.operation]\nlsm mcp [--allow-write] [--allow-delete] [--allow-cluster]\nGlobal options: --app PATH --data-dir PATH --timeout SECONDS --idempotency-key KEY\nAll operation output is JSON. Schema lists exact fields. Mutations return task_id.\nMCP defaults to read-only. Directory authorization is local CLI only.");
+        println!("lsm <group> <operation> [--args JSON|@file] [--wait] [--json]\nlsm service start [--app PATH] [--data-dir PATH]\nlsm schema [group.operation]\nlsm mcp [--allow-write] [--allow-delete] [--allow-cluster]\nGlobal options: --app PATH --data-dir PATH --timeout SECONDS --idempotency-key KEY\nAll operation output is JSON. Schema lists exact fields. Most mutations return task_id; tasks cancel/delete/clear return immediate results.\nMCP defaults to read-only. Directory authorization is local CLI only.");
         return Ok(true);
     }
     if options.words[0] == "schema" {

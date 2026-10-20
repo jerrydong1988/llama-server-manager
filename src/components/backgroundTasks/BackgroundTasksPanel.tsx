@@ -1,11 +1,12 @@
-import { useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { RefreshCw, Trash2 } from 'lucide-react'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../../i18n'
 import { getBackgroundTaskLabels } from '../../i18n/backgroundTasks'
 import { useAppStore } from '../../store'
 import { Badge, Button, SelectInput, TextInput } from '../ui'
 import { useManagementTasks } from './useManagementTasks'
-import type { TaskStatus } from './types'
+import { isFinishedTask, type TaskStatus } from './types'
 
 const tones = { queued: 'blue', running: 'amber', succeeded: 'emerald', failed: 'red', cancelled: 'slate', interrupted: 'violet' } as const
 const resourceTabs: Record<string, string> = {
@@ -20,6 +21,8 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
   const setActiveTab = useAppStore(state => state.setActiveTab)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('')
+  const confirmationLock = useRef(false)
+  const [confirming, setConfirming] = useState(false)
   const normalized = query.trim().toLowerCase()
   const rows = model.tasks.filter(task => (!status || task.status === status)
     && (!normalized || `${task.id} ${task.operation}`.toLowerCase().includes(normalized)))
@@ -28,13 +31,26 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
   const resourceTab = detail && resourceTabs[detail.operation.split('.')[0]]
   const date = (value: number) => new Date(value).toLocaleString(lang)
   const badge = (state: TaskStatus) => <Badge tone={tones[state] ?? 'slate'}>{copy.states[state] ?? state}</Badge>
+  const busy = confirming || !!model.cancelling || !!model.removing
+  const removeHistory = async (id?: string) => {
+    if (confirmationLock.current || busy) return
+    confirmationLock.current = true
+    setConfirming(true)
+    try {
+      const accepted = await confirm(id ? `${copy.deleteConfirm}\n\n${id}` : copy.clearConfirm,
+        { title: id ? copy.delete : copy.clear, kind: 'warning', okLabel: copy.confirmDelete, cancelLabel: copy.cancelDelete })
+      if (accepted) await model.removeHistory(id)
+    } finally { confirmationLock.current = false; setConfirming(false) }
+  }
 
   return <section aria-label={copy.title} className="space-y-4 p-5" data-testid="background-tasks">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <p className="max-w-2xl text-sm text-slate-600 dark:text-slate-300">{copy.description}</p>
+      <div className="flex flex-wrap gap-2"><Button variant="danger" disabled={busy || !!model.listError || !model.tasks.some(task => isFinishedTask(task.status))}
+        onClick={() => void removeHistory()}><Trash2 aria-hidden="true" className="h-4 w-4" />{model.removing === '*' ? copy.removing : copy.clear}</Button>
       <Button onClick={model.refresh} disabled={model.loading}>
         <RefreshCw aria-hidden="true" className={`h-4 w-4 ${model.loading ? 'animate-spin motion-reduce:animate-none' : ''}`} />{copy.refresh}
-      </Button>
+      </Button></div>
     </div>
     <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{copy.scope}</p>
     <div className="flex flex-col gap-3 sm:flex-row">
@@ -45,6 +61,10 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
       </SelectInput>
     </div>
     {model.listError && <p role="alert" className="break-words text-sm text-red-700 dark:text-red-300">{copy.stale} {model.listError}</p>}
+    {model.historyFeedback && <p role={model.historyFeedback.error && model.historyFeedback.code !== 'NOT_FOUND' ? 'alert' : 'status'} className="break-words text-sm">
+      {model.historyFeedback.code === 'TASK_ACTIVE' ? copy.activeProtected : model.historyFeedback.code === 'NOT_FOUND' ? copy.alreadyDeleted
+        : model.historyFeedback.error ? `${model.historyFeedback.code}: ${model.historyFeedback.error}` : `${copy.deleted} ${model.historyFeedback.count}`}
+    </p>}
     <div className="text-xs text-slate-600 dark:text-slate-400">{rows.length} / {model.tasks.length} {copy.records}</div>
     <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <div className="max-h-[48vh] min-w-0 space-y-2 overflow-y-auto p-1" aria-busy={model.loading}>
@@ -68,9 +88,12 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
             <div><dt className="text-slate-600 dark:text-slate-400">{copy.updated}</dt><dd>{date(detail.updated_at)}</dd></div>
           </dl>
           <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{copy.cancelHint}</p>
+          <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{copy.cleanupHint}</p>
           <div className="flex flex-wrap gap-2">
-            <Button disabled={detail.status !== 'queued' || !!model.cancelling || !!model.listError}
+            <Button disabled={detail.status !== 'queued' || busy || !!model.listError}
               onClick={() => void model.cancel(detail.id)}>{model.cancelling === detail.id ? copy.cancelling : copy.cancel}</Button>
+            <Button variant="danger" disabled={!isFinishedTask(detail.status) || busy || !!model.listError}
+              onClick={() => void removeHistory(detail.id)}>{model.removing === detail.id ? copy.removing : copy.delete}</Button>
             {resourceTab && <Button onClick={() => { setActiveTab(resourceTab); onClose() }}>{copy.resource}</Button>}
           </div>
           {feedback && <p role={feedback.error ? 'alert' : 'status'} className="break-words text-sm">
