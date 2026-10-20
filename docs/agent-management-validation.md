@@ -201,7 +201,7 @@ SSH 停止的端口是返回的本地隧道端口，不是远端 RPC 端口。
 
 修改请求可传 `idempotency_key` 或 CLI `--idempotency-key`：相同键与参数返回原任务；
 相同键不同参数返回 `IDEMPOTENCY_CONFLICT`。只保留最近 200 个管理任务，幂等去重也限定在此窗口内。
-`tasks.list` 返回最近 100 个摘要；`tasks.get` 查询具体任务。崩溃时未完成任务变为 `interrupted`，
+`tasks.list` 返回全部保留的摘要（最多 200 条）；`tasks.get` 查询具体任务。崩溃时未完成任务变为 `interrupted`，
 不会自动重放副作用。调用方必须先核对资源实际状态。
 
 每个连接帧最大 8 MiB；日志最多 1000 行/256 KiB；任务结果超过 128 KiB 时保留“结果省略”标记，
@@ -211,6 +211,29 @@ SSH 停止的端口是返回的本地隧道端口，不是远端 RPC 端口。
 取消尚处于 `queued` 的任务（包含下载入队前的网络查询）。取消结果直接返回该任务状态，不创建新的异步任务。
 已进入 `running` 的操作返回 `TASK_RUNNING`，请使用对应资源的停止/暂停命令；不会强行中断持久化事务。
 重复取消已结束任务只返回现有终态。客户端退出仍不会自动取消任务。
+
+### 清理任务历史
+
+GUI：右上角 **任务中心 → 后台任务**，在任务详情中点击 **删除记录**，或使用顶部的
+**清理全部已结束任务**。批量清理不受列表搜索/状态筛选影响，确认对话框会明确说明范围。
+
+```powershell
+.\lsm.exe tasks delete --args '{"id":"任务 ID"}'
+.\lsm.exe tasks clear --args '{"statuses":["failed","interrupted"]}'
+.\lsm.exe tasks clear
+```
+
+MCP 使用 `tasks_delete({id})`、`tasks_clear({statuses?})`，需要启动参数 `--allow-delete`。
+仅 `--allow-write` 不开放这两个工具；旧会话需重启到新版 `lsm` 后重新枚举工具。
+清理立即返回 `{deleted_ids, deleted_count, retained_count}`，不返回 `task_id`，不接受幂等键，
+也不创建清理任务本身的历史记录。CLI 可带 `--wait`，此时仍直接返回相同结果。
+
+允许清理 `succeeded/failed/cancelled/interrupted`；省略 `statuses` 表示全部已结束任务，
+显式空数组、重复项、未知或活动状态会返回 `VALIDATION` 且不删除任何记录。
+单条删除活动任务返回 `TASK_ACTIVE`，不存在的 ID 返回 `NOT_FOUND`；批量清理没有匹配时返回 0。
+排队/运行状态转换与删除共用锁。删除结果先持久化再更新内存，重启后不会复活已删除记录。
+删除仅影响管理任务记录及该记录的防重复执行凭据，不撤销操作、不删除资源文件或实例配置。
+删除后再次提交原操作（即使使用相同幂等键）可能重新执行，调用方应先检查资源状态。
 
 ## 7. 验证范围与回退
 

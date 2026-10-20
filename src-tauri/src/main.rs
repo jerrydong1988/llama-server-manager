@@ -714,6 +714,8 @@ fn main() {
             management::desktop::list_management_tasks,
             management::desktop::get_management_task,
             management::desktop::cancel_management_task,
+            management::desktop::delete_management_task,
+            management::desktop::clear_management_tasks,
             scan_models, get_models, preview_model_deletion, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
             probe_engine_capabilities,

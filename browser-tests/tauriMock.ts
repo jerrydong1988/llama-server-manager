@@ -1027,6 +1027,8 @@ mockIPC((command, payload) => {
   switch (command) {
     case 'list_management_tasks':
     case 'get_management_task':
+    case 'delete_management_task':
+    case 'clear_management_tasks':
     case 'cancel_management_task': return managementTasksMock(command, args)
     case 'plugin:app|bundle_type': return BROWSER_SCENARIO === 'updater-unbundled' ? null : 'nsis'
     case 'plugin:updater|check':
@@ -1068,6 +1070,8 @@ mockIPC((command, payload) => {
         OkCancelCustom?: [string, string]
         OkCustom?: string
       } | undefined
+      if (['删除记录', '清理全部已结束任务', 'Delete record', 'Clear all finished tasks'].includes(String(args.title))
+        && !window.__MANAGEMENT_TASK_TEST__.confirmation()) return buttons?.OkCancelCustom?.[1] ?? 'Cancel'
       return buttons?.OkCancelCustom?.[0] ?? buttons?.OkCustom ?? 'Ok'
     }
     case 'get_startup_elapsed': return 1

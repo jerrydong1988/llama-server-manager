@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { invokeApp as invoke, normalizeInvokeError } from '../../lib/ipc'
-import type { ManagementTask, ManagementTaskSummary } from './types'
+import type { ManagementTask, ManagementTaskSummary, TaskRemovalResult } from './types'
 
 export function useManagementTasks() {
   const [tasks, setTasks] = useState<ManagementTaskSummary[]>([])
@@ -11,9 +11,12 @@ export function useManagementTasks() {
   const [listError, setListError] = useState('')
   const [detailError, setDetailError] = useState('')
   const [cancelling, setCancelling] = useState('')
+  const [removing, setRemoving] = useState('')
+  const [historyFeedback, setHistoryFeedback] = useState<{ count?: number; error?: string; code?: string } | null>(null)
   const [feedback, setFeedback] = useState<{ id: string; status?: string; error?: string; code?: string } | null>(null)
   const refreshRef = useRef<() => void>(() => {})
   const cancelLock = useRef(false)
+  const historyGeneration = useRef(0)
   const mounted = useRef(false)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
@@ -29,12 +32,20 @@ export function useManagementTasks() {
       setLoading(true)
       do {
         again = false
+        const generation = historyGeneration.current
         try {
           const rows = await invoke<ManagementTaskSummary[]>('list_management_tasks')
           if (disposed) return
+          if (generation !== historyGeneration.current) { again = true; continue }
           setTasks(rows)
           setListError('')
-          if (!selectedId && rows.length) selectTask(rows[0].id)
+          // The selected row may have been removed by CLI/MCP or cleanup here.
+          if (!rows.some(task => task.id === selectedId)) {
+            selectTask(rows[0]?.id ?? '')
+            setDetail(null)
+            setDetailError('')
+            continue
+          }
         } catch (error) {
           if (!disposed) setListError(String(error))
         }
@@ -42,10 +53,17 @@ export function useManagementTasks() {
           try {
             const task = await invoke<ManagementTask>('get_management_task', { id: selectedId })
             if (disposed) return
+            if (generation !== historyGeneration.current) { again = true; continue }
             setDetail(task)
             setDetailError('')
           } catch (error) {
-            if (!disposed) { setDetail(null); setDetailError(String(error)) }
+            if (!disposed) {
+              setDetail(null)
+              if (normalizeInvokeError(error).code === 'NOT_FOUND') {
+                selectTask('')
+                setDetailError('')
+              } else setDetailError(String(error))
+            }
           }
         }
       } while (again && !disposed)
@@ -88,6 +106,30 @@ export function useManagementTasks() {
       if (mounted.current) { setCancelling(''); refreshRef.current() }
     }
   }
+
+  const removeHistory = async (id?: string) => {
+    if (cancelLock.current) return
+    cancelLock.current = true
+    setRemoving(id ?? '*')
+    setHistoryFeedback(null)
+    try {
+      const result = await invoke<TaskRemovalResult>(id ? 'delete_management_task' : 'clear_management_tasks', id ? { id } : {})
+      historyGeneration.current++
+      if (mounted.current) {
+        setTasks(rows => rows.filter(task => !result.deleted_ids.includes(task.id)))
+        selectTask(selected => result.deleted_ids.includes(selected) ? '' : selected)
+        setDetail(task => task && result.deleted_ids.includes(task.id) ? null : task)
+        setDetailError('')
+        setHistoryFeedback({ count: result.deleted_count })
+      }
+    } catch (error) {
+      const failure = normalizeInvokeError(error)
+      if (mounted.current) setHistoryFeedback({ code: failure.code, error: failure.message })
+    } finally {
+      cancelLock.current = false
+      if (mounted.current) { setRemoving(''); refreshRef.current() }
+    }
+  }
   return { tasks, selectedId, selectTask, detail: detail?.id === selectedId ? detail : null, loading, listError, detailError,
-    cancelling, feedback, cancel, refresh: () => refreshRef.current() }
+    cancelling, feedback, cancel, removing, historyFeedback, removeHistory, refresh: () => refreshRef.current() }
 }

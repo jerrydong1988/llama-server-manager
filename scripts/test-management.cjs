@@ -247,11 +247,27 @@ async function run() {
   const queuedRename = await call('engines.rename', { id: engineId, name: 'Cancelled rename' })
   const schedulingMcp = await managementClient({ cli, app: executable, data }).mcp()
   try {
+    assert.equal((await call('tasks.delete', { id: queuedRename.data.task_id }, [], false)).error.code, 'TASK_ACTIVE')
+    const runningDelete = await schedulingMcp.tool('tasks.delete', { id: slowProbe.data.task_id }, true)
+    assert.equal(runningDelete.result.structuredContent.error.code, 'TASK_ACTIVE')
+    const invalidCleanup = await schedulingMcp.tool('tasks.clear', { statuses: ['failed', 'running'] }, true)
+    assert.equal(invalidCleanup.result.structuredContent.error.code, 'VALIDATION')
+    await call('tasks.clear', { statuses: ['failed'] })
+    assert.equal((await schedulingMcp.tool('tasks.get', { id: queuedRename.data.task_id })).status, 'queued')
+    assert.equal((await schedulingMcp.tool('tasks.get', { id: slowProbe.data.task_id })).status, 'running')
     assert.equal((await schedulingMcp.tool('tasks.cancel', { id: queuedRename.data.task_id })).status, 'cancelled')
     assert.equal((await schedulingMcp.tool('tasks.get', { id: queuedRename.data.task_id })).status, 'cancelled')
     const runningCancel = await schedulingMcp.tool('tasks.cancel', { id: slowProbe.data.task_id }, true)
     assert.equal(runningCancel.result.structuredContent.error.code, 'TASK_RUNNING')
-    checks += 3
+    // Cleanup is synchronous and must not create another task history row.
+    const beforeDelete = (await call('tasks.list')).data.length
+    const deletion = await call('tasks.delete', { id: queuedRename.data.task_id }, ['--wait'])
+    assert.deepEqual(deletion.data.deleted_ids, [queuedRename.data.task_id])
+    assert.equal(deletion.data.task_id, undefined)
+    assert.equal((await schedulingMcp.tool('tasks.list')).length, beforeDelete - 1)
+    assert.equal((await schedulingMcp.tool('tasks.get', { id: queuedRename.data.task_id }, true)).result.structuredContent.error.code, 'NOT_FOUND')
+    assert.equal((await call('tasks.delete', { id: queuedRename.data.task_id }, [], false)).error.code, 'NOT_FOUND')
+    checks += 10
   } finally { await schedulingMcp.close() }
   const stopStarted = Date.now()
   await mutate('instances.stop', { id: 'agent-fixture' })
@@ -392,17 +408,19 @@ async function run() {
     { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'engines_delete', arguments: { id: engineId } } },
     { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'instances_defaults', arguments: {} } },
     { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'instances_get', arguments: { id: 'agent-fixture' } } },
+    { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'tasks_clear', arguments: {} } },
   ].map(message => JSON.stringify(message)).join('\n') + '\n'
   const mcp = await execute(cli, ['--app', executable, '--data-dir', data, 'mcp'], { input })
   assert.equal(mcp.code, 0, mcp.stderr)
   const messages = mcp.stdout.trim().split('\n').map(line => JSON.parse(line))
-  assert.equal(messages.length, 6)
+  assert.equal(messages.length, 7)
   assert.ok(messages[1].result.tools.every(tool => tool.annotations.readOnlyHint))
   assert.equal(messages[2].result.structuredContent.ok, true)
   assert.equal(messages[3].error.code, -32602)
   assertDecimals(messages[4].result.structuredContent.data.config, decimalDefaults)
   assertDecimals(messages[5].result.structuredContent.data.config, { ...decimalDefaults, ...decimalPatch })
-  checks += 6
+  assert.equal(messages[6].error.code, -32602)
+  checks += 7
   assert.equal((await call('service.status')).data.pid, hostPid, 'MCP EOF must not terminate host')
   assert.ok(!fs.readFileSync(path.join(data, 'management', 'tasks.json'), 'utf8').includes(secret))
 
@@ -429,6 +447,7 @@ async function run() {
   const restarted = await call('service.start', {}, ['--data-dir', data.replaceAll('\\', '/')])
   assert.notEqual(restarted.data.pid, hostPid)
   hostPid = restarted.data.pid
+  assert.equal((await call('tasks.get', { id: queuedRename.data.task_id }, [], false)).error.code, 'NOT_FOUND', 'deleted history must not reappear after restart')
   for (const status of ['queued', 'running']) {
     const task = (await call('tasks.get', { id: `journal-${status}` })).data
     assert.equal(task.status, 'interrupted')
@@ -456,6 +475,32 @@ async function run() {
   const removed = await mutate('engines.delete', { id: engineId })
   assert.equal(removed.data.result.files_deleted, false)
   assert.ok(fs.existsSync(engine))
+
+  const cleanupMcp = await managementClient({ cli, app: executable, data }).mcp()
+  const writeOnlyMcp = await managementClient({ cli, app: executable, data }).mcp(['--allow-write'])
+  try {
+    const available = (await cleanupMcp.request('tools/list')).result.tools
+    for (const name of ['tasks_delete', 'tasks_clear']) {
+      assert.equal(available.find(tool => tool.name === name).annotations.destructiveHint, true)
+      assert.equal((await writeOnlyMcp.tool(name.replace('_', '.'), name === 'tasks_delete' ? { id: 'missing' } : {}, true)).error.code, -32602)
+    }
+    for (const statuses of [[], ['failed', 'failed'], ['unknown'], ['queued']]) {
+      assert.equal((await call('tasks.clear', { statuses }, [], false)).error.code, 'VALIDATION')
+    }
+    assert.equal((await call('tasks.clear', {}, ['--idempotency-key', 'not-supported'], false)).error.code, 'VALIDATION')
+    const before = (await call('tasks.list')).data
+    const configBytes = fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8')
+    const filtered = await cleanupMcp.tool('tasks.clear', { statuses: ['failed', 'interrupted'] })
+    assert.equal(filtered.deleted_count, before.filter(task => ['failed', 'interrupted'].includes(task.status)).length)
+    assert.ok((await call('tasks.list')).data.every(task => !['failed', 'interrupted'].includes(task.status)))
+    const remaining = (await call('tasks.list')).data
+    const cleared = await cleanupMcp.tool('tasks.clear')
+    assert.equal(cleared.deleted_count, remaining.length)
+    assert.deepEqual((await call('tasks.list')).data, [])
+    assert.equal((await call('tasks.clear', {}, ['--wait'])).data.deleted_count, 0)
+    assert.equal(fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8'), configBytes)
+    checks += 9
+  } finally { await writeOnlyMcp.close(); await cleanupMcp.close() }
   console.log(`Management integration passed (${checks} CLI/IPC/MCP checks; synthetic inference fixture).`)
 }
 

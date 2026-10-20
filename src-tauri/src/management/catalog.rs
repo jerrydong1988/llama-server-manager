@@ -17,7 +17,9 @@ impl Operation {
             let (name, kind) = field.split_once(':').expect("catalog field");
             let optional = name.ends_with('?');
             let name = name.trim_end_matches('?');
-            let schema = if name == "query" && self.name.starts_with("usage.") {
+            let schema = if self.name == "tasks.clear" && name == "statuses" {
+                json!({"type":"array","items":{"type":"string","enum":["succeeded","failed","cancelled","interrupted"]},"minItems":1,"maxItems":4,"uniqueItems":true})
+            } else if name == "query" && self.name.starts_with("usage.") {
                 usage_query_schema(self.name == "usage.requests")
             } else {
                 match kind {
@@ -32,7 +34,7 @@ impl Operation {
                 required.push(name);
             }
         }
-        if self.permission != "read" {
+        if self.permission != "read" && !matches!(self.name, "tasks.delete" | "tasks.clear") {
             properties.insert("idempotency_key".into(), json!({"type":"string","minLength":1,"maxLength":128,"description":"Stable key for retrying this exact operation without executing it twice"}));
         }
         json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
@@ -122,6 +124,8 @@ pub fn operations() -> Vec<Operation> {
         ("tasks.list","List recent management tasks","read",""),
         ("tasks.get","Get completion, result or failure of a management task","read","id:string"),
         ("tasks.cancel","Cancel a queued task, including network preparation; running operations use resource stop/pause","write","id:string"),
+        ("tasks.delete","Delete one finished task record and its idempotency key; queued/running tasks are protected. Returns deletion counts immediately, without creating a task.","delete","id:string"),
+        ("tasks.clear","Clear finished task history and its idempotency keys, optionally filtered by terminal statuses. Active tasks are retained. Returns deletion counts immediately, without creating a task.","delete","statuses?:strings"),
         ("paths.list","List explicitly authorized directories","read",""),
         ("paths.authorize","Authorize an existing directory; local owner CLI only","admin","purpose:string path:string"),
         ("paths.revoke","Revoke an explicitly authorized directory; local owner CLI only","admin","purpose:string path:string"),
