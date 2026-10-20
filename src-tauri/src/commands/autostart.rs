@@ -73,26 +73,7 @@ pub fn enable_autostart() -> Result<(), String> {
                 data,
             ));
         }
-        let output = std::process::Command::new("reg")
-            .args([
-                "add",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                APP_NAME,
-                "/t",
-                "REG_SZ",
-                "/d",
-                &quoted,
-                "/f",
-            ])
-            .output()
-            .map_err(|e| format!("注册表写入失败: {}", e))?;
-        if !output.status.success() {
-            return Err(format!(
-                "注册表写入失败: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
+        crate::runtime_service::autostart::set_windows_run_entry(APP_NAME, &quoted)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -157,22 +138,7 @@ pub fn enable_autostart() -> Result<(), String> {
 pub fn disable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("reg")
-            .args([
-                "delete",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                APP_NAME,
-                "/f",
-            ])
-            .output()
-            .map_err(|e| format!("注册表删除失败: {}", e))?;
-        if !output.status.success() {
-            return Err(format!(
-                "注册表删除失败: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
+        crate::runtime_service::autostart::delete_windows_run_entry(APP_NAME)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -204,27 +170,11 @@ pub fn disable_autostart() -> Result<(), String> {
 pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
-        let out = std::process::Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                APP_NAME,
-            ])
-            .output();
-        match out {
-            Ok(o) => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                let data_matches = crate::utils::data_dir_override().map_or(true, |data| {
-                    stdout.contains(&format!(
-                        "--data-dir {}",
-                        crate::runtime_service::autostart::windows_quote_argument(data)
-                    ))
-                });
-                Ok(stdout.contains(APP_NAME) && stdout.contains(&exe_path()?) && data_matches)
-            }
-            Err(_) => Ok(false),
-        }
+        let registered = crate::runtime_service::autostart::read_windows_run_entry(APP_NAME)?;
+        let executable = exe_path()?;
+        Ok(registered.is_some_and(|command| {
+            windows_registration_matches(&command, &executable, crate::utils::data_dir_override())
+        }))
     }
 
     #[cfg(target_os = "macos")]
@@ -259,9 +209,40 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn windows_registration_matches(
+    command: &str,
+    executable: &str,
+    data: Option<&std::path::Path>,
+) -> bool {
+    !executable.is_empty()
+        && command.contains(executable)
+        && data.map_or(true, |data| {
+            command.contains(&format!(
+                "--data-dir {}",
+                crate::runtime_service::autostart::windows_quote_argument(data)
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_registration_keeps_executable_and_data_identity() {
+        let executable = r"C:\测试 程序\llama-server-manager.exe";
+        let data = std::path::Path::new(r"C:\测试 数据");
+        let command = format!("\"{executable}\" --data-dir \"{}\"", data.display());
+        assert!(windows_registration_matches(&command, executable, Some(data)));
+        assert!(windows_registration_matches(&command, executable, None));
+        assert!(!windows_registration_matches(&command, r"C:\old\app.exe", Some(data)));
+        assert!(!windows_registration_matches(
+            &command, executable, Some(std::path::Path::new(r"C:\other")),
+        ));
+        assert!(!windows_registration_matches("", "", None));
+    }
 
     #[test]
     fn appimage_autostart_uses_persistent_bundle_path() {
@@ -300,20 +281,25 @@ mod tests {
 // while every registered command serializes a stable AppError object.
 #[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
 pub mod ipc {
-    use super::*;
-
-    #[tauri::command]
-    pub fn enable_autostart() -> crate::error::AppResult<()> {
-        super::enable_autostart().map_err(crate::error::AppError::from)
+    async fn run<R: Send + 'static>(operation: fn() -> Result<R, String>) -> crate::error::AppResult<R> {
+        tauri::async_runtime::spawn_blocking(operation)
+            .await
+            .map_err(|error| crate::error::AppError::new("AUTOSTART_WORKER", error.to_string(), true))?
+            .map_err(crate::error::AppError::from)
     }
 
     #[tauri::command]
-    pub fn disable_autostart() -> crate::error::AppResult<()> {
-        super::disable_autostart().map_err(crate::error::AppError::from)
+    pub async fn enable_autostart() -> crate::error::AppResult<()> {
+        run(super::enable_autostart).await
     }
 
     #[tauri::command]
-    pub fn is_autostart_enabled() -> crate::error::AppResult<bool> {
-        super::is_autostart_enabled().map_err(crate::error::AppError::from)
+    pub async fn disable_autostart() -> crate::error::AppResult<()> {
+        run(super::disable_autostart).await
+    }
+
+    #[tauri::command]
+    pub async fn is_autostart_enabled() -> crate::error::AppResult<bool> {
+        run(super::is_autostart_enabled).await
     }
 }

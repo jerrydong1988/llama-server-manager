@@ -7,7 +7,7 @@ use crate::vector_policy::normalize_for_launch;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 // Unified config write helpers.
 
@@ -480,68 +480,75 @@ pub async fn save_config(
     last_tab: String,
     dark_mode: bool,
     expected_management_revision: Option<u64>,
-    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> AppResult<HashMap<String, InstanceConfig>> {
-    let mut timing = crate::operation_timing::OperationTiming::new("save_config");
-    let normalized = normalize_submitted_instances(instances)
-        .map_err(|error| AppError::new("INVALID_CONFIG", error, false))?;
-    let instances = normalized.all;
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let snapshot = FrontendConfigSnapshot {
-        instances: instances.clone(),
-        model_dirs,
-        engine_dirs,
-        default_engine_id,
-        instance_order,
-        last_tab,
-        dark_mode,
-    };
-    timing.mark("normalize");
-    std::fs::create_dir_all(&config_dir).map_err(|error| {
-        AppError::new("CONFIG_DIRECTORY_WRITE", error.to_string(), true)
-            .with_context("path", config_dir.display().to_string())
-    })?;
-    {
-        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
-        if expected_management_revision.unwrap_or(0) != management_revision() {
-            return Err(AppError::new("CONFIG_CONFLICT", "配置已被外部管理客户端修改，请重新加载后再保存。", false));
-        }
-        // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
-        // concurrent start/stop can persist newer state and then be overwritten here.
-        let running_snapshot = state.running.lock().unwrap().clone();
-        let engine_names = state.engine_names.lock().unwrap().clone();
-        let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
-            AppError::new("CONFIG_RECOVERY_FAILED", error, true).with_context(
-                "path",
-                config_dir.join("instances.json").display().to_string(),
-            )
+    // Metadata reads, config locks and durable writes can all block. Keep them
+    // off the async executor used by navigation, task polling and runtime IPC.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut timing = crate::operation_timing::OperationTiming::new("save_config");
+        let normalized = normalize_submitted_instances(instances)
+            .map_err(|error| AppError::new("INVALID_CONFIG", error, false))?;
+        let instances = normalized.all;
+        let config_dir = state.config_dir.lock().unwrap().clone();
+        let snapshot = FrontendConfigSnapshot {
+            instances: instances.clone(),
+            model_dirs,
+            engine_dirs,
+            default_engine_id,
+            instance_order,
+            last_tab,
+            dark_mode,
+        };
+        timing.mark("normalize");
+        std::fs::create_dir_all(&config_dir).map_err(|error| {
+            AppError::new("CONFIG_DIRECTORY_WRITE", error.to_string(), true)
+                .with_context("path", config_dir.display().to_string())
         })?;
-        for id in global.instances.keys().filter(|id| !instances.contains_key(*id)) {
-            validate_instance_removal(&global, id)
-                .map_err(|error| AppError::new("INSTANCE_REFERENCED", error, false))?;
-            if running_snapshot.contains_key(id) || state.starting.lock().unwrap().contains(id) {
-                return Err(AppError::new("INSTANCE_ACTIVE", "Stop the instance before deleting its configuration.", false));
+        {
+            let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+            if expected_management_revision.unwrap_or(0) != management_revision() {
+                return Err(AppError::new("CONFIG_CONFLICT", "配置已被外部管理客户端修改，请重新加载后再保存。", false));
             }
+            // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
+            // concurrent start/stop can persist newer state and then be overwritten here.
+            let running_snapshot = state.running.lock().unwrap().clone();
+            let engine_names = state.engine_names.lock().unwrap().clone();
+            let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
+                AppError::new("CONFIG_RECOVERY_FAILED", error, true).with_context(
+                    "path",
+                    config_dir.join("instances.json").display().to_string(),
+                )
+            })?;
+            for id in global.instances.keys().filter(|id| !instances.contains_key(*id)) {
+                validate_instance_removal(&global, id)
+                    .map_err(|error| AppError::new("INSTANCE_REFERENCED", error, false))?;
+                if running_snapshot.contains_key(id) || state.starting.lock().unwrap().contains(id) {
+                    return Err(AppError::new("INSTANCE_ACTIVE", "Stop the instance before deleting its configuration.", false));
+                }
+            }
+            apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
+            persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
+                AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
+                    "path",
+                    config_dir.join("instances.json").display().to_string(),
+                )
+            })?;
+            *state.instances.lock().unwrap() = instances.clone();
         }
-        apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
-        persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
-            AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
-                "path",
-                config_dir.join("instances.json").display().to_string(),
-            )
-        })?;
-        *state.instances.lock().unwrap() = instances.clone();
-    }
-    timing.mark("persist-main");
-    if crate::runtime_service::manages_instances() {
-        // instances.json is the durable source of truth for this operation. The app bridge
-        // coalesces rapid edits and reliably retries delivery to the runtime service, so a
-        // routine parameter save does not wait for daemon discovery or startup.
-        crate::runtime_service::mark_config_sync_pending();
-    }
-    timing.mark("queue-runtime-sync");
-    timing.finish("success");
-    Ok(normalized.changed)
+        timing.mark("persist-main");
+        if crate::runtime_service::manages_instances() {
+            // instances.json is the durable source of truth for this operation. The app bridge
+            // coalesces rapid edits and reliably retries delivery to the runtime service, so a
+            // routine parameter save does not wait for daemon discovery or startup.
+            crate::runtime_service::mark_config_sync_pending();
+        }
+        timing.mark("queue-runtime-sync");
+        timing.finish("success");
+        Ok(normalized.changed)
+    })
+    .await
+    .map_err(|error| AppError::new("CONFIG_SAVE_WORKER", error.to_string(), true))?
 }
 
 pub async fn load_config(

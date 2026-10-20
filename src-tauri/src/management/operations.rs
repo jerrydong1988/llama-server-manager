@@ -253,13 +253,7 @@ pub async fn dispatch(app: &tauri::AppHandle, name: &str, args: &Value) -> Resul
             json!({"version":env!("CARGO_PKG_VERSION"),"protocol":super::wire::VERSION,"pid":std::process::id(),"data_directory":crate::utils::get_data_dir(),"revision":revision(&state),"runtime":crate::runtime_service::runtime_status().await.ok(),"desktop_session_required":cfg!(target_os="linux")}),
         ),
         "service.show" => {
-            crate::ensure_main_window(app).map_err(|e| Failure::new("UI", e.to_string()))?;
-            if let Some(window) = app.get_webview_window("main") {
-                window
-                    .show()
-                    .map_err(|e| Failure::new("UI", e.to_string()))?;
-                let _ = window.set_focus();
-            }
+            crate::restore_main_window(app).map_err(|error| Failure::new("UI", error))?;
             Ok(json!({"shown":true}))
         }
         "service.stop" => {
@@ -646,7 +640,15 @@ pub(super) async fn instances(
                 if name == "instances.update" && !global.instances.contains_key(&new_id) {
                     return Err("instance not found".into());
                 }
-                if global.instances.iter().any(|(other, config)| {
+                // Existing GUI configurations may intentionally share an endpoint
+                // (for example, mutually exclusive model presets). Only a new or
+                // changed endpoint introduces a conflict. Compare under the same
+                // revision/write lock that commits the update.
+                let retains_endpoint = name == "instances.update"
+                    && global.instances.get(&new_id).is_some_and(|current| {
+                        current.host == configured.host && current.port == configured.port
+                    });
+                if !retains_endpoint && global.instances.iter().any(|(other, config)| {
                     other != &new_id
                         && config.port == configured.port
                         && config.host == configured.host

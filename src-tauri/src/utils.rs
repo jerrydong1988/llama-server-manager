@@ -1,6 +1,6 @@
 use crate::models::{GgufMetadataSummary, ModelCapabilities};
 use crate::vector_policy::{classify_model_workload, ModelWorkload};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -71,8 +71,50 @@ pub fn set_data_dir_override(path: PathBuf) -> Result<(), String> {
 }
 
 pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut file = GgufReader::new(file, file_size);
+    let summary = parse_gguf_metadata_reader(path, &mut file)?;
+    // A skipped final value must not hide a file truncated during parsing.
+    let final_size = file.source.get_ref().metadata().map_err(|e| e.to_string())?.len();
+    if file.position > final_size {
+        return Err("GGUF value extends beyond the file".into());
+    }
+    Ok(summary)
+}
+
+// Token vocabularies contain hundreds of thousands of small strings. Keep
+// bounds and position in memory, and skip within the buffer when possible.
+// Querying metadata/seek position for every token stalls normal GUI saves.
+struct GgufReader<R: Read + Seek> {
+    source: BufReader<R>,
+    length: u64,
+    position: u64,
+}
+
+impl<R: Read + Seek> GgufReader<R> {
+    fn new(source: R, length: u64) -> Self {
+        Self {
+            source: BufReader::with_capacity(64 * 1024, source),
+            length,
+            position: 0,
+        }
+    }
+}
+
+impl<R: Read + Seek> Read for GgufReader<R> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.source.read(output)?;
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
+fn parse_gguf_metadata_reader<R: Read + Seek>(
+    path: &Path,
+    file: &mut GgufReader<R>,
+) -> Result<GgufMetadataSummary, String> {
+    let file_size = file.length;
     if file_size < 24 {
         return Err("file is too small".into());
     }
@@ -117,9 +159,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
         .and_then(detect_model_family);
 
     for _ in 0..metadata_kv_count {
-        let key = read_gguf_string(&mut file, &mut budget)?;
+        let key = read_gguf_string(file, &mut budget)?;
         let key_lower = key.to_lowercase();
-        let value_type = read_u32(&mut file)?;
+        let value_type = read_u32(file)?;
         let is_swa_key = key_lower.ends_with("attention.sliding_window");
 
         if key_lower.contains("vision")
@@ -142,13 +184,13 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
 
         match value_type {
             7 => {
-                let value = read_bool(&mut file)?;
+                let value = read_bool(file)?;
                 if key_lower == "clip.has_vision_encoder" && value {
                     projector_has_vision = true;
                 }
             }
             8 => {
-                let value = read_gguf_string(&mut file, &mut budget)?;
+                let value = read_gguf_string(file, &mut budget)?;
                 if key_lower == "general.architecture" {
                     architecture = Some(value.clone());
                 }
@@ -172,10 +214,10 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 }
             }
             9 if key_lower == "general.tags" => {
-                tags = read_gguf_string_array(&mut file, &mut budget)?;
+                tags = read_gguf_string_array(file, &mut budget)?;
             }
             4 => {
-                let value = read_u32(&mut file)?;
+                let value = read_u32(file)?;
                 if key == "general.file_type" {
                     file_type = Some(value);
                 }
@@ -190,7 +232,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 }
             }
             5 => {
-                let value = read_i32(&mut file)?;
+                let value = read_i32(file)?;
                 if key_lower.contains("context_length") && value > 0 {
                     context_length = Some(value as u32);
                 }
@@ -202,7 +244,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 }
             }
             10 => {
-                let value = read_u64(&mut file)?;
+                let value = read_u64(file)?;
                 if key_lower.contains("context_length") {
                     context_length = Some(value as u32);
                 }
@@ -214,7 +256,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 }
             }
             11 => {
-                let value = read_i64(&mut file)?;
+                let value = read_i64(file)?;
                 if key_lower.contains("context_length") && value > 0 {
                     context_length = Some(value as u32);
                 }
@@ -225,7 +267,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                     has_swa = Some(value > 0);
                 }
             }
-            _ => skip_gguf_value(&mut file, value_type, &mut budget)?,
+            _ => skip_gguf_value(file, value_type, &mut budget)?,
         }
     }
 
@@ -313,38 +355,38 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
     })
 }
 
-fn read_u32(file: &mut std::fs::File) -> Result<u32, String> {
+fn read_u32<R: Read + Seek>(file: &mut GgufReader<R>) -> Result<u32, String> {
     let mut buf = [0u8; 4];
     file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
     Ok(u32::from_le_bytes(buf))
 }
 
-fn read_bool(file: &mut std::fs::File) -> Result<bool, String> {
+fn read_bool<R: Read + Seek>(file: &mut GgufReader<R>) -> Result<bool, String> {
     let mut buf = [0u8; 1];
     file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
     Ok(buf[0] != 0)
 }
 
-fn read_i32(file: &mut std::fs::File) -> Result<i32, String> {
+fn read_i32<R: Read + Seek>(file: &mut GgufReader<R>) -> Result<i32, String> {
     let mut buf = [0u8; 4];
     file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
     Ok(i32::from_le_bytes(buf))
 }
 
-fn read_u64(file: &mut std::fs::File) -> Result<u64, String> {
+fn read_u64<R: Read + Seek>(file: &mut GgufReader<R>) -> Result<u64, String> {
     let mut buf = [0u8; 8];
     file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
     Ok(u64::from_le_bytes(buf))
 }
 
-fn read_i64(file: &mut std::fs::File) -> Result<i64, String> {
+fn read_i64<R: Read + Seek>(file: &mut GgufReader<R>) -> Result<i64, String> {
     let mut buf = [0u8; 8];
     file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
     Ok(i64::from_le_bytes(buf))
 }
 
-fn read_gguf_string(
-    file: &mut std::fs::File,
+fn read_gguf_string<R: Read + Seek>(
+    file: &mut GgufReader<R>,
     budget: &mut GgufParseBudget,
 ) -> Result<String, String> {
     let len = read_u64(file)?;
@@ -356,8 +398,8 @@ fn read_gguf_string(
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
-fn read_gguf_string_array(
-    file: &mut std::fs::File,
+fn read_gguf_string_array<R: Read + Seek>(
+    file: &mut GgufReader<R>,
     budget: &mut GgufParseBudget,
 ) -> Result<Vec<String>, String> {
     let array_type = read_u32(file)?;
@@ -392,37 +434,38 @@ fn read_gguf_string_array(
     Ok(values)
 }
 
-fn skip_bytes(file: &mut std::fs::File, bytes: u64) -> Result<(), String> {
+fn skip_bytes<R: Read + Seek>(file: &mut GgufReader<R>, bytes: u64) -> Result<(), String> {
     ensure_bytes_available(file, bytes)?;
-    let current = file.stream_position().map_err(|e| format!("{}", e))?;
-    let target = current
-        .checked_add(bytes)
-        .ok_or_else(|| "GGUF value offset overflow".to_string())?;
-    file.seek(SeekFrom::Start(target))
+    let offset = i64::try_from(bytes).map_err(|_| "GGUF value offset overflow".to_string())?;
+    file.source
+        .seek_relative(offset)
         .map_err(|e| format!("{}", e))?;
+    file.position += bytes;
     Ok(())
 }
 
-fn ensure_bytes_available(file: &mut std::fs::File, bytes: u64) -> Result<(), String> {
-    let current = file.stream_position().map_err(|e| format!("{}", e))?;
-    let target = current
+fn ensure_bytes_available<R: Read + Seek>(file: &mut GgufReader<R>, bytes: u64) -> Result<(), String> {
+    let target = file
+        .position
         .checked_add(bytes)
         .ok_or_else(|| "GGUF value offset overflow".to_string())?;
-    let file_len = file.metadata().map_err(|e| format!("{}", e))?.len();
-    if target > file_len {
+    if target > file.length {
         return Err("GGUF value extends beyond the file".into());
     }
     Ok(())
 }
 
-fn skip_gguf_string(file: &mut std::fs::File, budget: &mut GgufParseBudget) -> Result<(), String> {
+fn skip_gguf_string<R: Read + Seek>(
+    file: &mut GgufReader<R>,
+    budget: &mut GgufParseBudget,
+) -> Result<(), String> {
     let len = read_u64(file)?;
     budget.consume_skipped_string(len)?;
     skip_bytes(file, len)
 }
 
-fn skip_gguf_array(
-    file: &mut std::fs::File,
+fn skip_gguf_array<R: Read + Seek>(
+    file: &mut GgufReader<R>,
     array_type: u32,
     array_len: u64,
     budget: &mut GgufParseBudget,
@@ -450,8 +493,8 @@ fn skip_gguf_array(
     }
 }
 
-fn skip_gguf_value(
-    file: &mut std::fs::File,
+fn skip_gguf_value<R: Read + Seek>(
+    file: &mut GgufReader<R>,
     value_type: u32,
     budget: &mut GgufParseBudget,
 ) -> Result<(), String> {
@@ -1188,6 +1231,71 @@ mod tests {
 
         assert_eq!(metadata.architecture.as_deref(), Some("qwen4exp"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tokenizer_skips_use_buffered_io_and_preserve_following_metadata() {
+        use std::io::{Cursor, SeekFrom};
+
+        struct CountedReader {
+            input: Cursor<Vec<u8>>,
+            reads: usize,
+            seeks: usize,
+        }
+        impl Read for CountedReader {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                self.input.read(output)
+            }
+        }
+        impl Seek for CountedReader {
+            fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+                self.seeks += 1;
+                self.input.seek(position)
+            }
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        push_test_string(&mut bytes, "tokenizer.ggml.tokens");
+        bytes.extend_from_slice(&9_u32.to_le_bytes());
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&262_144_u64.to_le_bytes());
+        for index in 0..262_144 {
+            push_test_string(&mut bytes, if index % 2 == 0 { "token" } else { "中文 token" });
+        }
+        push_test_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        push_test_string(&mut bytes, "qwen35");
+        let length = bytes.len() as u64;
+        let mut reader = GgufReader::new(CountedReader {
+            input: Cursor::new(bytes), reads: 0, seeks: 0,
+        }, length);
+        let summary = parse_gguf_metadata_reader(Path::new("model.gguf"), &mut reader).unwrap();
+        assert_eq!(summary.architecture.as_deref(), Some("qwen35"));
+        let source = reader.source.get_ref();
+        // Bound system I/O, not wall time: this remains deterministic on slow CI machines.
+        assert!(source.reads < 128, "{} underlying reads", source.reads);
+        assert!(source.seeks < 128, "{} underlying seeks", source.seeks);
+        assert_eq!(reader.position, length);
+    }
+
+    #[test]
+    fn buffered_gguf_skip_checks_bounds_and_handles_large_offsets() {
+        use std::io::Cursor;
+        let bytes = vec![42; 200_000];
+        let mut reader = GgufReader::new(Cursor::new(bytes), 200_000);
+        assert_eq!(read_u32(&mut reader).unwrap(), u32::from_le_bytes([42; 4]));
+        skip_bytes(&mut reader, 100_000).unwrap();
+        assert_eq!(read_u32(&mut reader).unwrap(), u32::from_le_bytes([42; 4]));
+        assert!(skip_bytes(&mut reader, u64::MAX).unwrap_err().contains("overflow"));
+        assert!(skip_bytes(&mut reader, 100_000).unwrap_err().contains("beyond the file"));
+        skip_bytes(&mut reader, 200_000 - 100_008).unwrap();
+        skip_bytes(&mut reader, 0).unwrap();
+        assert!(read_u32(&mut reader).is_err());
     }
 
     #[test]
