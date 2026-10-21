@@ -63,7 +63,7 @@ const SPECULATIVE_FIELDS = new Set<keyof InstanceConfig>([
   'cache_type_draft_k', 'cache_type_draft_v', 'draft_model_path',
   'draft_gpu_layers', 'draft_tokens', 'spec_draft_n_min', 'spec_type',
   'spec_draft_p_min', 'spec_draft_p_split', 'spec_draft_device',
-  'lookup_cache_static', 'lookup_cache_dynamic', 'spec_default',
+  'lookup_cache_static', 'lookup_cache_dynamic', 'lookup_cache_managed', 'spec_default',
   'spec_draft_backend_sampling', 'spec_draft_threads', 'spec_draft_threads_batch',
   'spec_draft_n_ubatch', 'spec_draft_sampling',
 ])

@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 2;
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 3;
 const CHECKPOINT_SLOT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHECKPOINT_SLOT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECKPOINT_DISK_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
@@ -2774,6 +2774,7 @@ impl SlotBackend for LlamaSlotClient {
 #[derive(Debug, Clone)]
 struct CoordinatorEntry {
     gate_active: bool,
+    stop_requested: bool,
     status: CheckpointStatus,
     fingerprint: Option<CheckpointFingerprint>,
     policy: crate::models::KvCheckpointConfig,
@@ -2930,6 +2931,7 @@ impl CheckpointCoordinator {
             instance_id.into(),
             CoordinatorEntry {
                 gate_active,
+                stop_requested: false,
                 status: status.clone(),
                 fingerprint,
                 policy,
@@ -3076,7 +3078,7 @@ impl CheckpointCoordinator {
         self.entries.lock().ok().and_then(|entries| {
             entries
                 .values()
-                .filter(|entry| entry.gate_active && !entry.status.routable)
+                .filter(|entry| (entry.gate_active || entry.stop_requested) && !entry.status.routable)
                 .map(|entry| entry.status.phase)
                 .min_by_key(|phase| priority(*phase))
         })
@@ -3139,6 +3141,7 @@ impl CheckpointCoordinator {
             instance_id.into(),
             CoordinatorEntry {
                 gate_active: false,
+                stop_requested: false,
                 status: status.clone(),
                 fingerprint: None,
                 policy: crate::models::KvCheckpointConfig::default(),
@@ -3155,7 +3158,7 @@ impl CheckpointCoordinator {
             .and_then(|entries| {
                 entries
                     .get(instance_id)
-                    .map(|entry| !entry.gate_active || entry.status.routable)
+                    .map(|entry| !entry.stop_requested && (!entry.gate_active || entry.status.routable))
             })
             .unwrap_or(true)
     }
@@ -3166,6 +3169,16 @@ impl CheckpointCoordinator {
             .ok()
             .and_then(|entries| entries.get(instance_id).map(|entry| entry.gate_active))
             .unwrap_or(false)
+    }
+
+    /// Routing quiescence also applies when KV persistence is disabled.
+    pub fn request_stop(&self, instance_id: &str, pid: u32, stopping: bool) {
+        if let Ok(mut entries) = self.entries.lock() {
+            if let Some(entry) = entries.get_mut(instance_id).filter(|entry| entry.status.expected_pid == Some(pid)) {
+                entry.stop_requested = stopping;
+                entry.status.routable = !stopping && (!entry.gate_active || entry.status.phase.is_routable());
+            }
+        }
     }
 
     fn transition(
@@ -3197,7 +3210,7 @@ impl CheckpointCoordinator {
             ));
         }
         entry.status.phase = next;
-        entry.status.routable = next.is_routable();
+        entry.status.routable = !entry.stop_requested && next.is_routable();
         entry.status.updated_at = checkpoint_now_millis();
         Ok(entry.status.clone())
     }
@@ -3972,6 +3985,22 @@ mod tests {
             },
             ..InstanceConfig::default()
         }
+    }
+
+    #[test]
+    fn stopping_without_kv_persistence_still_blocks_new_routes() {
+        let root = std::env::temp_dir().join(format!("checkpoint-gate-{}", uuid::Uuid::new_v4()));
+        let coordinator = CheckpointCoordinator::new(CheckpointStore::new(root));
+        let disabled = CheckpointEligibility::from_reasons(vec![CheckpointReasonCode::Disabled]);
+        coordinator.register_start_with_context("ngram", 42, &disabled, None, Default::default()).unwrap();
+        assert!(coordinator.gate_allows_routing("ngram"));
+        coordinator.request_stop("ngram", 99, true); // stale PID cannot quiesce a new instance
+        assert!(coordinator.gate_allows_routing("ngram"));
+        coordinator.request_stop("ngram", 42, true);
+        assert!(!coordinator.gate_allows_routing("ngram"));
+        assert!(!coordinator.status("ngram").unwrap().routable);
+        coordinator.request_stop("ngram", 42, false);
+        assert!(coordinator.gate_allows_routing("ngram"));
     }
 
     #[derive(Debug)]

@@ -79,6 +79,9 @@ export interface EngineCapabilities {
   reportedDefaultsVersion?: number
   speculativeTypes?: string[]
   contextCheckpointPersistence?: boolean
+  persistenceRevision?: number
+  persistenceProfile?: string | null
+  checkpointDraftTypes?: string[]
   helpHash: string
   executableFingerprint: string
   probedAt?: number
@@ -170,6 +173,7 @@ export interface InstanceConfig {
   spec_draft_n_min: number; spec_type: string;
   spec_draft_p_min: number; spec_draft_p_split: number; spec_draft_device: string;
   lookup_cache_static: string; lookup_cache_dynamic: string;
+  lookup_cache_managed: boolean;
   spec_default: boolean; spec_draft_backend_sampling: boolean; spec_draft_threads: number; spec_draft_threads_batch: number;
   spec_draft_n_ubatch: number; spec_draft_sampling: string;
   // GPU & Device

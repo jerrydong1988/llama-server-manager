@@ -6,6 +6,8 @@ mod commands;
 #[cfg(test)]
 mod dependency_regressions;
 mod error;
+mod engine_process;
+mod lookup_cache_store;
 mod external_artifacts;
 mod model_artifacts;
 mod models;
@@ -322,7 +324,8 @@ fn hide_window(app: tauri::AppHandle) {
 async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
     crate::commands::proxy::shutdown_proxy_for_app(&app).await?;
     crate::runtime_service::shutdown(true).await?;
-    finalize_app_exit(&app, false);
+    tokio::task::spawn_blocking(move || finalize_app_exit(&app, false))
+        .await.map_err(|error| format!("application exit task failed: {error}"))?;
     Ok(())
 }
 
@@ -431,6 +434,11 @@ fn restore_main_window(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn main() {
+    if let Some(code) = engine_process::helper_invocation() { std::process::exit(code); }
+    // A launcher using CREATE_NEW_PROCESS_GROUP leaves an inheritable ignore-C
+    // bit even in a windowless process. Do not pass it on to private engine consoles.
+    #[cfg(windows)]
+    unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0); }
     if let Some(index) = std::env::args_os().position(|arg| arg == "--management-data-dir") {
         let Some(path) = std::env::args_os().nth(index + 1) else {
             eprintln!("--management-data-dir requires an absolute path"); std::process::exit(1);

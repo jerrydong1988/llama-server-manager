@@ -9,7 +9,7 @@ import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
 import { formatPathForDisplay } from '../../utils/path'
-import { draftContextEnabled, draftSamplingEnabled, projectorEnabled, speculativeEnabled } from '../../configSemantics'
+import { draftContextEnabled, draftSamplingEnabled, ngramCacheEnabled, projectorEnabled, speculativeEnabled } from '../../configSemantics'
 
 const formGridClassName = 'config-form-grid'
 const wideGridClassName = 'config-form-grid'
@@ -457,6 +457,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Input label={`${t.configPage.specDraftDevice} (--spec-draft-device)`} value={local.spec_draft_device} onChange={v => set('spec_draft_device', v)} title={t.configPage.specDraftDeviceTip} disabled={isEmbedding}  fieldKey={a('spec_draft_device')} />
             <Input label={`${t.configPage.lookupCacheStatic} (--lookup-cache-static, -lcs)`} value={local.lookup_cache_static} onChange={v => set('lookup_cache_static', v)} title={t.configPage.lookupCacheStaticTip} disabled={isEmbedding}  fieldKey={a('lookup_cache_static')} />
             <Input label={`${t.configPage.lookupCacheDynamic} (--lookup-cache-dynamic, -lcd)`} value={local.lookup_cache_dynamic} onChange={v => set('lookup_cache_dynamic', v)} title={t.configPage.lookupCacheDynamicTip} disabled={isEmbedding}  fieldKey={a('lookup_cache_dynamic')} />
+            <Switch label={t.configPage.lookupCacheManaged} value={local.lookup_cache_managed} onChange={v => set('lookup_cache_managed', v)} title={t.configPage.lookupCacheManagedTip} disabled={!ngramCacheEnabled(local, isEmbedding)} fieldKey={a('lookup_cache_managed')} />
             <Select label={`${t.configPage.cacheTypeDraftK} (--spec-draft-type-k, -ctkd)`} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_draft_k')} />
             <Select label={`${t.configPage.cacheTypeDraftV} (--spec-draft-type-v, -ctvd)`} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_draft_v')} />
             <Switch label={`${t.configPage.specDefault} (--spec-default)`} value={local.spec_default} onChange={v => set('spec_default', v)} title={t.configPage.specDefaultTip} disabled={isEmbedding}  fieldKey={a('spec_default')} />

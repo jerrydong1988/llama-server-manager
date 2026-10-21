@@ -274,9 +274,20 @@ async function verifyCheckpointRecovery(endpoint, token, dataDir, launchedPids) 
   const port = await reserveLoopbackPort()
   const instanceRoot = path.join(dataDir, 'kv-checkpoints', instanceId)
   const scratch = path.join(instanceRoot, 'scratch')
+  // The runtime independently verifies the actual executable/library bundle.
+  const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+  const adjacent = fs.readdirSync(path.dirname(process.execPath)).filter(name => /(?:\.dll|\.dylib|\.so(?:\..*)?)$/i.test(name))
+    .sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : a.localeCompare(b))
+    .map(name => path.join(path.dirname(process.execPath), name))
+  const artifacts = [process.execPath, ...adjacent]
+  const word = number => { const bytes = Buffer.alloc(4); bytes.writeUInt32LE(number); return bytes }
+  const bundleHash = artifacts.length === 1 ? digest(process.execPath) : crypto.createHash('sha256').update(Buffer.concat([
+    Buffer.from('llama-engine-artifact-set-v1\0'), word(artifacts.length),
+    ...artifacts.flatMap(file => { const name = Buffer.from(path.basename(file).toLowerCase()); return [word(name.length), name, Buffer.from(digest(file))] }),
+  ])).digest('hex')
   const fingerprint = {
     algorithm: 'sha256', digest: 'a'.repeat(64), modelSha256: 'b'.repeat(64),
-    engineSha256: 'c'.repeat(64), engineVersion: 'recovery-fixture', backend: 'test',
+    engineSha256: bundleHash, engineVersion: 'recovery-fixture', backend: 'test',
   }
   const generationId = crypto.randomUUID()
   const generation = path.join(instanceRoot, fingerprint.digest, 'generations', generationId)
@@ -331,7 +342,7 @@ http.createServer((request, response) => {
         storage_limit_gib: 1, minimum_prompt_tokens: 1 },
     },
     command: [process.execPath, fixturePath, String(port), eventsPath, '--slot-save-path', scratch],
-    checkpoint: { eligibility_revision: 2, eligibility: { eligible: true, reason_code: 'none', reasons: [] }, fingerprint },
+    checkpoint: { eligibility_revision: 3, eligibility: { eligible: true, reason_code: 'none', reasons: [] }, fingerprint },
   }
   spec.executable_sha256 = crypto.createHash('sha256').update(fs.readFileSync(spec.command[0])).digest('hex')
   spec.command_display = spec.command.join(' ')
@@ -444,7 +455,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('background_detach_v1')
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
-      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v2')
+      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v3_console_cache')
       || !status.reply.payload?.capabilities?.includes('router_usage_v6')
       || !status.reply.payload?.capabilities?.includes('router_listener_no_inherit_v2_authorized_replay')
       || typeof status.reply.payload?.checkpoints !== 'object') {
@@ -848,6 +859,9 @@ async function main() {
     if (exitCode !== 0) throw new Error(`runtime service exited with code ${exitCode}`)
     assertPersistedRouterUsage(dataDir)
     console.log(`Runtime service IPC smoke test passed (PID ${status.reply.payload.service_pid}).`)
+  } catch (error) {
+    for (const child of serviceProcesses) console.error(`runtime ${child.pid} exit=${child.exitCode}: ${child.runtimeStderr().slice(-8192)}`)
+    throw error
   } finally {
     for (const process of serviceProcesses) {
       if (process.exitCode === null) {

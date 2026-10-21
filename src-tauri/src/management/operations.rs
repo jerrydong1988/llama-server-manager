@@ -262,7 +262,7 @@ pub async fn dispatch(app: &tauri::AppHandle, name: &str, args: &Value) -> Resul
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                crate::finalize_app_exit(&app, false);
+                let _ = tokio::task::spawn_blocking(move || crate::finalize_app_exit(&app, false)).await;
             });
             Ok(json!({"shutdown_scheduled":true,"stop_workloads":true}))
         }
@@ -586,8 +586,8 @@ pub(super) async fn instances(
         }
         "instances.stop" => {
             instance(&state, &id)?;
-            server::stop_server(id, state, app.clone()).await?;
-            Ok(json!({"stopped":true}))
+            server::stop_server(id.clone(), state, app.clone()).await?;
+            Ok(json!({"stopped":true, "lookup_cache":crate::lookup_cache_store::status(&id)}))
         }
         "instances.delete" => {
             config::delete_instance_config(id, Some(text(args, "revision")), None, state).map_err(Failure::from)

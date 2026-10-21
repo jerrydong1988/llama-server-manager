@@ -153,6 +153,7 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   moe_cache_mib: { flags: ['--moe-cache-mib'] },
   lookup_cache_static: { flags: ['--lookup-cache-static', '-lcs'], dependency: ngramCacheEnabled },
   lookup_cache_dynamic: { flags: ['--lookup-cache-dynamic', '-lcd'], dependency: ngramCacheEnabled },
+  lookup_cache_managed: { managed: true, defaultKind: 'application', dependency: ngramCacheEnabled },
 
   mirostat_lr: { flags: ['--mirostat-lr'], dependency: config => config.mirostat > 0 },
   mirostat_ent: { flags: ['--mirostat-ent'], dependency: config => config.mirostat > 0 },

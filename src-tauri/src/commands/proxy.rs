@@ -4620,6 +4620,8 @@ mod tests {
             running: HashMap::from([(
                 instance_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id,
                     pid: std::process::id(),
                     port: upstream_address.port(),
@@ -4675,6 +4677,8 @@ mod tests {
             running: HashMap::from([(
                 instance_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id,
                     pid: std::process::id(),
                     port: upstream_address.port(),
@@ -5535,6 +5539,8 @@ mod tests {
         let running = HashMap::from([(
             instance_id.clone(),
             RunningInstance {
+                private_console: false,
+                graceful_exit_safe: false,
                 instance_id: instance_id.clone(),
                 pid: 1,
                 port: 18080,
@@ -5600,6 +5606,8 @@ mod tests {
             (
                 primary_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id: primary_id.clone(),
                     pid: 1,
                     port: 18080,
@@ -5614,6 +5622,8 @@ mod tests {
             (
                 backup_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id: backup_id.clone(),
                     pid: 2,
                     port: 18081,
@@ -5779,6 +5789,8 @@ mod tests {
         let running = HashMap::from([(
             instance_id.clone(),
             RunningInstance {
+                private_console: false,
+                graceful_exit_safe: false,
                 instance_id: instance_id.clone(),
                 pid: 1,
                 port: 18080,
@@ -5842,6 +5854,8 @@ mod tests {
             (
                 launched_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id: launched_id.clone(),
                     pid: 1,
                     port: 18080,
@@ -5856,6 +5870,8 @@ mod tests {
             (
                 fallback_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id: fallback_id.clone(),
                     pid: 2,
                     port: 18081,
@@ -5909,6 +5925,8 @@ mod tests {
         let running = HashMap::from([(
             fallback_id.clone(),
             RunningInstance {
+                private_console: false,
+                graceful_exit_safe: false,
                 instance_id: fallback_id.clone(),
                 pid: 2,
                 port: 18081,
@@ -5992,6 +6010,8 @@ mod tests {
             running: HashMap::from([(
                 instance_id.clone(),
                 RunningInstance {
+                    private_console: false,
+                    graceful_exit_safe: false,
                     instance_id: instance_id.clone(),
                     pid: std::process::id(),
                     port: upstream_address.port(),

@@ -16,6 +16,36 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
+pub(crate) const PERSISTENCE_REVISION: u8 = 1;
+const B11769_PROFILE: &str = "windows-rocm-b11769-sckp1-sdft1";
+// Full launcher + all 28 adjacent DLL hashes, not a version/path heuristic.
+pub(crate) const B11769_ARTIFACTS: &str = "51721bd434546a540548be496a58c9878774d41f7bc594b245031f38a1e0dfeb";
+
+fn persistence_evidence(help: &str, artifacts: Option<&str>) -> (bool, Option<String>, Vec<String>) {
+    if cfg!(windows) && artifacts == Some(B11769_ARTIFACTS) {
+        return (true, Some(B11769_PROFILE.into()),
+            ["draft-simple", "draft-mtp", "draft-dflash"].map(String::from).to_vec());
+    }
+    // A help claim establishes SCKP support, not qualification of every advertised draft mode.
+    (detects_context_checkpoint_persistence(help), None, Vec::new())
+}
+
+pub(crate) fn checkpoint_types(config: &crate::models::InstanceConfig, caps: &EngineCapabilities) -> Vec<String> {
+    let profile_scope = caps.persistence_profile.as_deref() == Some(B11769_PROFILE)
+        && config.ctx_size > 0 && config.ctx_size <= 4096 && !config.ctx_size_auto
+        && config.gpu_layers >= 99 && !config.gpu_layers_auto
+        && config.draft_gpu_layers >= 99 && config.flash_attn == "on"
+        && config.fit_mode == "off" && !config.no_kv_offload
+        && !config.cpu_moe && config.moe_cpu_layers == 0 && config.rpc_servers.trim().is_empty()
+        && config.device.trim().is_empty() && config.spec_draft_device.trim().is_empty()
+        && [&config.cache_type_k, &config.cache_type_v, &config.cache_type_draft_k, &config.cache_type_draft_v]
+            .iter().all(|s| s.is_empty() || s.as_str() == "f16");
+    caps.speculative_types.iter().filter(|kind| {
+        !kind.starts_with("draft-") || (profile_scope && caps.checkpoint_draft_types.contains(kind)
+            && (kind.as_str() != "draft-simple" || paths_equal(
+                std::path::Path::new(&config.model_path), std::path::Path::new(&config.draft_model_path))))
+    }).cloned().collect()
+}
 
 #[derive(Debug)]
 struct CommandOutput {
@@ -501,8 +531,12 @@ pub(crate) fn capabilities_match_executable(
     executable: &str,
     capabilities: &EngineCapabilities,
 ) -> bool {
-    !capabilities.executable_fingerprint.is_empty()
+    capabilities.persistence_revision == PERSISTENCE_REVISION
+        && !capabilities.executable_fingerprint.is_empty()
         && capabilities.executable_fingerprint == executable_fingerprint(executable)
+        && (capabilities.persistence_profile.is_none() ||
+            crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir())
+                .engine_artifact_sha256(std::path::Path::new(executable)).ok().as_deref() == Some(B11769_ARTIFACTS))
 }
 
 fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
@@ -512,8 +546,15 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let supported_flags = extract_supported_flags(&help_output.text);
     let reported_defaults = extract_reported_defaults(&help_output.text);
     let speculative_types = extract_speculative_types(&help_output.text);
-    let context_checkpoint_persistence = detects_context_checkpoint_persistence(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
+    let artifacts = if cfg!(windows) && status == "detected" {
+        crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir())
+            .engine_artifact_sha256(std::path::Path::new(&engine.exe)).ok()
+    } else { None };
+    let (context_checkpoint_persistence, persistence_profile, checkpoint_draft_types) =
+        if status == "detected" && help_output.error.is_none() {
+            persistence_evidence(&help_output.text, artifacts.as_deref())
+        } else { (false, None, Vec::new()) };
     let fingerprint = executable_fingerprint(&engine.exe);
     if fingerprint_before.is_empty() || fingerprint_before != fingerprint {
         engine.version.clear();
@@ -566,6 +607,9 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         reported_defaults_version: REPORTED_DEFAULTS_VERSION,
         speculative_types,
         context_checkpoint_persistence,
+        persistence_revision: PERSISTENCE_REVISION,
+        persistence_profile,
+        checkpoint_draft_types,
         help_hash: if help_output.text.is_empty() {
             String::new()
         } else {
@@ -1039,6 +1083,34 @@ pub mod ipc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persistence_requires_bundle_evidence_and_separate_draft_qualification() {
+        let old_help = "--slot-save-path FNAME path to save slot kv cache (default: disabled)";
+        assert_eq!(persistence_evidence(old_help, None), (false, None, vec![]));
+        assert!(!persistence_evidence(old_help, Some("b11769")).0);
+        assert!(persistence_evidence(CONTEXT_CHECKPOINT_HELP_MARKER, None).0);
+        assert!(persistence_evidence(CONTEXT_CHECKPOINT_HELP_MARKER, None).2.is_empty());
+        if cfg!(windows) {
+            let (supported, profile, kinds) = persistence_evidence(old_help, Some(B11769_ARTIFACTS));
+            assert!(supported);
+            assert!(!kinds.contains(&"draft-eagle3".to_string()));
+            let mut caps = EngineCapabilities { persistence_profile: profile, checkpoint_draft_types: kinds,
+                speculative_types: vec!["ngram-cache".into(), "draft-mtp".into(), "draft-eagle3".into()], ..Default::default() };
+            let mut config = crate::models::InstanceConfig { ctx_size: 4096, ctx_size_auto: false,
+                gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99,
+                flash_attn: "on".into(), fit_mode: "off".into(), ..Default::default() };
+            assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache", "draft-mtp"]);
+            config.cache_type_draft_k = "q8_0".into();
+            assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
+            config.cache_type_draft_k.clear(); config.cpu_moe = true;
+            assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
+            config.cpu_moe = false; config.ctx_size = 0;
+            assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
+            config.ctx_size = 4096; caps.persistence_profile = None;
+            assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
+        }
+    }
 
     fn detected(flags: &[&str]) -> EngineCapabilities {
         EngineCapabilities {

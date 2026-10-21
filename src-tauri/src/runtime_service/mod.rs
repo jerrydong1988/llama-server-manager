@@ -25,6 +25,7 @@ static CONFIG_CHANGE_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CONFIG_SYNCED_GENERATION: AtomicU64 = AtomicU64::new(0);
 static CONFIG_SYNC_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static RUNTIME_READY: AtomicBool = AtomicBool::new(false);
+static APP_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 static RUNTIME_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static APP_CONFIG_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const MAX_RUNTIME_SERVICE_LOG_BYTES: u64 = 4 * 1024 * 1024;
@@ -259,13 +260,23 @@ pub async fn heartbeat() -> Result<RuntimeServiceStatus, String> {
 }
 
 pub async fn shutdown(stop_instances: bool) -> Result<(), String> {
-    match call(RuntimeCommand::Shutdown { stop_instances }).await? {
-        RuntimeReply::Ack => {
+    APP_SHUTTING_DOWN.store(true, Ordering::Release);
+    // Finish any startup already in flight before stopping its daemon. The app
+    // bridge must not recreate it between the shutdown ACK and app exit.
+    let _transition = RUNTIME_START_LOCK.lock().await;
+    let result = match call(RuntimeCommand::Shutdown { stop_instances }).await {
+        Ok(RuntimeReply::Ack) => {
             RUNTIME_READY.store(false, Ordering::Release);
             Ok(())
         }
-        _ => Err("runtime service returned an unexpected shutdown response".into()),
+        Ok(_) => Err("runtime service returned an unexpected shutdown response".into()),
+        Err(error) => Err(error),
+    };
+    if result.is_err() {
+        APP_SHUTTING_DOWN.store(false, Ordering::Release);
+        CONFIG_SYNC_NOTIFY.notify_one();
     }
+    result
 }
 
 pub fn is_runtime_service_invocation() -> bool {
@@ -520,7 +531,9 @@ fn spawn_runtime_process() -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000 | 0x00000200);
+        // CREATE_NO_WINDOW already detaches the daemon from the GUI console.
+        // NEW_PROCESS_GROUP additionally disables Ctrl+C in descendants.
+        command.creation_flags(0x08000000);
     }
     #[cfg(unix)]
     unsafe {
@@ -613,6 +626,9 @@ async fn wait_for_existing_runtime(
 
 async fn ensure_runtime_service_inner() -> Result<RuntimeServiceStatus, String> {
     let _transition = RUNTIME_START_LOCK.lock().await;
+    if APP_SHUTTING_DOWN.load(Ordering::Acquire) {
+        return Err("application shutdown is in progress".into());
+    }
     if RUNTIME_READY.load(Ordering::Acquire) {
         match runtime_status_unchecked().await {
             Ok(status)
@@ -913,6 +929,10 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut first = true;
         loop {
+            if APP_SHUTTING_DOWN.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
             let result = if first {
                 first = false;
                 synchronize_from_app(&app).await
