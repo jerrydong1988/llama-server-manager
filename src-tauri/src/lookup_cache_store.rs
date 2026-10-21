@@ -369,6 +369,7 @@ pub(crate) fn finish(pid: u32, clean_exit: bool) {
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn await_finish(pid: u32) {
     // The monitor finalizes BEFORE taking any supervisor lifecycle lock.
     let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
