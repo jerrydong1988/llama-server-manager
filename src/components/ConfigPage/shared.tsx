@@ -843,7 +843,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedSpec: {
     draft_model_path: '', draft_gpu_layers: 99,
     spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
-    lookup_cache_static: '', lookup_cache_dynamic: '',
+    lookup_cache_static: '', lookup_cache_dynamic: '', lookup_cache_managed: false,
     cache_type_draft_k: '', cache_type_draft_v: '',
     spec_default: false, spec_draft_backend_sampling: true,
     spec_draft_threads: 0, spec_draft_threads_batch: 0,

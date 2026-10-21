@@ -26,7 +26,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     draft_model_path: '', draft_gpu_layers: 99, draft_tokens: 3,
     spec_draft_n_min: 0, spec_type: '',
     spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
-    lookup_cache_static: '', lookup_cache_dynamic: '',
+    lookup_cache_static: '', lookup_cache_dynamic: '', lookup_cache_managed: false,
     spec_default: false, spec_draft_backend_sampling: true,
     spec_draft_threads: 0, spec_draft_threads_batch: 0,
     spec_draft_n_ubatch: 0, spec_draft_sampling: '', moe_cache_mib: 0,

@@ -406,7 +406,14 @@ pub async fn send_request(request: &RuntimeRequest) -> Result<RuntimeResponse, S
     tokio::time::timeout(RUNTIME_IO_TIMEOUT, write_frame(&mut stream, &payload))
         .await
         .map_err(|_| "timed out writing to runtime service".to_string())??;
-    let response = tokio::time::timeout(RUNTIME_RESPONSE_TIMEOUT, read_frame(&mut stream))
+    let timeout = match request.command {
+        super::protocol::RuntimeCommand::StartInstance { .. }
+        | super::protocol::RuntimeCommand::StopInstance { .. }
+        | super::protocol::RuntimeCommand::Shutdown { .. } =>
+            crate::checkpoint::CHECKPOINT_SLOT_OPERATION_TIMEOUT + Duration::from_secs(60),
+        _ => RUNTIME_RESPONSE_TIMEOUT,
+    };
+    let response = tokio::time::timeout(timeout, read_frame(&mut stream))
         .await
         .map_err(|_| "timed out reading from runtime service".to_string())??;
     let response: RuntimeResponse = serde_json::from_slice(&response)

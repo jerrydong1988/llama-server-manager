@@ -66,7 +66,7 @@ assert.ok(
   'backend start reservation must happen before the log is opened or a process is spawned',
 )
 const checkpointArgumentsIndex = startServerSource.indexOf('apply_managed_checkpoint_arguments')
-const processSpawnIndex = startServerSource.indexOf('c.spawn()')
+const processSpawnIndex = startServerSource.indexOf('crate::engine_process::spawn(')
 assert.ok(
   checkpointArgumentsIndex >= 0 && processSpawnIndex > checkpointArgumentsIndex,
   'managed checkpoint arguments must be finalized before the process is spawned',

@@ -22,7 +22,6 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(any(windows, test))]
 use std::process::Command;
-use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
@@ -257,8 +256,8 @@ where
     })
 }
 
-fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String> {
-    match child.kill() {
+fn terminate_spawned_child(child: &mut crate::engine_process::Child) -> Result<(), String> {
+    let result = match child.kill() {
         Ok(()) => child
             .wait()
             .map(|_| ())
@@ -272,7 +271,9 @@ fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String
                 "Failed to terminate the spawned server process: {kill_error}; failed to query its state: {wait_error}"
             )),
         },
-    }
+    };
+    if result.is_ok() { crate::lookup_cache_store::finish(child.id(), false); }
+    result
 }
 
 // Generate CLI command.
@@ -2333,14 +2334,15 @@ fn assess_checkpoint_eligibility(
                 .with_context_checkpoint_persistence(capabilities.context_checkpoint_persistence)
         })
         .unwrap_or_default();
+    let checkpoint_types = engine_capabilities
+        .map(|caps| crate::commands::engine_capabilities::checkpoint_types(config, caps))
+        .unwrap_or_default();
     evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
         config,
         workload,
         managed_local_engine: true,
         engine_capabilities: engine_checkpoint_capabilities,
-        engine_speculative_types: engine_capabilities
-            .map(|capabilities| capabilities.speculative_types.as_slice())
-            .unwrap_or(&[]),
+        engine_speculative_types: &checkpoint_types,
         model_architecture: model_architecture.as_deref(),
         model_artifacts_complete,
         model_has_swa,
@@ -2909,21 +2911,13 @@ async fn start_server_impl(
         .map_err(|e| format!("无法创建日志文件: {}", e))?,
     );
 
-    let mut child = {
-        let mut c = crate::process_environment::external_command(&cmd[0]);
-        c.args(&cmd[1..])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(0x08000000);
-        }
-        c.spawn()
-            .map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_display))?
-    };
+    let lookup_run = crate::lookup_cache_store::prepare(&instance_id, &config, &mut cmd)?;
+    let graceful_exit_safe = crate::engine_process::safe_to_flush(&cmd, lookup_run.is_some());
+    let mut child = crate::engine_process::spawn(&cmd, None)
+        .map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_display))?;
 
     let pid = child.id();
+    let lookup_registration = crate::lookup_cache_store::register(pid, lookup_run);
     let stdout = child
         .stdout
         .take()
@@ -2999,6 +2993,8 @@ async fn start_server_impl(
             running.insert(
                 instance_id.clone(),
                 RunningInstance {
+                    private_console: cfg!(windows),
+                    graceful_exit_safe,
                     instance_id: instance_id.clone(),
                     pid,
                     port: config.port,
@@ -3132,6 +3128,7 @@ async fn start_server_impl(
         std::thread::sleep(std::time::Duration::from_secs(1));
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {
+                crate::lookup_cache_store::finish(pid, false);
                 let _ = stdout_pump.join();
                 let _ = stderr_pump.join();
                 let st = app_clone.state::<AppState>();
@@ -3189,6 +3186,7 @@ async fn start_server_impl(
         }
 
         let exit_code = child.wait().ok().and_then(|status| status.code());
+        crate::lookup_cache_store::finish(pid, exit_code == Some(0));
         let _ = stdout_pump.join();
         let _ = stderr_pump.join();
         let st2 = app_clone.state::<AppState>();
@@ -3268,6 +3266,7 @@ async fn start_server_impl(
         );
     });
 
+    lookup_registration.handoff();
     Ok(())
 }
 
@@ -3720,13 +3719,28 @@ fn terminate_unix_process(ri: &RunningInstance) -> bool {
 }
 
 pub(crate) fn terminate_running_instance(ri: &RunningInstance) -> bool {
+    // Two concurrent exit paths must not deliver a second Ctrl+C (llama.cpp
+    // treats that as an immediate abort, bypassing normal cache cleanup).
+    let termination_lock = crate::engine_process::termination_lock(ri.pid);
+    let _termination = termination_lock.lock().unwrap();
     if !running_instance_matches_live_process(ri) {
+        crate::lookup_cache_store::finish(ri.pid, false);
         return true;
     }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        CommandExt::creation_flags(&mut Command::new("taskkill"), 0x08000000)
+        // Legacy external files are not safe to overwrite on exit. Only opt-in
+        // managed n-gram copies may be flushed until the native writer is fixed.
+        if ri.graceful_exit_safe && crate::engine_process::request_exit(ri)
+            && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(30)) {
+            // The child monitor owns the actual exit code. Do not claim a clean
+            // exit just because the process disappeared after a signal.
+            crate::lookup_cache_store::await_finish(ri.pid);
+            return true;
+        }
+        if !running_instance_matches_live_process(ri) { crate::lookup_cache_store::await_finish(ri.pid); return true; }
+        let stopped = CommandExt::creation_flags(&mut Command::new("taskkill"), 0x08000000)
             .args(["/F", "/T", "/PID", &ri.pid.to_string()])
             .output()
             .map(|output| {
@@ -3734,7 +3748,9 @@ pub(crate) fn terminate_running_instance(ri: &RunningInstance) -> bool {
                     && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(3)))
                     || !running_instance_matches_live_process(ri)
             })
-            .unwrap_or_else(|_| !running_instance_matches_live_process(ri))
+            .unwrap_or_else(|_| !running_instance_matches_live_process(ri));
+        if stopped { crate::lookup_cache_store::finish(ri.pid, false); }
+        stopped
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
@@ -3751,6 +3767,7 @@ pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<Stri
         let checkpoint_resume_phase =
             checkpoint_before_termination_blocking(app, &instance_id, &recorded);
         if !terminate_running_instance(&recorded) {
+            state.checkpoint_coordinator.request_stop(&instance_id, recorded.pid, false);
             if let Some(ready_phase) = checkpoint_resume_phase {
                 if let Ok(status) = state.checkpoint_coordinator.resume_after_stop_failure(
                     &instance_id,
@@ -3815,7 +3832,10 @@ fn checkpoint_before_termination_blocking(
 ) -> Option<crate::checkpoint::CheckpointPhase> {
     let state = app.state::<AppState>();
     let coordinator = state.checkpoint_coordinator.clone();
+    coordinator.request_stop(instance_id, running.pid, true);
     if !coordinator.gate_active(instance_id) {
+        let router = state.proxy_router_runtime.lock().unwrap().clone();
+        crate::lookup_cache_store::drain(running, || router.as_ref().map(|r| r.target_snapshot(instance_id).active_requests as u32).unwrap_or(0));
         return None;
     }
     let current_phase = coordinator.status(instance_id).map(|status| status.phase);
@@ -4117,6 +4137,7 @@ async fn stop_server_impl(
                 emit_checkpoint_status(&app, &status);
             }
         }
+        if let Some(running) = ri.as_ref() { state.checkpoint_coordinator.request_stop(&instance_id, running.pid, false); }
         // Process is still running; do not emit server-stopped so the frontend stays running.
         // The monitor thread cleans up when the process actually exits.
         Err("无法终止进程".into())
@@ -7551,6 +7572,8 @@ mod perf_parser_tests {
     #[test]
     fn recorded_process_identity_rejects_pid_reuse() {
         let running = RunningInstance {
+            private_console: false,
+            graceful_exit_safe: false,
             instance_id: "instance-1".into(),
             pid: 42,
             port: 8080,

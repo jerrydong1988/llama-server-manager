@@ -2276,6 +2276,7 @@ mod incremental_scan_tests {
                 status: "detected".to_string(),
                 version_status: "detected".to_string(),
                 executable_fingerprint: fingerprint,
+                persistence_revision: crate::commands::engine_capabilities::PERSISTENCE_REVISION,
                 probed_at: Some(100),
                 ..crate::models::EngineCapabilities::default()
             },
@@ -2775,6 +2776,8 @@ mod incremental_scan_tests {
         let running = HashMap::from([(
             "primary".to_string(),
             RunningInstance {
+                private_console: false,
+                graceful_exit_safe: false,
                 instance_id: "primary".into(),
                 pid: 42,
                 port: 8080,
@@ -2803,6 +2806,8 @@ mod incremental_scan_tests {
         let running = HashMap::from([(
             "legacy-running".to_string(),
             RunningInstance {
+                private_console: false,
+                graceful_exit_safe: false,
                 instance_id: "legacy-running".into(),
                 pid: 42,
                 port: 8080,

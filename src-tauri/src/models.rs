@@ -273,6 +273,13 @@ pub struct EngineCapabilities {
     pub speculative_types: Vec<String>,
     #[serde(default)]
     pub context_checkpoint_persistence: bool,
+    /// Evidence revision and serialized draft modes, separate from CLI support.
+    #[serde(default)]
+    pub persistence_revision: u8,
+    #[serde(default)]
+    pub persistence_profile: Option<String>,
+    #[serde(default)]
+    pub checkpoint_draft_types: Vec<String>,
     #[serde(default)]
     pub help_hash: String,
     #[serde(default)]
@@ -302,6 +309,9 @@ impl Default for EngineCapabilities {
             reported_defaults_version: 0,
             speculative_types: Vec::new(),
             context_checkpoint_persistence: false,
+            persistence_revision: 0,
+            persistence_profile: None,
+            checkpoint_draft_types: Vec::new(),
             help_hash: String::new(),
             executable_fingerprint: String::new(),
             probed_at: None,
@@ -546,6 +556,9 @@ pub struct InstanceConfig {
     pub lookup_cache_static: String,
     #[serde(default)]
     pub lookup_cache_dynamic: String,
+    /// Opt-in: import an external seed, but only write manager-owned generations.
+    #[serde(default)]
+    pub lookup_cache_managed: bool,
     #[serde(default)]
     pub spec_default: bool,
     #[serde(default = "default_true")]
@@ -1009,6 +1022,7 @@ impl Default for InstanceConfig {
             spec_draft_device: String::new(),
             lookup_cache_static: String::new(),
             lookup_cache_dynamic: String::new(),
+            lookup_cache_managed: false,
             spec_default: false,
             spec_draft_backend_sampling: true,
             spec_draft_threads: 0,
@@ -1119,6 +1133,10 @@ impl Default for InstanceConfig {
 // Running instances.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunningInstance {
+    #[serde(default)]
+    pub private_console: bool,
+    #[serde(default)]
+    pub graceful_exit_safe: bool,
     pub instance_id: String,
     pub pid: u32,
     pub port: u16,

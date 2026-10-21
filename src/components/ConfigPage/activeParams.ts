@@ -35,7 +35,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (!specActive) remove([
       'draft_model_path', 'draft_gpu_layers', 'draft_tokens', 'spec_draft_n_min',
       'spec_draft_p_min', 'spec_draft_p_split', 'spec_draft_device',
-      'lookup_cache_static', 'lookup_cache_dynamic', 'spec_default',
+      'lookup_cache_static', 'lookup_cache_dynamic', 'lookup_cache_managed', 'spec_default',
       'spec_draft_backend_sampling', 'spec_draft_threads', 'spec_draft_threads_batch',
       'cache_type_draft_k', 'cache_type_draft_v',
       'spec_draft_n_ubatch', 'spec_draft_sampling',
@@ -43,7 +43,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (!draftContextEnabled(config, isEmbedding)) remove(['spec_draft_n_ubatch', 'spec_draft_sampling'])
     if (!config.spec_draft_sampling || !draftSamplingEnabled(config, isEmbedding)) a.delete('spec_draft_sampling')
     if (!ngramCacheEnabled(config, isEmbedding)) {
-      remove(['lookup_cache_static', 'lookup_cache_dynamic'])
+      remove(['lookup_cache_static', 'lookup_cache_dynamic', 'lookup_cache_managed'])
     }
     if (effectiveMmprojMode(config) === 'off') {
       remove(['mmproj_path', 'mmproj_url', 'no_mmproj_offload'])
@@ -178,6 +178,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.spec_draft_device) a.add('spec_draft_device')
     if (ngramCacheEnabled(config, e) && config.lookup_cache_static) a.add('lookup_cache_static')
     if (ngramCacheEnabled(config, e) && config.lookup_cache_dynamic) a.add('lookup_cache_dynamic')
+    if (ngramCacheEnabled(config, e) && config.lookup_cache_managed) a.add('lookup_cache_managed')
     if (config.spec_default) a.add('spec_default')
     if (!config.spec_draft_backend_sampling) a.add('spec_draft_backend_sampling')
     if (config.spec_draft_threads > 0) a.add('spec_draft_threads')

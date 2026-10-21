@@ -26,7 +26,6 @@ use crate::commands::server::{
 use crate::models::{ProxyStatus, RunningInstance};
 use crate::vector_policy::ModelWorkload;
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -938,6 +937,13 @@ impl RuntimeSupervisor {
         }
         // Persisted launch specs may predate newly supported secret flags.
         crate::security::validate_runtime_executable(&spec.command[0], &spec.executable_sha256)?;
+        if let Some(checkpoint) = spec.checkpoint.as_ref().filter(|cp| cp.eligibility.eligible) {
+            let current = self.checkpoint_coordinator.store()
+                .engine_artifact_sha256(std::path::Path::new(&spec.command[0])).ok();
+            if current.as_deref() != checkpoint.fingerprint.as_ref().map(|fp| fp.engine_sha256.as_str()) {
+                downgrade_runtime_checkpoint(&mut spec, CheckpointReasonCode::EngineCapabilityMissing);
+            }
+        }
         spec.command_display = format_command_for_display(&spec.command);
         {
             let state = self.state.lock().unwrap();
@@ -963,24 +969,14 @@ impl RuntimeSupervisor {
                 .map_err(|error| format!("无法创建日志文件: {error}"))?,
         );
 
-        let mut command = crate::process_environment::external_command(&spec.command[0]);
-        command
-            .args(&spec.command[1..])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if let Some(working_directory) = spec
+        let mut launch_command = spec.command.clone();
+        let lookup_run = crate::lookup_cache_store::prepare(&spec.instance_id, &spec.config, &mut launch_command)?;
+        let graceful_exit_safe = crate::engine_process::safe_to_flush(&launch_command, lookup_run.is_some());
+        let working_directory = spec
             .working_directory
             .as_deref()
-            .filter(|directory| !directory.trim().is_empty())
-        {
-            command.current_dir(working_directory);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let mut child = match command.spawn() {
+            .filter(|directory| !directory.trim().is_empty());
+        let mut child = match crate::engine_process::spawn(&launch_command, working_directory) {
             Ok(child) => child,
             Err(error) => {
                 if checkpoint_eligibility.eligible {
@@ -996,6 +992,7 @@ impl RuntimeSupervisor {
             }
         };
         let pid = child.id();
+        let lookup_registration = crate::lookup_cache_store::register(pid, lookup_run);
         let Some(stdout) = child.stdout.take() else {
             let _ = child.kill();
             let _ = child.wait();
@@ -1072,6 +1069,8 @@ impl RuntimeSupervisor {
         )
         .ok();
         let running = RunningInstance {
+            private_console: cfg!(windows),
+            graceful_exit_safe,
             instance_id: spec.instance_id.clone(),
             pid,
             port: spec.config.port,
@@ -1134,6 +1133,7 @@ impl RuntimeSupervisor {
             .name(format!("runtime-instance-{instance_id}"))
             .spawn(move || {
                 let exit_code = child.wait().ok().and_then(|status| status.code());
+                crate::lookup_cache_store::finish(pid, exit_code == Some(0));
                 let _ = stdout_pump.join();
                 let _ = stderr_pump.join();
                 if let Some(supervisor) = supervisor.upgrade() {
@@ -1174,6 +1174,7 @@ impl RuntimeSupervisor {
             return Err(error);
         }
 
+        lookup_registration.handoff();
         Ok(running)
     }
 
@@ -1277,7 +1278,10 @@ impl RuntimeSupervisor {
         running: &RunningInstance,
     ) -> Option<CheckpointPhase> {
         let coordinator = &self.checkpoint_coordinator;
+        coordinator.request_stop(instance_id, running.pid, true);
         if !coordinator.gate_active(instance_id) {
+            let router = self.proxy_router_runtime.lock().unwrap().clone();
+            crate::lookup_cache_store::drain(running, || router.as_ref().map(|r| r.target_snapshot(instance_id).active_requests as u32).unwrap_or(0));
             return None;
         }
         let resume_phase = match coordinator.status(instance_id).map(|status| status.phase) {
@@ -1430,6 +1434,7 @@ impl RuntimeSupervisor {
         if running_instance_matches_live_process(&running) && !terminate_running_instance(&running)
         {
             self.stop_intents.lock().unwrap().remove(instance_id);
+            self.checkpoint_coordinator.request_stop(instance_id, running.pid, false);
             if let Some(ready_phase) = checkpoint_resume_phase {
                 let _ = self.checkpoint_coordinator.resume_after_stop_failure(
                     instance_id,
@@ -1889,10 +1894,16 @@ impl RuntimeSupervisor {
                 .await
                 .map(Box::new)
                 .map(RuntimeReply::Status),
-            RuntimeCommand::StartInstance { spec } => self
-                .start_instance(*spec)
-                .map(Box::new)
-                .map(RuntimeReply::Instance),
+            RuntimeCommand::StartInstance { spec } => {
+                // First-use model hashing and private cache validation are blocking
+                // disk/CPU work. Keep the authenticated control endpoint responsive.
+                let supervisor = Arc::clone(self);
+                tokio::task::spawn_blocking(move || supervisor.start_instance(*spec))
+                    .await
+                    .map_err(|error| format!("runtime start task failed: {error}"))?
+                    .map(Box::new)
+                    .map(RuntimeReply::Instance)
+            }
             RuntimeCommand::StopInstance { instance_id } => {
                 // Checkpoint save uses reqwest's blocking client and streams the
                 // slot payload to disk. Running that work on this async control
@@ -2211,6 +2222,8 @@ mod tests {
 
     fn detach_instance(pid: u32) -> RunningInstance {
         RunningInstance {
+            private_console: false,
+            graceful_exit_safe: false,
             instance_id: "instance-1".into(),
             pid,
             port: 8080,
