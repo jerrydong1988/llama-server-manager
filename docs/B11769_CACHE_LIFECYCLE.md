@@ -112,7 +112,7 @@ and bytes, previous-generation recovery, and identity-checked private-console
 signalling that leaves another process alive.
 
 The opt-in script `scripts/test-manager-cache-lifecycle-real.cjs` requires a NEW
-absolute `--root` and fixed `--engine`, plus `--bin`, `--model`, `--mtp`, and
+absolute `--root`, `--profile windows-rocm-b11769-sckp1-sdft1` and fixed `--engine`, plus `--bin`, `--model`, `--mtp`, and
 optional `--dflash`. It creates its own management data, loopback instance,
 processes and caches. It never targets the production data directory.
 An optional `--fingerprints` imports only a prior artifact fingerprint cache;

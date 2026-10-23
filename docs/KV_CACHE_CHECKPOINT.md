@@ -6,7 +6,7 @@ KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves prompt
 
 ## 支持范围 / Supported Scope
 
-当前实验范围采用可验证的资格条件。以下条件必须同时成立：
+当前实验范围采用可验证的资格条件。以下条件必须同时成立。draft 构建资格以 [CHECKPOINT_ACCEPTANCE.md](CHECKPOINT_ACCEPTANCE.md) 和内置 persistence profile 为准；历史帮助文字不能单独授予资格。
 
 - 实例使用本机、受管、结构化启动模式和一个文本 GGUF 逻辑模型；单文件和同目录内命名完整、索引连续的分片集均可。
 - `parallel = 1`，启用 prompt cache、slots API 和 idle-slot cache。
@@ -14,12 +14,12 @@ KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves prompt
 - 上游是无 TLS、无自定义 path/API prefix 的 loopback HTTP 端点。
 - 所选引擎明确公开 `--slots`、`--slot-save-path`、`--cache-ram` 和 `--cache-idle-slots`。
 - 滑动窗口注意力模型还必须启用 `--swa-full`，且引擎必须支持该参数。
-- 推测解码关闭，或只使用当前引擎 `--help` 明确报告的类型。`ngram-*` 可从恢复后的 target prompt 重建；`draft-*` 还要求引擎在 `--slot-save-path` 帮助中明确声明支持 `slot KV cache and context checkpoints`，且 `ctx_checkpoints > 0`。帮助标记是必要的能力声明，实际收益仍须通过跨进程请求验证。
+- 推测解码关闭，或只使用当前引擎 `--help` 明确报告的类型。`ngram-*` 可从恢复后的 target prompt 重建；`draft-*` 还要求精确构建命中内置 persistence profile、类型和配置位于该 profile 的范围，且 `ctx_checkpoints > 0`。帮助文字本身不会授予 draft 资格。
 - 配置外部草稿模型时必须显式选择至少一个受支持的 `draft-*` 类型，且草稿 GGUF（包括完整分片集）必须可读取；`spec-default`、未知类型和外部 lookup cache 仍不支持检查点。
 - 模型架构必须可读。已知 hybrid/recurrent 架构默认关闭检查点；唯一保留的 hybrid 实验组合是已有跨进程验收记录的 `qwen35`，还须满足上述 context 持久化声明和 `ctx_checkpoints > 0`。`qwen35moe`、`qwen4exp` 等其它混合架构不会因此放行。上游基线同时记录 hybrid/recurrent 分类，新增架构必须重新审阅。
 - 不使用多模型 preset、router、Embedding、Reranker、LoRA 或 mmproj/multimodal。自定义参数只允许检查点安全分类器明确认可的纯加载 I/O 参数；当前包括取值为 `auto`、`on` 或 `off` 的 `--lazy-mode`、`-lzm` 与旧 `--tensor-read-lazy`。未知、缺值、非法、互相冲突或会改变推理状态的自定义参数仍会阻断，并在配置页显示具体标志。
 
-The experimental scope supports one manager-owned local text-generation slot. Rebuildable `ngram-*` types use the original slot format; `draft-*` also requires the context-persistence help marker and positive `ctx_checkpoints`. The marker is a capability claim, not proof of reuse. Known hybrid/recurrent architectures are excluded except experimentally validated `qwen35` with both context requirements; this exception does not cover `qwen35moe` or `qwen4exp`. The upstream baseline tracks memory architecture classifications for review. Custom arguments remain fail-closed except validated lazy-loading aliases. External lookup state, automatic speculation, and multimodal state remain excluded. Sliding-window models additionally require full SWA cache.
+The experimental scope supports one manager-owned local text-generation slot. Rebuildable `ngram-*` types use the original slot format; `draft-*` also requires an exact bundle persistence profile, its qualified type/configuration envelope, and positive `ctx_checkpoints`. Help text alone never qualifies a draft mode. Known hybrid/recurrent architectures are excluded except experimentally validated `qwen35` with both context requirements; this exception does not cover `qwen35moe` or `qwen4exp`. The upstream baseline tracks memory architecture classifications for review. Custom arguments remain fail-closed except validated lazy-loading aliases. External lookup state, automatic speculation, and multimodal state remain excluded. Sliding-window models additionally require full SWA cache.
 
 不符合条件只会关闭本次运行的 checkpoint；实例仍按原来的冷启动流程运行。配置页会显示稳定的资格原因，不会静默猜测兼容性。
 
@@ -110,8 +110,8 @@ Each instance has its own capacity limit and generation LRU. Restore keeps only 
 
 ## 官方磁盘缓存跟进 / Official Disk Cache Tracking
 
-截至 2026-09-06，[PR #26004](https://github.com/ggml-org/llama.cpp/pull/26004)（slot 文件中的 context checkpoints）和 [PR #28092](https://github.com/ggml-org/llama.cpp/pull/28092)（原生多前缀磁盘缓存）仍未合并，官方稳定版 v0.4.0 尚不包含这两项。当前保留受控 slot provider，不启用未合并的原生磁盘缓存参数。#28092 维护者还计划替换实现，接入时须跟进其最终继任方案。
+历史上游状态快照不作为当前能力契约。[PR #26004](https://github.com/ggml-org/llama.cpp/pull/26004) 的 slot checkpoint 和 [PR #28092](https://github.com/ggml-org/llama.cpp/pull/28092) 的原生多前缀磁盘缓存是不同 provider。当前构建资格、实际回归范围及回滚步骤见 [CHECKPOINT_ACCEPTANCE.md](CHECKPOINT_ACCEPTANCE.md)。
 
-接入门槛包括：官方合并并进入稳定发布；相关 CI 通过；模型和实例目录隔离；跨 PID 前缀命中及输出正确性；hybrid/draft 状态完整；损坏文件、磁盘满和恢复失败不会污染后续推理。还须核验 [#27530](https://github.com/ggml-org/llama.cpp/pull/27530) / [#27068](https://github.com/ggml-org/llama.cpp/issues/27068) 的失败清理问题及目标平台的 mmap 行为。未来原生 provider 应与受控 slot provider 互斥，避免同时管理同一状态。
+预发布收录触发评估，不自动授予资格。接入门槛包括相关 CI、模型和实例目录隔离、跨 PID 前缀命中及输出正确性、适用的 hybrid/draft 状态恢复，以及失败隔离。还须核验 [#27530](https://github.com/ggml-org/llama.cpp/pull/27530) / [#27068](https://github.com/ggml-org/llama.cpp/issues/27068) 的失败清理问题及目标平台的 mmap 行为。未来原生 provider 应与受控 slot provider 互斥，避免同时管理同一状态。
 
-As of 2026-09-06, both PRs remain unmerged and absent from stable v0.4.0. Native disk-cache integration is deferred until a maintained implementation ships with validated restart reuse, model isolation, target/draft correctness, failure recovery, and platform support. Any native provider must be mutually exclusive with manager-controlled slot persistence.
+Historical upstream status is not a capability contract. Pre-release inclusion triggers assessment; it does not qualify a build. Use the reviewed registry and fresh-process acceptance evidence. Any native provider must be mutually exclusive with manager-controlled slot persistence.

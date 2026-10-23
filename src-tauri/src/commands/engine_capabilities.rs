@@ -16,23 +16,51 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 1;
-const B11769_PROFILE: &str = "windows-rocm-b11769-sckp1-sdft1";
+pub(crate) const PERSISTENCE_REVISION: u8 = 2;
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistenceProfile {
+    id: String,
+    artifact_sha256: String,
+    #[allow(dead_code)]
+    launcher_sha256: String,
+    draft_types: Vec<String>,
+    managed_lookup_cache: bool,
+    max_context: u32,
+    #[allow(dead_code)]
+    evidence: String,
+}
+
+fn profiles() -> &'static [PersistenceProfile] {
+    static PROFILES: std::sync::OnceLock<Vec<PersistenceProfile>> = std::sync::OnceLock::new();
+    PROFILES.get_or_init(|| serde_json::from_str(include_str!("persistence_profiles.json"))
+        .expect("embedded persistence profiles must be valid"))
+}
+
+fn profile_for_artifacts(artifacts: Option<&str>) -> Option<&'static PersistenceProfile> {
+    cfg!(windows).then(|| profiles().iter().find(|p| Some(p.artifact_sha256.as_str()) == artifacts)).flatten()
+}
+
+pub(crate) fn supports_managed_lookup_cache(artifacts: &str) -> bool {
+    profile_for_artifacts(Some(artifacts)).is_some_and(|p| p.managed_lookup_cache)
+}
+
+#[cfg(test)]
 // Full launcher + all 28 adjacent DLL hashes, not a version/path heuristic.
 pub(crate) const B11769_ARTIFACTS: &str = "51721bd434546a540548be496a58c9878774d41f7bc594b245031f38a1e0dfeb";
 
 fn persistence_evidence(help: &str, artifacts: Option<&str>) -> (bool, Option<String>, Vec<String>) {
-    if cfg!(windows) && artifacts == Some(B11769_ARTIFACTS) {
-        return (true, Some(B11769_PROFILE.into()),
-            ["draft-simple", "draft-mtp", "draft-dflash"].map(String::from).to_vec());
+    if let Some(profile) = profile_for_artifacts(artifacts) {
+        return (true, Some(profile.id.clone()), profile.draft_types.clone());
     }
     // A help claim establishes SCKP support, not qualification of every advertised draft mode.
     (detects_context_checkpoint_persistence(help), None, Vec::new())
 }
 
 pub(crate) fn checkpoint_types(config: &crate::models::InstanceConfig, caps: &EngineCapabilities) -> Vec<String> {
-    let profile_scope = caps.persistence_profile.as_deref() == Some(B11769_PROFILE)
-        && config.ctx_size > 0 && config.ctx_size <= 4096 && !config.ctx_size_auto
+    let profile = profiles().iter().find(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref());
+    let profile_scope = profile.is_some_and(|p| config.ctx_size > 0 && config.ctx_size <= p.max_context)
+        && !config.ctx_size_auto
         && config.gpu_layers >= 99 && !config.gpu_layers_auto
         && config.draft_gpu_layers >= 99 && config.flash_attn == "on"
         && config.fit_mode == "off" && !config.no_kv_offload
@@ -41,7 +69,7 @@ pub(crate) fn checkpoint_types(config: &crate::models::InstanceConfig, caps: &En
         && [&config.cache_type_k, &config.cache_type_v, &config.cache_type_draft_k, &config.cache_type_draft_v]
             .iter().all(|s| s.is_empty() || s.as_str() == "f16");
     caps.speculative_types.iter().filter(|kind| {
-        !kind.starts_with("draft-") || (profile_scope && caps.checkpoint_draft_types.contains(kind)
+        !kind.starts_with("draft-") || (profile_scope && profile.is_some_and(|p| p.draft_types.contains(kind)) && caps.checkpoint_draft_types.contains(kind)
             && (kind.as_str() != "draft-simple" || paths_equal(
                 std::path::Path::new(&config.model_path), std::path::Path::new(&config.draft_model_path))))
     }).cloned().collect()
@@ -536,7 +564,10 @@ pub(crate) fn capabilities_match_executable(
         && capabilities.executable_fingerprint == executable_fingerprint(executable)
         && (capabilities.persistence_profile.is_none() ||
             crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir())
-                .engine_artifact_sha256(std::path::Path::new(executable)).ok().as_deref() == Some(B11769_ARTIFACTS))
+                .engine_artifact_sha256(std::path::Path::new(executable)).ok()
+                .and_then(|hash| profile_for_artifacts(Some(&hash)))
+                .is_some_and(|profile| capabilities.persistence_profile.as_deref() == Some(profile.id.as_str())
+                    && capabilities.checkpoint_draft_types == profile.draft_types))
 }
 
 fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
@@ -1083,6 +1114,35 @@ pub mod ipc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_is_unique_bounded_and_does_not_trust_serialized_extra_modes() {
+        let mut ids = BTreeSet::new();
+        let mut artifacts = BTreeSet::new();
+        for profile in profiles() {
+            assert!(ids.insert(&profile.id));
+            assert!(artifacts.insert(&profile.artifact_sha256));
+            for digest in [&profile.artifact_sha256, &profile.launcher_sha256] {
+                assert_eq!(digest.len(), 64);
+                assert!(digest.bytes().all(|c| c.is_ascii_hexdigit()));
+            }
+            assert!(profile.max_context > 0 && profile.max_context <= 4096);
+            assert!(!profile.evidence.is_empty());
+            let caps = EngineCapabilities {
+                persistence_profile: Some(profile.id.clone()),
+                checkpoint_draft_types: vec!["draft-eagle3".into()],
+                speculative_types: vec!["draft-eagle3".into()],
+                ..Default::default()
+            };
+            let config = crate::models::InstanceConfig {
+                ctx_size: 4096, ctx_size_auto: false, gpu_layers: 99,
+                gpu_layers_auto: false, draft_gpu_layers: 99,
+                flash_attn: "on".into(), fit_mode: "off".into(), ..Default::default()
+            };
+            assert!(checkpoint_types(&config, &caps).is_empty());
+        }
+        assert!(profile_for_artifacts(Some("95ec5d0a")).is_none());
+    }
 
     #[test]
     fn persistence_requires_bundle_evidence_and_separate_draft_qualification() {

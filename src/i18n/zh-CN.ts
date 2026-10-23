@@ -223,7 +223,7 @@
     specDraftDevice: '\u8349\u7A3F\u8BBE\u5907', specDraftDeviceTip: '指定草稿模型使用的设备，名称必须来自当前构建可识别的设备列表。留空继承引擎选择（v0.4.1 跟随 --device）；放到不同设备会改变内存分布和数据传输成本，不等同于保证并行加速。',
     lookupCacheStatic: '\u9759\u6001\u67E5\u627E\u7F13\u5B58', lookupCacheStaticTip: 'lookup/ngram 推测解码读取的预生成缓存文件，生成过程中不会更新。它用于提供可复用的 ngram 候选，不是通用启动加速缓存；仅在相应 ngram 推测类型下生效。',
     lookupCacheDynamic: '\u52A8\u6001\u67E5\u627E\u7F13\u5B58', lookupCacheDynamicTip: '动态查找缓存的种子文件路径。原生引擎可能在退出时保存；强制终止不保证保存。',
-    lookupCacheManaged: '保护动态查找缓存代际', lookupCacheManagedTip: '仅对已验证身份的 Windows ROCm b11769 包开放，默认关闭。外部文件只作为种子读取；使用独立工作副本并保留上一有效代。文件有效不代表引擎已完整刷新新增数据，也不等于完整 draft/KV 持久化。',
+    lookupCacheManaged: '保护动态查找缓存代际', lookupCacheManagedTip: '仅对已验证身份的 Windows ROCm 资格构建开放，默认关闭。外部文件只作为种子读取；使用独立工作副本并保留上一有效代。文件有效不代表引擎已完整刷新新增数据，也不等于完整 draft/KV 持久化。',
     specDefault: '\u9ED8\u8BA4\u63A8\u6D4B\u89E3\u7801\u914D\u7F6E', specDefaultTip: '请求 llama.cpp 应用其内置推测解码预设。它是便捷起点，不代表针对当前模型、硬件和延迟目标的最优参数；若同时手动覆盖子参数，应检查最终启动命令与引擎日志。',
     specDraftBackendSampling: '\u8349\u7A3F\u540E\u7AEF\u91C7\u6837', specDraftBackendSamplingTip: '独立控制草稿侧采样，与主模型 --backend-sampling 分开。MTP、普通 DFlash 和 DSpark 可卸载受支持的草稿采样器；DFlash2 使用专用选择器，会跳过此普通草稿采样链。关闭时发射 --no-spec-draft-backend-sampling，不会关闭主模型后端采样。',
     moeCacheMib: "MoE 专家 GPU 缓存 (MiB)",

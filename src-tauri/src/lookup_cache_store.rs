@@ -1,4 +1,4 @@
-//! Opt-in dynamic n-gram generations. Native b11769 writes only a private copy;
+//! Opt-in dynamic n-gram generations. The qualified native engine writes only a private copy;
 //! its silent close failures mean a valid candidate is NOT proof of a full flush.
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -240,7 +240,14 @@ impl Run {
         } else {
             Err("forced or abnormal exit; previous generation retained".into())
         };
-        let record = serde_json::json!({"clean_exit": clean_exit, "outcome": result.as_ref().ok(), "error": result.as_ref().err(), "full_flush_verified": false});
+        let record = serde_json::json!({
+            "clean_exit": clean_exit,
+            "outcome": result.as_ref().ok(), "error": result.as_ref().err(),
+            "full_flush_verified": false,
+            "latest_generation_valid": valid_generation(&self.root, "latest.json").is_some(),
+            "previous_generation_valid": valid_generation(&self.root, "previous.json").is_some(),
+            "contract": "private-candidate-structural-validation-v1"
+        });
         let _ = crate::persistence::atomic_write(
             &self.root.join("last-result.json"),
             &serde_json::to_vec_pretty(&record).unwrap(),
@@ -318,7 +325,7 @@ pub(crate) fn prepare(
     let engine = store
         .engine_artifact_sha256(Path::new(&args[0]))
         .map_err(|e| e.to_string())?;
-    if !cfg!(windows) || engine != crate::commands::engine_capabilities::B11769_ARTIFACTS {
+    if !crate::commands::engine_capabilities::supports_managed_lookup_cache(&engine) {
         return Err("managed dynamic cache format is not qualified for this engine bundle".into());
     }
     // Full model identity includes tokenizer data. Legacy format is explicitly namespaced.
@@ -541,6 +548,30 @@ mod tests {
         fs::write(&destination, b"preserve").unwrap();
         assert!(copy_candidate(&source, &destination).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"preserve");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_latest_never_rotates_over_valid_rollback() {
+        let root = std::env::temp_dir().join(format!("lookup-test-{}", uuid::Uuid::new_v4()));
+        let seed = root.join("absent-seed");
+        for count in [1, 2] {
+            let run = Run::prepare(root.clone(), &seed).unwrap();
+            fs::write(&run.work, record(count)).unwrap();
+            run.finish(true);
+        }
+        let fallback = fs::read(root.join("previous.json")).unwrap();
+        fs::write(valid_generation(&root, "latest.json").unwrap(), b"truncated").unwrap();
+        let run = Run::prepare(root.clone(), &seed).unwrap();
+        assert_eq!(fs::read(&run.work).unwrap(), record(1));
+        fs::write(&run.work, record(3)).unwrap();
+        run.finish(true);
+        assert_eq!(fs::read(root.join("previous.json")).unwrap(), fallback);
+        assert_eq!(fs::read(valid_generation(&root, "latest.json").unwrap()).unwrap(), record(3));
+        let status: serde_json::Value = serde_json::from_slice(&fs::read(root.join("last-result.json")).unwrap()).unwrap();
+        assert_eq!(status["latest_generation_valid"], true);
+        assert_eq!(status["previous_generation_valid"], true);
+        assert_eq!(status["full_flush_verified"], false);
         fs::remove_dir_all(root).unwrap();
     }
 }
