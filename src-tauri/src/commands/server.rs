@@ -3631,6 +3631,13 @@ fn monitor_loop(
         }
         if let Some(slots) = &sample.slots {
             let state = app.state::<AppState>();
+            let running = state.running.lock().unwrap().get(instance_id).cloned();
+            let router = state.proxy_router_runtime.lock().unwrap().clone();
+            if let Some(running) = running.filter(|run| run.pid == expected_pid) {
+                crate::checkpoint_idle::poll(&state.checkpoint_coordinator, &running, slots, || {
+                    router.as_ref().map(|r| r.target_snapshot(instance_id).active_requests).unwrap_or(0)
+                });
+            }
             for slot in slots {
                 state.checkpoint_coordinator.observe_restored_request(
                     instance_id,
@@ -3830,6 +3837,8 @@ fn checkpoint_before_termination_blocking(
     instance_id: &str,
     running: &RunningInstance,
 ) -> Option<crate::checkpoint::CheckpointPhase> {
+    let operation = crate::engine_process::termination_lock(running.pid);
+    let _operation = operation.lock().unwrap();
     let state = app.state::<AppState>();
     let coordinator = state.checkpoint_coordinator.clone();
     coordinator.request_stop(instance_id, running.pid, true);
@@ -5434,6 +5443,11 @@ impl RuntimePerfTracker {
             "lastCompleted": self.last_completed,
         })
     }
+
+    pub(crate) fn completed_checkpoint_task(&self) -> Option<u64> {
+        self.last_completed.as_ref().filter(|task| task.slot_id == 0)
+            .map(|task| u64::from(task.task_id))
+    }
 }
 
 /// Reads existing content from the log file and tails new lines through server-log events.
@@ -5594,6 +5608,10 @@ fn tail_log_file(
         };
         if *recorded == Some(task.task_id) {
             return;
+        }
+        if task.slot_id == 0 {
+            app.state::<AppState>().checkpoint_coordinator.observe_completed_request(
+                instance_id, expected_pid, u64::from(task.task_id));
         }
         if let Some(event) = parser.vector_event(task) {
             crate::commands::monitoring::record_vector_activity(

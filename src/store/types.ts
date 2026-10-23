@@ -100,6 +100,8 @@ export interface KvCheckpointConfig {
   auto_restore: boolean
   storage_limit_gib: number
   minimum_prompt_tokens: number
+  idle_save_seconds: number
+  preserve_longer: boolean
 }
 
 export type CheckpointPhase =

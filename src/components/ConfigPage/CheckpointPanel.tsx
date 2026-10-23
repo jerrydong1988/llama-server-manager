@@ -160,6 +160,20 @@ export function CheckpointPanel({
         </label>
       </div>
 
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <label className={!policy.enabled || !policy.auto_save ? 'opacity-50' : ''} title={labels.idleSaveTip}>
+          <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.idleSave}</span>
+          <TextInput type="number" min={0} max={86_400} step={1}
+            value={policy.idle_save_seconds ?? 0} disabled={!policy.enabled || !policy.auto_save}
+            onChange={event => update('idle_save_seconds', boundedInteger(event.target.value, 0, 86_400))}
+            className="h-10 w-full" />
+          <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{labels.idleSaveTip}</span>
+        </label>
+        <Toggle label={labels.preserveLonger} value={policy.preserve_longer ?? false}
+          onChange={value => update('preserve_longer', value)} title={labels.preserveLongerTip}
+          disabled={!policy.enabled} />
+      </div>
+
       {policy.enabled && (
         <InsetSurface className="mt-5 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

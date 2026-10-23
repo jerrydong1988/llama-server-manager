@@ -844,6 +844,18 @@ impl RuntimeSupervisor {
                         sample.llama,
                     );
                     if let Some(slots) = sample.slots {
+                        let completed = supervisor.perf_trackers.lock().unwrap().get(&instance_id)
+                            .and_then(|tracker| tracker.lock().unwrap().completed_checkpoint_task());
+                        if let Some(task) = completed {
+                            supervisor.checkpoint_coordinator.observe_completed_request(&instance_id, expected_pid, task);
+                        }
+                        let running = supervisor.state.lock().unwrap().running.get(&instance_id).cloned();
+                        let router = supervisor.proxy_router_runtime.lock().unwrap().clone();
+                        if let Some(running) = running.filter(|run| run.pid == expected_pid) {
+                            crate::checkpoint_idle::poll(&supervisor.checkpoint_coordinator, &running, &slots, || {
+                                router.as_ref().map(|r| r.target_snapshot(&instance_id).active_requests).unwrap_or(0)
+                            });
+                        }
                         for slot in &slots {
                             supervisor.checkpoint_coordinator.observe_restored_request(
                                 &instance_id,
@@ -1277,6 +1289,8 @@ impl RuntimeSupervisor {
         instance_id: &str,
         running: &RunningInstance,
     ) -> Option<CheckpointPhase> {
+        let operation = crate::engine_process::termination_lock(running.pid);
+        let _operation = operation.lock().unwrap();
         let coordinator = &self.checkpoint_coordinator;
         coordinator.request_stop(instance_id, running.pid, true);
         if !coordinator.gate_active(instance_id) {

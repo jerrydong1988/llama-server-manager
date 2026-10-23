@@ -127,6 +127,7 @@ pub enum CheckpointReasonCode {
     AutoSaveDisabled,
     AutoRestoreDisabled,
     BelowTokenThreshold,
+    LongerCheckpointRetained,
     BusyTimeout,
     ChecksumMismatch,
     ManifestInvalid,
@@ -2779,6 +2780,37 @@ struct CoordinatorEntry {
     fingerprint: Option<CheckpointFingerprint>,
     policy: crate::models::KvCheckpointConfig,
     cold_recovery: bool,
+    idle: IdleSaveSchedule,
+}
+
+#[derive(Debug, Clone, Default)]
+struct IdleSaveSchedule {
+    dirty: bool,
+    task: Option<u64>,
+    completed_task: Option<u64>,
+    quiet_since: Option<Instant>,
+    attempted_at: Option<Instant>,
+}
+
+impl IdleSaveSchedule {
+    fn observe(&mut self, processing: bool, task: Option<u64>, now: Instant, seconds: u32) -> bool {
+        if processing || (task.is_some() && task != self.task) {
+            self.dirty = true;
+            self.quiet_since = None;
+        }
+        if task.is_some() { self.task = task; }
+        if processing { return false; }
+        let quiet = *self.quiet_since.get_or_insert(now);
+        if !self.dirty || now.duration_since(quiet) < Duration::from_secs(u64::from(seconds))
+            || self.attempted_at.is_some_and(|at| now.duration_since(at) < Duration::from_secs(60)) {
+            return false;
+        }
+        // Failed attempts are rate limited as well; another observed request
+        // makes the slot dirty again. Never rewrite unchanged state on a timer.
+        self.dirty = false;
+        self.attempted_at = Some(now);
+        true
+    }
 }
 
 #[derive(Clone)]
@@ -2936,6 +2968,7 @@ impl CheckpointCoordinator {
                 fingerprint,
                 policy,
                 cold_recovery: false,
+                idle: IdleSaveSchedule::default(),
             },
         );
         Ok(status)
@@ -2997,6 +3030,33 @@ impl CheckpointCoordinator {
             .lock()
             .ok()
             .and_then(|entries| entries.get(instance_id).map(|entry| entry.status.clone()))
+    }
+
+    pub fn idle_save_due(
+        &self, instance_id: &str, pid: u32,
+        slots: &[crate::commands::telemetry::SlotSnapshotRecord], active_requests: usize,
+    ) -> bool {
+        let Ok(mut entries) = self.entries.lock() else { return false; };
+        let Some(entry) = entries.get_mut(instance_id) else { return false; };
+        if !entry.gate_active || entry.stop_requested || entry.status.expected_pid != Some(pid)
+            || !entry.status.phase.is_routable() || !entry.policy.auto_save
+            || entry.policy.idle_save_seconds == 0 || slots.len() != 1 || slots[0].slot_id != 0 {
+            return false;
+        }
+        entry.idle.observe(slots[0].is_processing || active_requests > 0,
+            slots[0].task_id, Instant::now(), entry.policy.idle_save_seconds)
+    }
+
+    pub fn observe_completed_request(&self, instance_id: &str, pid: u32, task: u64) {
+        let Ok(mut entries) = self.entries.lock() else { return; };
+        let Some(entry) = entries.get_mut(instance_id) else { return; };
+        if !entry.gate_active || entry.status.expected_pid != Some(pid)
+            || !entry.status.phase.is_routable() || entry.idle.completed_task == Some(task) {
+            return;
+        }
+        entry.idle.completed_task = Some(task);
+        entry.idle.dirty = true;
+        entry.idle.quiet_since = None;
     }
 
     pub fn statuses(&self) -> HashMap<String, CheckpointStatus> {
@@ -3146,6 +3206,7 @@ impl CheckpointCoordinator {
                 fingerprint: None,
                 policy: crate::models::KvCheckpointConfig::default(),
                 cold_recovery: false,
+                idle: IdleSaveSchedule::default(),
             },
         );
         Ok(status)
@@ -3779,6 +3840,16 @@ impl CheckpointCoordinator {
                     "slot prompt state is below the save threshold",
                 ));
             }
+            if config.preserve_longer {
+                if let Some(previous) = self.store.load_latest(instance_id, &fingerprint.digest)? {
+                    if previous.manifest.slot().prompt_tokens > saved.n_saved {
+                        return Err(CheckpointStoreError::new(
+                            CheckpointReasonCode::LongerCheckpointRetained,
+                            "shorter slot state skipped; longer committed checkpoint retained",
+                        ));
+                    }
+                }
+            }
             let payload_sha256 =
                 self.store
                     .verify_scratch_payload(instance_id, &scratch_path, saved.n_written)?;
@@ -3843,7 +3914,7 @@ impl CheckpointCoordinator {
                 ),
             ),
             (Err(error), Ok(()))
-                if error.reason_code == CheckpointReasonCode::BelowTokenThreshold =>
+                if matches!(error.reason_code, CheckpointReasonCode::BelowTokenThreshold | CheckpointReasonCode::LongerCheckpointRetained) =>
             {
                 self.finish_stopping(
                     instance_id,
@@ -6677,6 +6748,77 @@ mod tests {
         let stopped = coordinator.mark_stopped("instance-1", 601).unwrap();
         assert_eq!(stopped.phase, CheckpointPhase::Stopped);
         assert!(!coordinator.gate_active("instance-1"));
+    }
+
+    #[test]
+    fn idle_schedule_requires_activity_quiet_and_rate_limits_attempts() {
+        let now = Instant::now();
+        let mut schedule = IdleSaveSchedule::default();
+        assert!(!schedule.observe(false, None, now, 5));
+        assert!(!schedule.observe(false, None, now + Duration::from_secs(10), 5));
+        assert!(!schedule.observe(true, Some(1), now + Duration::from_secs(11), 5));
+        assert!(!schedule.observe(false, Some(1), now + Duration::from_secs(12), 5));
+        assert!(schedule.observe(false, Some(1), now + Duration::from_secs(17), 5));
+        assert!(!schedule.observe(false, Some(1), now + Duration::from_secs(100), 5));
+        assert!(!schedule.observe(true, Some(2), now + Duration::from_secs(101), 5));
+        assert!(!schedule.observe(false, Some(2), now + Duration::from_secs(102), 5));
+        assert!(schedule.observe(false, Some(2), now + Duration::from_secs(107), 5));
+        assert!(!schedule.observe(true, Some(3), now + Duration::from_secs(108), 5));
+        assert!(!schedule.observe(false, Some(3), now + Duration::from_secs(109), 5));
+        assert!(!schedule.observe(false, Some(3), now + Duration::from_secs(115), 5));
+        assert!(schedule.observe(false, Some(3), now + Duration::from_secs(167), 5));
+    }
+
+    #[test]
+    fn completed_short_request_marks_idle_dirty_only_for_the_current_ready_process() {
+        let sandbox = TestSandbox::new("idle-completed-request");
+        let store = sandbox.store();
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-1", 602);
+        coordinator.observe_completed_request("instance-1", 602, 1);
+        assert!(!coordinator.entries.lock().unwrap()["instance-1"].idle.dirty);
+        let config = eligible_config();
+        let backend = FakeSlotBackend::new(&store, "instance-1");
+        coordinator.restore_or_cold("instance-1", 602, &test_fingerprint(&config), false, &backend).unwrap();
+        coordinator.observe_completed_request("instance-1", 601, 2);
+        assert!(!coordinator.entries.lock().unwrap()["instance-1"].idle.dirty);
+        coordinator.observe_completed_request("instance-1", 602, 2);
+        {
+            let mut entries = coordinator.entries.lock().unwrap();
+            let idle = &mut entries.get_mut("instance-1").unwrap().idle;
+            assert!(idle.dirty);
+            idle.dirty = false;
+        }
+        coordinator.observe_completed_request("instance-1", 602, 2);
+        assert!(!coordinator.entries.lock().unwrap()["instance-1"].idle.dirty);
+        coordinator.observe_completed_request("instance-1", 602, 3);
+        assert!(coordinator.entries.lock().unwrap()["instance-1"].idle.dirty);
+    }
+
+    #[test]
+    fn shorter_save_preserves_committed_generation_and_resumes_routing() {
+        let sandbox = TestSandbox::new("preserve-longer");
+        let store = sandbox.store();
+        let mut config = eligible_config();
+        config.kv_checkpoint.preserve_longer = true;
+        let fingerprint = test_fingerprint(&config);
+        commit_test_generation(&store, "instance-1", &fingerprint, 2048, b"long prefix");
+        let old = store.load_latest("instance-1", &fingerprint.digest).unwrap().unwrap().manifest.generation_id;
+        let backend = FakeSlotBackend::new(&store, "instance-1");
+        backend.configure(|state| { state.prompt_tokens = 512; state.payload = b"short title".to_vec(); });
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-1", 602);
+        coordinator.restore_or_cold("instance-1", 602, &fingerprint, false, &backend).unwrap();
+        coordinator.begin_draining("instance-1", 602).unwrap();
+        let status = coordinator.save_before_stop("instance-1", 602, &fingerprint, &config.kv_checkpoint, &backend).unwrap();
+        assert_eq!(status.last_outcome, CheckpointOutcome::Skipped);
+        assert_eq!(status.reason_code, CheckpointReasonCode::LongerCheckpointRetained);
+        assert_eq!(store.load_latest("instance-1", &fingerprint.digest).unwrap().unwrap().manifest.generation_id, old);
+        let resumed = coordinator.resume_after_stop_failure("instance-1", 602, CheckpointPhase::ReadyCold).unwrap();
+        assert!(resumed.routable);
+        assert_eq!(resumed.phase, CheckpointPhase::ReadyCold);
+        // Explicitly disabling retention permits a different, shorter workload.
+        config.kv_checkpoint.preserve_longer = false;
+        coordinator.begin_draining("instance-1", 602).unwrap();
+        assert_eq!(coordinator.save_before_stop("instance-1", 602, &fingerprint, &config.kv_checkpoint, &backend).unwrap().last_outcome, CheckpointOutcome::Success);
     }
 
     #[test]

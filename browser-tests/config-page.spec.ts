@@ -416,6 +416,27 @@ test('checkpoint requirements are explicit and repaired only after confirmation'
   })
 })
 
+test('idle checkpoint and longer-prefix retention are explicit saved policies', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 })
+  await openConfiguration(page, 'checkpoint-requirements')
+  const panel = page.locator('#config-checkpoint')
+  await panel.scrollIntoViewIfNeeded()
+  const idle = panel.getByRole('spinbutton', { name: /空闲后保存/ })
+  await expect(idle).toHaveValue('0')
+  await idle.fill('5')
+  await panel.getByRole('checkbox', { name: '保留较长检查点', exact: true }).click()
+  await panel.getByRole('checkbox', { name: '受控停止时保存', exact: true }).click()
+  await expect(idle).toBeDisabled()
+  await panel.getByRole('checkbox', { name: '受控停止时保存', exact: true }).click()
+  await expect(idle).toBeEnabled()
+  await expect(idle).toHaveValue('5')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].kv_checkpoint)).toMatchObject({
+    idle_save_seconds: 5, preserve_longer: true, auto_save: true,
+  })
+  await panel.screenshot({ path: 'test-results/checkpoint-idle-zh-1024.png' })
+})
+
 test('search navigation, change review, emission preview, and save use the mock backend', async ({ page }) => {
   await openConfiguration(page)
 

@@ -46,6 +46,8 @@ export function defaultInstanceConfig(): InstanceConfig {
       auto_restore: true,
       storage_limit_gib: 8,
       minimum_prompt_tokens: 256,
+      idle_save_seconds: 0,
+      preserve_longer: false,
     },
     log_prompts_dir: '', slot_prompt_similarity: 0.1, prefill_assistant: true,
     models_dir: '', models_preset: '', models_max: 4, models_autoload: true,

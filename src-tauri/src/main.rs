@@ -2,6 +2,7 @@
 
 mod artifact_maintenance;
 pub mod checkpoint;
+mod checkpoint_idle;
 mod commands;
 #[cfg(test)]
 mod dependency_regressions;
