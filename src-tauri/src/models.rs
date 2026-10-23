@@ -158,6 +158,15 @@ mod model_capability_tests {
         let normalized = config.kv_checkpoint.normalized();
         assert_eq!(normalized.storage_limit_gib, 1);
         assert_eq!(normalized.minimum_prompt_tokens, 1_048_576);
+        assert_eq!(normalized.idle_save_seconds, 0);
+        assert!(!normalized.preserve_longer);
+        let mut idle = normalized.clone();
+        idle.idle_save_seconds = 1;
+        idle.normalize();
+        assert_eq!(idle.idle_save_seconds, 5);
+        idle.idle_save_seconds = u32::MAX;
+        idle.normalize();
+        assert_eq!(idle.idle_save_seconds, 86_400);
 
         let encoded = serde_json::to_value(&normalized).unwrap();
         assert_eq!(encoded["enabled"], true);
@@ -350,11 +359,17 @@ pub struct KvCheckpointConfig {
     pub auto_restore: bool,
     pub storage_limit_gib: u32,
     pub minimum_prompt_tokens: u32,
+    /// Zero disables idle saves. Nonzero values are seconds of observed quiet.
+    pub idle_save_seconds: u32,
+    pub preserve_longer: bool,
 }
 
 impl KvCheckpointConfig {
     pub fn normalize(&mut self) -> bool {
         let before = self.clone();
+        if self.idle_save_seconds != 0 {
+            self.idle_save_seconds = self.idle_save_seconds.clamp(5, 86_400);
+        }
         self.storage_limit_gib = self.storage_limit_gib.clamp(
             KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN,
             KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX,
@@ -380,6 +395,8 @@ impl Default for KvCheckpointConfig {
             auto_restore: true,
             storage_limit_gib: 8,
             minimum_prompt_tokens: 256,
+            idle_save_seconds: 0,
+            preserve_longer: false,
         }
     }
 }

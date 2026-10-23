@@ -197,6 +197,8 @@ const entry = `
     auto_restore: true,
     storage_limit_gib: 8,
     minimum_prompt_tokens: 256,
+    idle_save_seconds: 0,
+    preserve_longer: false,
   })
   assert.equal(defaults.lazy_mode, '')
 

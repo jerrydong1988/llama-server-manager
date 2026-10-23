@@ -27,7 +27,7 @@ if (args.fingerprints) {
   fs.writeFileSync(path.join(data, 'kv-checkpoints', 'fingerprints-v1.json'), bytes)
 }
 const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 600000 })
-const report = { started: new Date().toISOString(), engine: args.engine, scope: args['boundary-only'] ? 'zero-checkpoint-boundary' : 'full', fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] }
+const report = { started: new Date().toISOString(), engine: args.engine, scope: args['idle-only'] ? 'idle-long-prefix' : args['boundary-only'] ? 'zero-checkpoint-boundary' : 'full', fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] }
 const sha = file => {
   const hash = crypto.createHash('sha256'), buffer = Buffer.alloc(1024 * 1024)
   const fd = fs.openSync(file, 'r')
@@ -106,6 +106,61 @@ function killOwned(pid) {
   cp.execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
 }
 const basePrompt = 'Write the result of 17 times 23 as 391, then repeat 391 separated by spaces. Answer: 391 391 391 '
+async function idleAcceptance(mode) {
+  await update({ spec_type: mode === 'mtp' ? 'draft-mtp' : 'none', draft_model_path: mode === 'mtp' ? args.mtp : '',
+    lookup_cache_dynamic: '', lookup_cache_managed: false,
+    kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
+      idle_save_seconds: 5, preserve_longer: true, storage_limit_gib: 4, minimum_prompt_tokens: 16 } })
+  await client.mutate('checkpoints.clear', { id })
+  const original = await start()
+  const longPrompt = 'Reference facts for a repetition task:\n' +
+    Array.from({ length: 100 }, (_, i) => `Record ${i}: seventeen times twenty-three equals 391.\n`).join('') + basePrompt
+  const prefill = await completion(longPrompt, 64)
+  const deadline = Date.now() + 240000
+  let saved
+  for (;;) {
+    saved = await client.call('checkpoints.status', { id })
+    if (saved.last_operation === 'save' && saved.last_outcome === 'success' && saved.routable) break
+    assert.ok(Date.now() < deadline, `idle save did not finish: ${JSON.stringify(saved)}`)
+    await sleep(1000)
+  }
+  assert.equal((await client.call('instances.health', { id })).running.pid, original.pid)
+  assert.equal(saved.phase, 'ready_cold', 'saving must not invent a disk restore')
+  assert.ok(saved.prompt_tokens > 1000)
+  record('idle-save-without-process-restart', { mode, original, saved, prefill: prefill.timings })
+  const continuation = longPrompt + prefill.content
+  const live = await completion(continuation, 48)
+  const retained = await client.call('checkpoints.status', { id })
+  const pointers = () => walk(path.join(data, 'kv-checkpoints', id))
+    .filter(f => path.basename(f) === 'latest.json').map(f => ({ path: path.relative(data, f), sha256: sha(f) }))
+  const beforeTitle = pointers()
+  assert.equal(beforeTitle.length, 1)
+  await completion('Write a short title for a calculation exercise about multiplication. '.repeat(6), 12)
+  await stop()
+  const stopped = await client.call('checkpoints.status', { id })
+  assert.equal(stopped.reason_code, 'longer_checkpoint_retained', JSON.stringify(stopped))
+  assert.equal(stopped.generation_id, retained.generation_id)
+  assert.deepEqual(pointers(), beforeTitle)
+  record('short-title-cannot-replace-long-checkpoint', { mode, retained, stopped, pointers: beforeTitle })
+  const fresh = await start()
+  assert.notEqual(fresh.pid, original.pid)
+  assert.equal(fresh.checkpoint.last_outcome, 'success')
+  const restored = await completion(continuation, 48)
+  assert.deepEqual(restored.tokens, live.tokens)
+  assert.ok(restored.timings.cache_n > 1000)
+  if (mode === 'mtp') assert.ok(restored.timings.draft_n > 0 && restored.timings.draft_n_accepted > 0)
+  record(`fresh-process-${mode}-long-prefix-after-short-title`, { mode, original, fresh, live, restored })
+  killOwned(fresh.pid)
+  await sleep(1200); await stop()
+  assert.deepEqual(pointers(), beforeTitle)
+  const afterCrash = await start()
+  const recovered = await completion(continuation, 48)
+  assert.notEqual(afterCrash.pid, fresh.pid)
+  assert.deepEqual(recovered.tokens, live.tokens)
+  assert.ok(recovered.timings.cache_n > 1000)
+  record('idle-generation-survives-forced-exit', { mode, afterCrash, recovered })
+  await stop()
+}
 async function main() {
   await new Promise((resolve, reject) => {
     const probe = require('node:net').createServer()
@@ -141,6 +196,11 @@ async function main() {
     slots_enabled: true, metrics: true, props: true, mmproj_auto: false,
     spec_type: 'ngram-cache', lookup_cache_dynamic: seed, lookup_cache_managed: true,
     kv_checkpoint: { enabled: false, auto_save: true, auto_restore: true, storage_limit_gib: 4, minimum_prompt_tokens: 16 } })
+  if (args['idle-only']) {
+    for (const mode of ['mtp', 'none']) await idleAcceptance(mode)
+    report.passed = true
+    return
+  }
   if (!args['boundary-only']) {
     let started = await start(); const generated = await completion(basePrompt, 80)
     const gpu = (await client.call('instances.health', { id })).monitoring
