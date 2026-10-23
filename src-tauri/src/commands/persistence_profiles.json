@@ -1,0 +1,20 @@
+[
+  {
+    "id": "windows-rocm-b11769-sckp1-sdft1",
+    "managed_lookup_cache": true,
+    "artifact_sha256": "51721bd434546a540548be496a58c9878774d41f7bc594b245031f38a1e0dfeb",
+    "launcher_sha256": "5c081b5db3fc7d62ba11f7b79253df7edf39975835fa8e9da5932301723410dd",
+    "draft_types": ["draft-simple", "draft-mtp", "draft-dflash"],
+    "max_context": 4096,
+    "evidence": "docs/B11769_CACHE_LIFECYCLE.md"
+  },
+  {
+    "id": "windows-rocm-b11838-sckp1-sdft1",
+    "managed_lookup_cache": true,
+    "artifact_sha256": "95ec5d0a33163b2cff9b212f5afa97f578908b82403758fd53a8850be1a5ae9f",
+    "launcher_sha256": "fc5b3e2bb3216681a2dc0a4662fed2637229e4ddbc54ea7bbe62ff1ea35ab96a",
+    "draft_types": ["draft-simple", "draft-mtp", "draft-dflash"],
+    "max_context": 4096,
+    "evidence": "docs/CHECKPOINT_ACCEPTANCE.md"
+  }
+]

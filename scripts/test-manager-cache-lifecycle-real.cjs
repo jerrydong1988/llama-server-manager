@@ -13,7 +13,11 @@ for (const key of ['engine', 'model', 'mtp', ...(args.dflash ? ['dflash'] : [])]
 assert.ok(!fs.existsSync(args.root), '--root must be new; never reuse user data')
 fs.mkdirSync(args.root, { recursive: true })
 fs.writeFileSync(path.join(args.root, '.owned-validation'), 'manager-cache-lifecycle-v1')
-const data = path.join(args.root, 'data'), id = 'b11769-cache-test', port = 18771
+const profiles = require('../src-tauri/src/commands/persistence_profiles.json')
+const profile = profiles.find(p => p.id === args.profile)
+assert.ok(profile, '--profile must name an embedded, immutable qualification candidate')
+const data = path.join(args.root, 'data'), id = 'checkpoint-acceptance', port = Number(args.port || 18771)
+assert.ok(Number.isInteger(port) && port > 1024 && port < 65536)
 if (args.fingerprints) {
   assert.ok(path.isAbsolute(args.fingerprints))
   const bytes = fs.readFileSync(args.fingerprints)
@@ -24,7 +28,17 @@ if (args.fingerprints) {
 }
 const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 600000 })
 const report = { started: new Date().toISOString(), engine: args.engine, scope: args['boundary-only'] ? 'zero-checkpoint-boundary' : 'full', fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] }
-const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+const sha = file => {
+  const hash = crypto.createHash('sha256'), buffer = Buffer.alloc(1024 * 1024)
+  const fd = fs.openSync(file, 'r')
+  try {
+    for (;;) {
+      const count = fs.readSync(fd, buffer, 0, buffer.length, null)
+      if (!count) return hash.digest('hex')
+      hash.update(buffer.subarray(0, count))
+    }
+  } finally { fs.closeSync(fd) }
+}
 const record = (name, details = {}) => {
   if (name.startsWith('fresh-process-')) fs.copyFileSync(path.join(data, 'configs', 'logs', `${id}.log`), path.join(args.root, `${name}.log`))
   report.events.push({ ...details, name, recorded_at: new Date().toISOString() })
@@ -93,7 +107,18 @@ function killOwned(pid) {
 }
 const basePrompt = 'Write the result of 17 times 23 as 391, then repeat 391 separated by spaces. Answer: 391 391 391 '
 async function main() {
-  assert.equal(sha(args.engine), '5c081b5db3fc7d62ba11f7b79253df7edf39975835fa8e9da5932301723410dd')
+  await new Promise((resolve, reject) => {
+    const probe = require('node:net').createServer()
+    probe.once('error', reject)
+    probe.listen({ host: '127.0.0.1', port, exclusive: true }, () => probe.close(resolve))
+  })
+  assert.equal(sha(args.engine), profile.launcher_sha256, 'launcher must match the selected fixed build')
+  report.profile = profile.id
+  report.version = cp.execFileSync(args.engine, ['--version'], { windowsHide: true, encoding: 'utf8' }).trim()
+  // Pin auxiliary kernels as evidence too: the manager DLL contract alone does
+  // not establish that HIP's external runtime assets are complete or unchanged.
+  report.runtime_assets = walk(path.dirname(args.engine)).filter(f => /\.(dll|kpack|dat|co|hsaco)$/i.test(f))
+    .map(f => ({ path: path.relative(path.dirname(args.engine), f), bytes: fs.statSync(f).size, sha256: sha(f) }))
   await client.call('service.start')
   for (const [purpose, directory] of [['engine', path.dirname(args.engine)], ...[...new Set([args.model, args.mtp, args.dflash].filter(Boolean).map(p => path.dirname(p)))].map(p => ['model', p])]) {
     await client.mutate('paths.authorize', { purpose, path: directory })
@@ -106,10 +131,10 @@ async function main() {
   const probed = await client.mutate('engines.probe', { id: engine.id })
   record('capability-probe', probed)
   assert.equal(probed.capabilities.contextCheckpointPersistence, true)
-  assert.equal(probed.capabilities.persistenceProfile, 'windows-rocm-b11769-sckp1-sdft1')
+  assert.equal(probed.capabilities.persistenceProfile, profile.id)
   assert.ok(!probed.capabilities.checkpointDraftTypes.includes('draft-eagle3'))
   const seed = path.join(args.root, 'external-seed.bin')
-  await update({ name: 'Isolated b11769 cache validation', engine_id: engine.id, model_path: args.model,
+  await update({ name: 'Isolated checkpoint acceptance', engine_id: engine.id, model_path: args.model,
     host: '127.0.0.1', port, launch_mode: 'managed', ctx_size: 4096, ctx_size_auto: false,
     gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99, draft_tokens: 3, flash_attn: 'on', fit_mode: 'off',
     warmup: false, parallel: 1, cache_prompt: true, cache_idle_slots: true, cache_ram: 256, ctx_checkpoints: 2,
