@@ -22,7 +22,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 4;
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 5;
+const MAX_CHECKPOINT_SLOTS: u32 = 4;
+fn one_slot() -> u32 {
+    1
+}
+fn is_one_slot(count: &u32) -> bool {
+    *count == 1
+}
 const CHECKPOINT_SLOT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHECKPOINT_SLOT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECKPOINT_DISK_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
@@ -107,6 +114,7 @@ pub enum CheckpointReasonCode {
     ParallelMustBeOne,
     PromptCacheRequired,
     PromptCacheRetentionRequired,
+    MultiSlotIdleCacheUnsupported,
     SlotsRequired,
     LoopbackHttpRequired,
     CustomEndpointUnsupported,
@@ -149,6 +157,8 @@ pub enum CheckpointReasonCode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointReuseObservation {
+    #[serde(default)]
+    pub slot_id: u32,
     pub task_id: u64,
     pub cached_tokens: u64,
     pub processed_tokens: u64,
@@ -169,6 +179,10 @@ pub struct CheckpointStatus {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoint_slots: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,6 +206,8 @@ impl CheckpointStatus {
             reason_code: CheckpointReasonCode::Disabled,
             message: String::new(),
             generation_id: None,
+            checkpoint_slots: Vec::new(),
+            slot_count: None,
             prompt_tokens: None,
             bytes: None,
             duration_ms: None,
@@ -217,6 +233,7 @@ pub struct EngineCheckpointCapabilities {
     pub context_checkpoint_persistence: bool,
     // Set only by the manager after exact runtime/model/config qualification.
     pub reviewed_swa_checkpoint_reuse: bool,
+    pub reviewed_multi_slot: bool,
 }
 
 impl EngineCheckpointCapabilities {
@@ -234,6 +251,7 @@ impl EngineCheckpointCapabilities {
             swa_full: has("--swa-full"),
             context_checkpoint_persistence: false,
             reviewed_swa_checkpoint_reuse: false,
+            reviewed_multi_slot: false,
         }
     }
 
@@ -250,6 +268,11 @@ impl EngineCheckpointCapabilities {
     pub const fn complete(self) -> bool {
         self.slots && self.slot_save_path && self.cache_ram && self.cache_idle_slots
     }
+
+    pub const fn with_reviewed_multi_slot(mut self, supported: bool) -> Self {
+        self.reviewed_multi_slot = supported;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +282,8 @@ pub struct CheckpointEligibility {
     pub reasons: Vec<CheckpointReasonCode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_argument_blockers: Vec<String>,
+    #[serde(default = "one_slot")]
+    pub slot_count: u32,
 }
 
 impl CheckpointEligibility {
@@ -276,6 +301,7 @@ impl CheckpointEligibility {
             reason_code,
             reasons,
             custom_argument_blockers,
+            slot_count: 1,
         }
     }
 
@@ -468,13 +494,23 @@ pub fn evaluate_checkpoint_eligibility(
             CheckpointReasonCode::VectorWorkloadUnsupported,
         );
     }
-    if config.parallel != 1 {
+    if config.parallel != 1
+        && !(matches!(config.parallel, 2 | 4) && context.engine_capabilities.reviewed_multi_slot)
+    {
         push_reason(&mut reasons, CheckpointReasonCode::ParallelMustBeOne);
     }
     if !config.cache_prompt {
         push_reason(&mut reasons, CheckpointReasonCode::PromptCacheRequired);
     }
-    if !config.cache_idle_slots || !(config.cache_ram == -1 || config.cache_ram > 0) {
+    if config.parallel > 1 && config.cache_idle_slots {
+        push_reason(
+            &mut reasons,
+            CheckpointReasonCode::MultiSlotIdleCacheUnsupported,
+        );
+    }
+    if config.parallel == 1
+        && (!config.cache_idle_slots || !(config.cache_ram == -1 || config.cache_ram > 0))
+    {
         push_reason(
             &mut reasons,
             CheckpointReasonCode::PromptCacheRetentionRequired,
@@ -576,7 +612,12 @@ pub fn evaluate_checkpoint_eligibility(
         );
     }
 
-    CheckpointEligibility::from_reasons_and_blockers(reasons, custom_argument_blockers)
+    let mut result =
+        CheckpointEligibility::from_reasons_and_blockers(reasons, custom_argument_blockers);
+    if result.eligible {
+        result.slot_count = config.parallel as u32;
+    }
+    result
 }
 
 pub const CHECKPOINT_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -596,7 +637,7 @@ const HASH_CACHE_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 fn is_manager_slot_filename(filename: &str) -> bool {
     !filename.is_empty()
         && filename.len() <= 128
-        && filename.starts_with("slot-0-")
+        && (0..MAX_CHECKPOINT_SLOTS).any(|id| filename.starts_with(&format!("slot-{id}-")))
         && filename.ends_with(".bin")
         && filename
             .bytes()
@@ -1317,6 +1358,10 @@ pub struct CheckpointManifestV1 {
     pub fingerprint: CheckpointFingerprint,
     pub created_at: String,
     pub slots: Vec<CheckpointSlotManifest>,
+    // Schema 1 remains byte-compatible for single-slot generations. Older
+    // managers reject schema 2 rather than partially restoring a multi-slot set.
+    #[serde(default = "one_slot", skip_serializing_if = "is_one_slot")]
+    pub slot_count: u32,
 }
 
 impl CheckpointManifestV1 {
@@ -1341,6 +1386,7 @@ impl CheckpointManifestV1 {
                 bytes,
                 sha256: payload_sha256.into(),
             }],
+            slot_count: 1,
         }
     }
 
@@ -1365,7 +1411,8 @@ impl CheckpointManifestV1 {
         expected_instance_id: &str,
         expected_fingerprint: &str,
     ) -> StoreResult<()> {
-        if self.schema_version != CHECKPOINT_MANIFEST_SCHEMA_VERSION
+        if !((self.schema_version == CHECKPOINT_MANIFEST_SCHEMA_VERSION && self.slot_count == 1)
+            || (self.schema_version == 2 && matches!(self.slot_count, 2 | 4)))
             || self.state_format != STATE_FORMAT
             || !validate_identifier(&self.instance_id)
             || self.instance_id != expected_instance_id
@@ -1377,27 +1424,45 @@ impl CheckpointManifestV1 {
             ));
         }
         self.fingerprint.validate()?;
-        if self.fingerprint.digest != expected_fingerprint || self.slots.len() != 1 {
+        if self.fingerprint.digest != expected_fingerprint
+            || self.slots.is_empty()
+            || self.slots.len() > self.slot_count as usize
+        {
             return Err(CheckpointStoreError::manifest(
                 "checkpoint manifest does not match the requested state",
             ));
         }
-        let slot = &self.slots[0];
-        if slot.id != 0
-            || slot.filename != SLOT_FILENAME
-            || slot.prompt_tokens == 0
-            || slot.bytes == 0
-            || !is_lower_hex_digest(&slot.sha256)
-        {
-            return Err(CheckpointStoreError::manifest(
-                "checkpoint slot manifest is invalid",
-            ));
+        let mut seen = HashSet::new();
+        for slot in &self.slots {
+            if slot.id >= self.slot_count
+                || !seen.insert(slot.id)
+                || slot.filename != format!("slot-{}.bin", slot.id)
+                || slot.prompt_tokens == 0
+                || slot.bytes == 0
+                || !is_lower_hex_digest(&slot.sha256)
+            {
+                return Err(CheckpointStoreError::manifest(
+                    "checkpoint slot manifest is invalid",
+                ));
+            }
         }
         Ok(())
     }
 
     pub fn slot(&self) -> &CheckpointSlotManifest {
         &self.slots[0]
+    }
+
+    pub fn payload_bytes(&self) -> u64 {
+        self.slots
+            .iter()
+            .fold(0u64, |total, s| total.saturating_add(s.bytes))
+    }
+
+    pub fn prompt_tokens(&self) -> u64 {
+        self.slots
+            .iter()
+            .fold(0u64, |total, s| total.saturating_add(s.prompt_tokens))
     }
 }
 
@@ -1547,8 +1612,22 @@ impl CheckpointStore {
     }
 
     pub fn new_scratch_slot_path(&self, instance_id: &str, pid: u32) -> StoreResult<PathBuf> {
+        self.new_scratch_slot_path_for(instance_id, pid, 0)
+    }
+
+    pub fn new_scratch_slot_path_for(
+        &self,
+        instance_id: &str,
+        pid: u32,
+        slot: u32,
+    ) -> StoreResult<PathBuf> {
+        if slot >= MAX_CHECKPOINT_SLOTS {
+            return Err(CheckpointStoreError::manifest(
+                "slot id exceeds reviewed limit",
+            ));
+        }
         let scratch = self.prepare_instance(instance_id)?;
-        Ok(scratch.join(format!("slot-0-{pid}-{}.bin", uuid::Uuid::new_v4())))
+        Ok(scratch.join(format!("slot-{slot}-{pid}-{}.bin", uuid::Uuid::new_v4())))
     }
 
     pub fn cleanup_scratch(&self, instance_id: &str) -> StoreResult<usize> {
@@ -1856,19 +1935,47 @@ impl CheckpointStore {
         storage_limit_bytes: u64,
         inject: impl Fn(StoreFaultPoint) -> StoreResult<()>,
     ) -> StoreResult<CommittedGeneration> {
+        self.commit_slots_with_fault(
+            manifest,
+            &[scratch_payload.to_path_buf()],
+            storage_limit_bytes,
+            inject,
+        )
+    }
+
+    pub fn commit_slots_with_fault(
+        &self,
+        manifest: &CheckpointManifestV1,
+        scratch_payloads: &[PathBuf],
+        storage_limit_bytes: u64,
+        inject: impl Fn(StoreFaultPoint) -> StoreResult<()>,
+    ) -> StoreResult<CommittedGeneration> {
         manifest.validate(&manifest.instance_id, &manifest.fingerprint.digest)?;
-        self.validate_scratch_payload(&manifest.instance_id, scratch_payload)?;
-        let source_metadata = validate_regular_file(scratch_payload)?;
-        let slot = manifest.slot();
-        if source_metadata.len() != slot.bytes || sha256_file(scratch_payload)? != slot.sha256 {
-            return Err(CheckpointStoreError::new(
-                CheckpointReasonCode::ChecksumMismatch,
-                "checkpoint scratch payload does not match its manifest",
+        if scratch_payloads.len() != manifest.slots.len() {
+            return Err(CheckpointStoreError::manifest(
+                "slot payload set is incomplete",
             ));
+        }
+        let mut seen_paths = HashSet::new();
+        for (slot, source) in manifest.slots.iter().zip(scratch_payloads) {
+            self.validate_scratch_payload(&manifest.instance_id, source)?;
+            if !seen_paths.insert(
+                fs::canonicalize(source)
+                    .map_err(|_| CheckpointStoreError::io("payload resolution failed"))?,
+            ) || validate_regular_file(source)?.len() != slot.bytes
+                || sha256_file(source)? != slot.sha256
+            {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::ChecksumMismatch,
+                    "checkpoint scratch payload does not match its manifest",
+                ));
+            }
         }
         let manifest_bytes = serde_json::to_vec_pretty(manifest)
             .map_err(|_| CheckpointStoreError::manifest("manifest serialization failed"))?;
-        let generation_bytes = slot.bytes.saturating_add(manifest_bytes.len() as u64);
+        let generation_bytes = manifest
+            .payload_bytes()
+            .saturating_add(manifest_bytes.len() as u64);
         if generation_bytes > storage_limit_bytes {
             return Err(CheckpointStoreError::new(
                 CheckpointReasonCode::StorageLimit,
@@ -1888,27 +1995,28 @@ impl CheckpointStore {
         ensure_private_directory(&pending)?;
         let mut renamed = false;
         let result = (|| {
-            let destination = pending.join(SLOT_FILENAME);
-            fs::rename(scratch_payload, &destination)
-                .map_err(|_| CheckpointStoreError::io("generation payload move failed"))?;
-            inject(StoreFaultPoint::AfterPayloadMove)?;
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&destination)
-                .and_then(|payload| payload.sync_all())
-                .map_err(|_| CheckpointStoreError::io("generation payload sync failed"))?;
-            protect_file(&destination)?;
-            inject(StoreFaultPoint::AfterPayloadSync)?;
-            if validate_regular_file(&destination)?.len() != slot.bytes
-                || sha256_file(&destination)? != slot.sha256
-            {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::ChecksumMismatch,
-                    "moved generation payload failed verification",
-                ));
+            for (slot, source) in manifest.slots.iter().zip(scratch_payloads) {
+                let destination = pending.join(&slot.filename);
+                fs::rename(source, &destination)
+                    .map_err(|_| CheckpointStoreError::io("generation payload move failed"))?;
+                inject(StoreFaultPoint::AfterPayloadMove)?;
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&destination)
+                    .and_then(|payload| payload.sync_all())
+                    .map_err(|_| CheckpointStoreError::io("generation payload sync failed"))?;
+                protect_file(&destination)?;
+                inject(StoreFaultPoint::AfterPayloadSync)?;
+                if validate_regular_file(&destination)?.len() != slot.bytes
+                    || sha256_file(&destination)? != slot.sha256
+                {
+                    return Err(CheckpointStoreError::new(
+                        CheckpointReasonCode::ChecksumMismatch,
+                        "moved generation payload failed verification",
+                    ));
+                }
             }
-
             crate::persistence::atomic_write(&pending.join("manifest.json"), &manifest_bytes, None)
                 .map_err(|_| CheckpointStoreError::io("manifest persistence failed"))?;
             inject(StoreFaultPoint::AfterManifestWrite)?;
@@ -1942,8 +2050,8 @@ impl CheckpointStore {
             )?;
             Ok(CommittedGeneration {
                 generation_id: manifest.generation_id.clone(),
-                bytes: slot.bytes,
-                prompt_tokens: slot.prompt_tokens,
+                bytes: manifest.payload_bytes(),
+                prompt_tokens: manifest.prompt_tokens(),
             })
         })();
         if result.is_err() && !renamed && pending.exists() {
@@ -1996,16 +2104,17 @@ impl CheckpointStore {
                 "checkpoint generation directory does not match its manifest",
             ));
         }
-        let payload_path = generation_dir.join(SLOT_FILENAME);
-        let payload_metadata = validate_regular_file(&payload_path)?;
-        if payload_metadata.len() != manifest.slot().bytes
-            || sha256_file(&payload_path)? != manifest.slot().sha256
-        {
-            return Err(CheckpointStoreError::new(
-                CheckpointReasonCode::ChecksumMismatch,
-                "checkpoint payload checksum mismatch",
-            ));
+        for slot in &manifest.slots {
+            let payload_path = generation_dir.join(&slot.filename);
+            let payload_metadata = validate_regular_file(&payload_path)?;
+            if payload_metadata.len() != slot.bytes || sha256_file(&payload_path)? != slot.sha256 {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::ChecksumMismatch,
+                    "checkpoint payload checksum mismatch",
+                ));
+            }
         }
+        let payload_path = generation_dir.join(&manifest.slots[0].filename);
         Ok(LoadedGeneration {
             manifest,
             generation_dir,
@@ -2314,7 +2423,10 @@ impl CheckpointStore {
                 let manifest_size = fs::metadata(loaded.generation_dir.join("manifest.json"))
                     .map(|metadata| metadata.len())
                     .unwrap_or(0);
-                let bytes = loaded.manifest.slot().bytes.saturating_add(manifest_size);
+                let bytes = loaded
+                    .manifest
+                    .payload_bytes()
+                    .saturating_add(manifest_size);
                 let key = format!("{fingerprint}/{generation_id}");
                 if let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) {
                     let replace = newest_global
@@ -2386,10 +2498,28 @@ impl CheckpointStore {
                 "checkpoint generation belongs to another instance",
             ));
         }
-        let slot = generation.manifest.slot();
+        self.copy_slot_to_scratch(instance_id, pid, generation, generation.manifest.slot())
+    }
+
+    pub fn copy_slot_to_scratch(
+        &self,
+        instance_id: &str,
+        pid: u32,
+        generation: &LoadedGeneration,
+        slot: &CheckpointSlotManifest,
+    ) -> StoreResult<PathBuf> {
+        if generation.manifest.instance_id != instance_id
+            || !generation.manifest.slots.contains(slot)
+        {
+            return Err(CheckpointStoreError::manifest(
+                "slot does not belong to generation",
+            ));
+        }
         self.ensure_scratch_capacity(instance_id, slot.bytes)?;
-        let destination = self.new_scratch_slot_path(instance_id, pid)?;
-        let mut source = File::open(generation.payload_path())
+        let destination = self.new_scratch_slot_path_for(instance_id, pid, slot.id)?;
+        let source_path = generation.generation_dir.join(&slot.filename);
+        validate_regular_file(&source_path)?;
+        let mut source = File::open(source_path)
             .map_err(|_| CheckpointStoreError::io("generation payload open failed"))?;
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
@@ -2549,6 +2679,22 @@ pub trait SlotBackend: Send + Sync {
     fn save(&self, filename: &str) -> StoreResult<SlotSaveResult>;
     fn restore(&self, filename: &str) -> StoreResult<SlotRestoreResult>;
     fn erase(&self) -> StoreResult<SlotEraseResult>;
+    fn save_slot(&self, id: u32, filename: &str) -> StoreResult<SlotSaveResult> {
+        if id != 0 {
+            return Err(CheckpointStoreError::manifest(
+                "backend supports only slot zero",
+            ));
+        }
+        self.save(filename)
+    }
+    fn restore_slot(&self, id: u32, filename: &str) -> StoreResult<SlotRestoreResult> {
+        if id != 0 {
+            return Err(CheckpointStoreError::manifest(
+                "backend supports only slot zero",
+            ));
+        }
+        self.restore(filename)
+    }
 }
 
 #[derive(Deserialize)]
@@ -2708,8 +2854,8 @@ impl LlamaSlotClient {
         Ok(())
     }
 
-    fn action_url(&self, action: &str) -> String {
-        format!("{}/slots/0?action={action}", self.base_url)
+    fn action_url(&self, id: u32, action: &str) -> String {
+        format!("{}/slots/{id}?action={action}", self.base_url)
     }
 }
 
@@ -2753,15 +2899,24 @@ impl SlotBackend for LlamaSlotClient {
     }
 
     fn save(&self, filename: &str) -> StoreResult<SlotSaveResult> {
+        self.save_slot(0, filename)
+    }
+
+    fn save_slot(&self, id: u32, filename: &str) -> StoreResult<SlotSaveResult> {
         Self::manager_filename(filename)?;
+        if id >= MAX_CHECKPOINT_SLOTS || !filename.starts_with(&format!("slot-{id}-")) {
+            return Err(CheckpointStoreError::manifest(
+                "slot filename does not match id",
+            ));
+        }
         let raw: RawSlotSaveResult = self.execute_json(
             self.operation_client
-                .post(self.action_url("save"))
+                .post(self.action_url(id, "save"))
                 .json(&serde_json::json!({ "filename": filename })),
             CheckpointReasonCode::SaveResponseInvalid,
             "slot save response was malformed",
         )?;
-        if raw.id_slot != 0 || raw.filename != filename || raw.n_written == 0 {
+        if raw.id_slot != id || raw.filename != filename || raw.n_written == 0 {
             return Err(CheckpointStoreError::new(
                 CheckpointReasonCode::SaveResponseInvalid,
                 "slot save response did not match the request",
@@ -2776,15 +2931,24 @@ impl SlotBackend for LlamaSlotClient {
     }
 
     fn restore(&self, filename: &str) -> StoreResult<SlotRestoreResult> {
+        self.restore_slot(0, filename)
+    }
+
+    fn restore_slot(&self, id: u32, filename: &str) -> StoreResult<SlotRestoreResult> {
         Self::manager_filename(filename)?;
+        if id >= MAX_CHECKPOINT_SLOTS || !filename.starts_with(&format!("slot-{id}-")) {
+            return Err(CheckpointStoreError::manifest(
+                "slot filename does not match id",
+            ));
+        }
         let raw: RawSlotRestoreResult = self.execute_json(
             self.operation_client
-                .post(self.action_url("restore"))
+                .post(self.action_url(id, "restore"))
                 .json(&serde_json::json!({ "filename": filename })),
             CheckpointReasonCode::RestoreResponseInvalid,
             "slot restore response was malformed",
         )?;
-        if raw.id_slot != 0 || raw.filename != filename || raw.n_read == 0 {
+        if raw.id_slot != id || raw.filename != filename || raw.n_read == 0 {
             return Err(CheckpointStoreError::new(
                 CheckpointReasonCode::RestoreResponseInvalid,
                 "slot restore response did not match the request",
@@ -2800,7 +2964,7 @@ impl SlotBackend for LlamaSlotClient {
 
     fn erase(&self) -> StoreResult<SlotEraseResult> {
         let raw: RawSlotEraseResult = self.execute_json(
-            self.cleanup_client.post(self.action_url("erase")),
+            self.cleanup_client.post(self.action_url(0, "erase")),
             CheckpointReasonCode::RestoreResponseInvalid,
             "slot erase response was malformed",
         )?;
@@ -2825,6 +2989,8 @@ struct CoordinatorEntry {
     fingerprint: Option<CheckpointFingerprint>,
     policy: crate::models::KvCheckpointConfig,
     cold_recovery: bool,
+    slot_count: u32,
+    idle_slots: BTreeMap<u32, Option<u64>>,
     idle: IdleSaveSchedule,
 }
 
@@ -2952,6 +3118,9 @@ impl CheckpointCoordinator {
             ));
         }
         if eligibility.eligible {
+            if !matches!(eligibility.slot_count, 1 | 2 | 4) {
+                return Err(CheckpointStoreError::manifest("unreviewed slot topology"));
+            }
             let registered_fingerprint = fingerprint.as_ref().ok_or_else(|| {
                 CheckpointStoreError::new(
                     CheckpointReasonCode::FingerprintUnavailable,
@@ -2994,6 +3163,8 @@ impl CheckpointCoordinator {
             reason_code,
             message: String::new(),
             generation_id: None,
+            checkpoint_slots: Vec::new(),
+            slot_count: eligibility.eligible.then_some(eligibility.slot_count),
             prompt_tokens: None,
             bytes: None,
             duration_ms: None,
@@ -3013,6 +3184,8 @@ impl CheckpointCoordinator {
                 fingerprint,
                 policy,
                 cold_recovery: false,
+                slot_count: eligibility.slot_count,
+                idle_slots: BTreeMap::new(),
                 idle: IdleSaveSchedule::default(),
             },
         );
@@ -3081,15 +3254,78 @@ impl CheckpointCoordinator {
         &self, instance_id: &str, pid: u32,
         slots: &[crate::commands::telemetry::SlotSnapshotRecord], active_requests: usize,
     ) -> bool {
-        let Ok(mut entries) = self.entries.lock() else { return false; };
-        let Some(entry) = entries.get_mut(instance_id) else { return false; };
-        if !entry.gate_active || entry.stop_requested || entry.status.expected_pid != Some(pid)
-            || !entry.status.phase.is_routable() || !entry.policy.auto_save
-            || entry.policy.idle_save_seconds == 0 || slots.len() != 1 || slots[0].slot_id != 0 {
+        let Ok(mut entries) = self.entries.lock() else {
+            return false;
+        };
+        let Some(entry) = entries.get_mut(instance_id) else {
+            return false;
+        };
+        if !entry.gate_active
+            || entry.stop_requested
+            || entry.status.expected_pid != Some(pid)
+            || !entry.status.phase.is_routable()
+            || !entry.policy.auto_save
+            || entry.policy.idle_save_seconds == 0
+        {
             return false;
         }
-        entry.idle.observe(slots[0].is_processing || active_requests > 0,
-            slots[0].task_id, Instant::now(), entry.policy.idle_save_seconds)
+        let tasks: BTreeMap<_, _> = slots.iter().map(|s| (s.slot_id, s.task_id)).collect();
+        if slots.len() != entry.slot_count as usize
+            || tasks.len() != slots.len()
+            || tasks.keys().copied().ne(0..entry.slot_count)
+        {
+            entry.idle.quiet_since = None;
+            return false;
+        }
+        if entry.idle_slots != tasks {
+            entry.idle.dirty = true;
+            entry.idle.quiet_since = None;
+            entry.idle_slots = tasks;
+        }
+        entry.idle.observe(
+            slots.iter().any(|s| s.is_processing) || active_requests > 0,
+            None,
+            Instant::now(),
+            entry.policy.idle_save_seconds,
+        )
+    }
+
+    fn slot_count(&self, instance_id: &str, pid: u32) -> StoreResult<u32> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint lock failed"))?;
+        entries
+            .get(instance_id)
+            .filter(|e| e.status.expected_pid == Some(pid))
+            .map(|e| e.slot_count)
+            .ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "stale checkpoint process",
+                )
+            })
+    }
+
+    fn validate_slot_set(slots: &[SlotSnapshot], count: u32) -> StoreResult<()> {
+        let ids: std::collections::BTreeSet<_> = slots.iter().map(|s| s.id).collect();
+        if slots.len() != count as usize
+            || ids.len() != slots.len()
+            || ids.iter().copied().ne(0..count)
+            || slots.iter().any(|s| s.n_ctx == 0)
+        {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::SlotStateMismatch,
+                "slot topology does not match the qualified launch",
+            ));
+        }
+        if slots.iter().any(|s| s.is_processing) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::BusyTimeout,
+                "a slot is busy at the checkpoint boundary",
+            ));
+        }
+        Ok(())
     }
 
     pub fn observe_completed_request(&self, instance_id: &str, pid: u32, task: u64) {
@@ -3122,9 +3358,6 @@ impl CheckpointCoordinator {
         expected_pid: u32,
         slot: &crate::commands::telemetry::SlotSnapshotRecord,
     ) {
-        if slot.slot_id != 0 {
-            return;
-        }
         let (Some(task_id), Some(cached_tokens), Some(processed_tokens)) =
             (slot.task_id, slot.cached_tokens, slot.processed_tokens)
         else {
@@ -3144,6 +3377,7 @@ impl CheckpointCoordinator {
         };
         if entry.status.expected_pid != Some(expected_pid)
             || entry.status.phase != CheckpointPhase::Ready
+            || slot.slot_id >= entry.slot_count
         {
             return;
         }
@@ -3153,6 +3387,7 @@ impl CheckpointCoordinator {
             .as_ref()
             .is_some_and(|value| {
                 value.task_id == task_id
+                    && value.slot_id == slot.slot_id
                     && value.cached_tokens == cached_tokens
                     && value.processed_tokens == processed_tokens
             })
@@ -3160,6 +3395,7 @@ impl CheckpointCoordinator {
             return;
         }
         entry.status.reuse_observation = Some(CheckpointReuseObservation {
+            slot_id: slot.slot_id,
             task_id,
             cached_tokens,
             processed_tokens,
@@ -3238,6 +3474,8 @@ impl CheckpointCoordinator {
         .into();
         status.generation_id = None;
         status.prompt_tokens = None;
+        status.checkpoint_slots.clear();
+        status.slot_count = None;
         status.bytes = None;
         status.duration_ms = Some(0);
         status.reuse_observation = None;
@@ -3250,6 +3488,8 @@ impl CheckpointCoordinator {
                 status: status.clone(),
                 fingerprint: None,
                 policy: crate::models::KvCheckpointConfig::default(),
+                slot_count: 1,
+                idle_slots: BTreeMap::new(),
                 cold_recovery: false,
                 idle: IdleSaveSchedule::default(),
             },
@@ -3350,8 +3590,10 @@ impl CheckpointCoordinator {
         entry.status.duration_ms = Some(update.duration_ms);
         if let Some(manifest) = update.generation {
             entry.status.generation_id = Some(manifest.generation_id.clone());
-            entry.status.prompt_tokens = Some(manifest.slot().prompt_tokens);
-            entry.status.bytes = Some(manifest.slot().bytes);
+            entry.status.prompt_tokens = Some(manifest.prompt_tokens());
+            entry.status.checkpoint_slots = manifest.slots.iter().map(|s| s.id).collect();
+            entry.status.slot_count = Some(manifest.slot_count);
+            entry.status.bytes = Some(manifest.payload_bytes());
         }
         entry.status.updated_at = checkpoint_now_millis();
         Ok(entry.status.clone())
@@ -3546,113 +3788,89 @@ impl CheckpointCoordinator {
             }
         };
 
-        let restore_path =
-            match self
-                .store
-                .copy_generation_to_scratch(instance_id, expected_pid, &generation)
-            {
-                Ok(path) => path,
-                Err(error) => {
-                    return self.restore_failure(
-                        instance_id,
-                        expected_pid,
-                        backend,
-                        error,
-                        started,
-                    );
-                }
-            };
-        let restore_filename = restore_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_string();
-        let mut verification_path = None;
+        let mut scratch_paths = Vec::new();
         let restore_result = (|| {
             backend.health()?;
+            let count = self.slot_count(instance_id, expected_pid)?;
+            if generation.manifest.slot_count != count {
+                return Err(CheckpointStoreError::manifest(
+                    "checkpoint slot topology differs from launch",
+                ));
+            }
+            Self::validate_slot_set(&backend.slots()?, count)?;
             self.transition(instance_id, expected_pid, CheckpointPhase::Restoring)?;
-            let restored = backend.restore(&restore_filename)?;
-            let slot = generation.manifest.slot();
-            if restored.id_slot != 0
-                || restored.filename != restore_filename
-                || restored.n_restored != slot.prompt_tokens
-                || restored.n_read != slot.bytes
-            {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::RestoreResponseInvalid,
-                    "slot restore response did not match the manifest",
-                ));
+            // Restore every sequence before verifying any of them: a later
+            // restore into unified memory must not silently damage an earlier slot.
+            for slot in &generation.manifest.slots {
+                let path = self.store.copy_slot_to_scratch(
+                    instance_id,
+                    expected_pid,
+                    &generation,
+                    slot,
+                )?;
+                scratch_paths.push(path.clone());
+                let filename = path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or_default();
+                let restored = backend.restore_slot(slot.id, filename)?;
+                if restored.id_slot != slot.id
+                    || restored.filename != filename
+                    || restored.n_restored != slot.prompt_tokens
+                    || restored.n_read != slot.bytes
+                {
+                    return Err(CheckpointStoreError::new(
+                        CheckpointReasonCode::RestoreResponseInvalid,
+                        "slot restore response did not match the manifest",
+                    ));
+                }
+                self.store.remove_scratch_payload(instance_id, &path)?;
             }
-
-            // The restore endpoint has finished reading the source file when it
-            // returns. Remove it before asking llama.cpp to save the verification copy so
-            // a restore never needs generation + restore + verification payloads
-            // on disk at the same time.
-            self.store
-                .remove_scratch_payload(instance_id, &restore_path)?;
-            self.store
-                .ensure_scratch_capacity(instance_id, slot.bytes)?;
-
-            let verify_path = self
-                .store
-                .new_scratch_slot_path(instance_id, expected_pid)?;
-            let verify_filename = verify_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_string();
-            verification_path = Some(verify_path.clone());
-            let verified = backend.save(&verify_filename)?;
-            if verified.id_slot != 0
-                || verified.filename != verify_filename
-                || verified.n_saved != slot.prompt_tokens
-                || verified.n_written != slot.bytes
-            {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::SlotStateMismatch,
-                    "restored slot did not retain the expected prompt state",
-                ));
-            }
-            let verified_sha256 =
+            for slot in &generation.manifest.slots {
                 self.store
-                    .verify_scratch_payload(instance_id, &verify_path, verified.n_written)?;
-            if verified_sha256 != slot.sha256 {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::SlotStateMismatch,
-                    "restored slot payload did not match the checkpoint",
-                ));
+                    .ensure_scratch_capacity(instance_id, slot.bytes)?;
+                let path =
+                    self.store
+                        .new_scratch_slot_path_for(instance_id, expected_pid, slot.id)?;
+                scratch_paths.push(path.clone());
+                let filename = path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or_default();
+                let verified = backend.save_slot(slot.id, filename)?;
+                if verified.id_slot != slot.id
+                    || verified.filename != filename
+                    || verified.n_saved != slot.prompt_tokens
+                    || verified.n_written != slot.bytes
+                    || self
+                        .store
+                        .verify_scratch_payload(instance_id, &path, verified.n_written)?
+                        != slot.sha256
+                {
+                    return Err(CheckpointStoreError::new(
+                        CheckpointReasonCode::SlotStateMismatch,
+                        "restored slot payload did not match the checkpoint",
+                    ));
+                }
+                self.store.remove_scratch_payload(instance_id, &path)?;
             }
-            let slots = backend.slots()?;
-            if slots.len() != 1 || slots[0].id != 0 || slots[0].is_processing || slots[0].n_ctx == 0
-            {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::SlotStateMismatch,
-                    "restored slot state was not idle and usable",
-                ));
-            }
-            Ok(())
+            Self::validate_slot_set(&backend.slots()?, count)
         })();
-
-        let restore_cleanup = self
-            .store
-            .remove_scratch_payload(instance_id, &restore_path);
-        let verification_cleanup = verification_path
-            .as_deref()
-            .map(|path| self.store.remove_scratch_payload(instance_id, path))
-            .transpose();
-        if let Err(error) = restore_result
-            .and(restore_cleanup)
-            .and(verification_cleanup.map(|_| ()))
-        {
+        let mut cleanup = Ok(());
+        for path in &scratch_paths {
+            if let Err(error) = self.store.remove_scratch_payload(instance_id, path) {
+                cleanup = Err(error);
+            }
+        }
+        if let Err(error) = restore_result.and(cleanup) {
             if self.status(instance_id).is_some_and(|status| {
                 status.expected_pid == Some(expected_pid)
                     && status.phase == CheckpointPhase::Restoring
             }) {
-                // Preserve the evidence, but never retry a rejected generation.
-                // Even if this marker cannot be written, automatic recovery
-                // suppresses restore for the entire fresh process.
                 let _ = self.store.reject_generation(instance_id, &generation);
             }
+            // A single failed sequence poisons the entire process, including
+            // sequences already restored. Routing stays closed until replacement.
             return self.restore_failure(instance_id, expected_pid, backend, error, started);
         }
 
@@ -3819,98 +4037,124 @@ impl CheckpointCoordinator {
                 );
             }
         };
-        if slots.len() != 1 || slots[0].id != 0 || slots[0].n_ctx == 0 {
+        let count = self.slot_count(instance_id, expected_pid)?;
+        if let Err(error) = Self::validate_slot_set(&slots, count) {
             return self.finish_stopping(
                 instance_id,
                 expected_pid,
                 CheckpointOperationUpdate::new(
                     CheckpointOperation::Save,
-                    CheckpointOutcome::Failed,
-                    CheckpointReasonCode::SlotStateMismatch,
-                    "slot zero state was unavailable",
+                    if error.reason_code == CheckpointReasonCode::BusyTimeout {
+                        CheckpointOutcome::Skipped
+                    } else {
+                        CheckpointOutcome::Failed
+                    },
+                    error.reason_code,
+                    error.message,
                     None,
                     started.elapsed().as_millis() as u64,
                 ),
             );
         }
-        if slots[0].is_processing {
-            return self.finish_stopping(
-                instance_id,
-                expected_pid,
-                CheckpointOperationUpdate::new(
-                    CheckpointOperation::Save,
-                    CheckpointOutcome::Skipped,
-                    CheckpointReasonCode::BusyTimeout,
-                    "slot remained busy at the save boundary",
-                    None,
-                    started.elapsed().as_millis() as u64,
-                ),
-            );
-        }
-
         self.transition(instance_id, expected_pid, CheckpointPhase::Saving)?;
-        let scratch_path = match self.store.new_scratch_slot_path(instance_id, expected_pid) {
-            Ok(path) => path,
-            Err(error) => {
-                return self.finish_stopping(
-                    instance_id,
-                    expected_pid,
-                    CheckpointOperationUpdate::new(
-                        CheckpointOperation::Save,
-                        CheckpointOutcome::Failed,
-                        error.reason_code,
-                        error.message,
-                        None,
-                        started.elapsed().as_millis() as u64,
-                    ),
-                );
-            }
-        };
-        let filename = scratch_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_string();
+        let mut scratch_paths = Vec::new();
         let operation = (|| {
-            let saved = backend.save(&filename)?;
-            if saved.id_slot != 0 || saved.filename != filename || saved.n_written == 0 {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::SaveResponseInvalid,
-                    "slot save response did not match the request",
+            let previous = if config.preserve_longer {
+                self.store.load_latest(instance_id, &fingerprint.digest)?
+            } else {
+                None
+            };
+            if previous
+                .as_ref()
+                .is_some_and(|g| g.manifest.slot_count != count)
+            {
+                return Err(CheckpointStoreError::manifest(
+                    "previous slot topology differs from launch",
                 ));
             }
-            if saved.n_saved < u64::from(config.minimum_prompt_tokens) {
-                return Err(CheckpointStoreError::new(
-                    CheckpointReasonCode::BelowTokenThreshold,
-                    "slot prompt state is below the save threshold",
-                ));
-            }
-            if config.preserve_longer {
-                if let Some(previous) = self.store.load_latest(instance_id, &fingerprint.digest)? {
-                    if previous.manifest.slot().prompt_tokens > saved.n_saved {
-                        return Err(CheckpointStoreError::new(
-                            CheckpointReasonCode::LongerCheckpointRetained,
-                            "shorter slot state skipped; longer committed checkpoint retained",
-                        ));
-                    }
+            let mut manifests = Vec::new();
+            let mut payloads = Vec::new();
+            let mut updated = false;
+            for id in 0..count {
+                Self::validate_slot_set(&backend.slots()?, count)?;
+                let path = self
+                    .store
+                    .new_scratch_slot_path_for(instance_id, expected_pid, id)?;
+                scratch_paths.push(path.clone());
+                let filename = path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or_default();
+                let saved = backend.save_slot(id, filename)?;
+                if saved.id_slot != id || saved.filename != filename || saved.n_written == 0 {
+                    return Err(CheckpointStoreError::new(
+                        CheckpointReasonCode::SaveResponseInvalid,
+                        "slot save response did not match the request",
+                    ));
+                }
+                let digest =
+                    self.store
+                        .verify_scratch_payload(instance_id, &path, saved.n_written)?;
+                let older = previous
+                    .as_ref()
+                    .and_then(|g| g.manifest.slots.iter().find(|s| s.id == id));
+                if let Some(older) = older.filter(|old| old.prompt_tokens > saved.n_saved) {
+                    self.store.remove_scratch_payload(instance_id, &path)?;
+                    let retained = self.store.copy_slot_to_scratch(
+                        instance_id,
+                        expected_pid,
+                        previous.as_ref().unwrap(),
+                        older,
+                    )?;
+                    scratch_paths.push(retained.clone());
+                    payloads.push(retained);
+                    manifests.push(older.clone());
+                } else if saved.n_saved > 0
+                    && saved.n_saved >= u64::from(config.minimum_prompt_tokens)
+                {
+                    updated = true;
+                    payloads.push(path);
+                    manifests.push(CheckpointSlotManifest {
+                        id,
+                        filename: format!("slot-{id}.bin"),
+                        prompt_tokens: saved.n_saved,
+                        bytes: saved.n_written,
+                        sha256: digest,
+                    });
+                } else {
+                    self.store.remove_scratch_payload(instance_id, &path)?;
                 }
             }
-            let payload_sha256 =
-                self.store
-                    .verify_scratch_payload(instance_id, &scratch_path, saved.n_written)?;
-            let manifest = CheckpointManifestV1::new(
-                instance_id,
-                fingerprint.clone(),
-                saved.n_saved,
-                saved.n_written,
-                payload_sha256,
-            );
-            let storage_limit_bytes = u64::from(config.storage_limit_gib)
-                .saturating_mul(1024)
-                .saturating_mul(1024)
-                .saturating_mul(1024);
-            self.store
-                .commit_generation(&manifest, &scratch_path, storage_limit_bytes)?;
+            Self::validate_slot_set(&backend.slots()?, count)?;
+            if !updated {
+                let (reason, message) = if manifests.is_empty() {
+                    (
+                        CheckpointReasonCode::BelowTokenThreshold,
+                        "all slot states are below the save threshold",
+                    )
+                } else {
+                    (
+                        CheckpointReasonCode::LongerCheckpointRetained,
+                        "shorter slot states skipped; longer checkpoint retained",
+                    )
+                };
+                return Err(CheckpointStoreError::new(reason, message));
+            }
+            let mut manifest =
+                CheckpointManifestV1::new(instance_id, fingerprint.clone(), 1, 1, "");
+            manifest.slots = manifests;
+            manifest.slot_count = count;
+            if count > 1 {
+                manifest.schema_version = 2;
+            }
+            let storage_limit_bytes =
+                u64::from(config.storage_limit_gib).saturating_mul(1024 * 1024 * 1024);
+            self.store.commit_slots_with_fault(
+                &manifest,
+                &payloads,
+                storage_limit_bytes,
+                |_| Ok(()),
+            )?;
             self.store.prune_instance(
                 instance_id,
                 storage_limit_bytes,
@@ -3918,9 +4162,12 @@ impl CheckpointCoordinator {
             )?;
             Ok(manifest)
         })();
-        let cleanup = self
-            .store
-            .remove_scratch_payload(instance_id, &scratch_path);
+        let mut cleanup = Ok(());
+        for path in &scratch_paths {
+            if let Err(error) = self.store.remove_scratch_payload(instance_id, path) {
+                cleanup = Err(error);
+            }
+        }
         match (operation, cleanup) {
             (Ok(manifest), Ok(())) => self.finish_stopping(
                 instance_id,
@@ -4250,12 +4497,11 @@ mod tests {
     }
 
     async fn fake_llama_slots(State(context): State<FakeLlamaHttpContext>) -> Response {
-        let (processing, prompt_tokens, malformed) = {
+        let (processing, malformed) = {
             let mut state = context.state.lock().unwrap();
             state.events.push("slots".into());
             (
                 state.processing,
-                state.prompt_tokens,
                 state.malformed_action.as_deref() == Some("slots"),
             )
         };
@@ -4265,7 +4511,7 @@ mod tests {
         Json(serde_json::json!([{
             "id": 0,
             "is_processing": processing,
-            "n_ctx": prompt_tokens
+            "n_ctx": 4096
         }]))
         .into_response()
     }
@@ -4380,6 +4626,7 @@ mod tests {
                 swa_full: true,
                 context_checkpoint_persistence,
                 reviewed_swa_checkpoint_reuse: false,
+                reviewed_multi_slot: false,
             },
             engine_speculative_types: &[
                 "ngram-mod".into(),
@@ -4491,9 +4738,9 @@ mod tests {
             .load_latest(INSTANCE_ID, &fingerprint.digest)
             .unwrap()
             .unwrap();
-        assert_eq!(committed.manifest.slot().prompt_tokens, 1_536);
+        assert_eq!(committed.manifest.prompt_tokens(), 1_536);
         assert_eq!(
-            committed.manifest.slot().bytes,
+            committed.manifest.payload_bytes(),
             PRIVATE_PAYLOAD.len() as u64
         );
 
@@ -4546,7 +4793,10 @@ mod tests {
         assert_eq!(restored.phase, CheckpointPhase::Ready);
         assert_eq!(restored.last_outcome, CheckpointOutcome::Success);
         assert!(second.gate_allows_routing(INSTANCE_ID));
-        assert_eq!(server.events(), ["health", "restore", "save", "slots"]);
+        assert_eq!(
+            server.events(),
+            ["health", "slots", "restore", "save", "slots"]
+        );
         {
             let state = server.state.lock().unwrap();
             assert_eq!(state.prompt_tokens, 1_536);
@@ -4600,7 +4850,7 @@ mod tests {
             assert_eq!(state.prompt_tokens, 7);
             assert_eq!(state.payload, b"unverified state");
         }
-        assert_eq!(server.events(), ["health", "restore", "save"]);
+        assert_eq!(server.events(), ["health", "slots", "restore", "save"]);
         commit_test_generation(&store, INSTANCE_ID, &fingerprint, 1_536, PRIVATE_PAYLOAD);
 
         server.configure(|state| {
@@ -4693,6 +4943,7 @@ mod tests {
                         swa_full: true,
                         context_checkpoint_persistence: persistence,
                         reviewed_swa_checkpoint_reuse: false,
+                        reviewed_multi_slot: false,
                     },
                     engine_speculative_types: &[],
                     model_architecture: Some(architecture),
@@ -4953,6 +5204,7 @@ mod tests {
                 swa_full: true,
                 context_checkpoint_persistence: true,
                 reviewed_swa_checkpoint_reuse: false,
+                reviewed_multi_slot: false,
             },
             engine_speculative_types: &[],
             model_architecture: Some("llama"),
@@ -4985,6 +5237,7 @@ mod tests {
                 swa_full: true,
                 context_checkpoint_persistence: true,
                 reviewed_swa_checkpoint_reuse: false,
+                reviewed_multi_slot: false,
             },
             ..base
         });
@@ -6488,9 +6741,10 @@ mod tests {
 
         let events = backend.events();
         assert_eq!(events[0], "health");
-        assert!(events[1].starts_with("restore:slot-0-301-"));
-        assert!(events[2].starts_with("save:slot-0-301-"));
-        assert_eq!(events[3], "slots");
+        assert_eq!(events[1], "slots");
+        assert!(events[2].starts_with("restore:slot-0-301-"));
+        assert!(events[3].starts_with("save:slot-0-301-"));
+        assert_eq!(events[4], "slots");
         let scratch = store.prepare_instance("instance-1").unwrap();
         assert_eq!(fs::read_dir(scratch).unwrap().count(), 0);
 
@@ -6853,7 +7107,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.manifest.generation_id, status.generation_id.unwrap());
-        assert_eq!(loaded.manifest.slot().prompt_tokens, 1024);
+        assert_eq!(loaded.manifest.prompt_tokens(), 1024);
         assert_eq!(
             fs::read(loaded.payload_path()).unwrap(),
             b"live slot payload ready for persistence"
@@ -7128,7 +7382,7 @@ mod tests {
         );
         for filename in [
             "../slot-0-bad.bin",
-            "slot-1-1-deadbeef.bin",
+            "slot-4-1-deadbeef.bin",
             "slot-0-name with spaces.bin",
             "arbitrary.bin",
         ] {
@@ -7171,4 +7425,5 @@ mod tests {
         assert_eq!(error.reason_code, CheckpointReasonCode::HttpTimeout);
         server.join().unwrap();
     }
+    include!("checkpoint_multi_slot_tests.rs");
 }

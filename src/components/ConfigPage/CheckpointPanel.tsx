@@ -11,6 +11,7 @@ const REQUIRED_SETTING_REASONS = new Set([
   'parallel_must_be_one',
   'prompt_cache_required',
   'prompt_cache_retention_required',
+  'multi_slot_idle_cache_unsupported',
   'slots_required',
   'sliding_window_requires_full_cache',
   'context_checkpoints_required',
@@ -42,14 +43,8 @@ export function CheckpointPanel({
   const mountedRef = useRef(true)
   const policy = config.kv_checkpoint
   const reasons = eligibility?.reasons ?? []
-  const canRepair = policy.enabled && (
-    config.parallel !== 1
-    || !config.cache_prompt
-    || !config.cache_idle_slots
-    || (config.cache_ram !== -1 && config.cache_ram <= 0)
-    || !config.slots_enabled
-    || reasons.some(reason => REQUIRED_SETTING_REASONS.has(reason))
-  )
+  const canRepair = policy.enabled && !loading && !eligibility?.eligible
+    && reasons.some(reason => REQUIRED_SETTING_REASONS.has(reason))
   const update = <K extends keyof KvCheckpointConfig>(key: K, value: KvCheckpointConfig[K]) => {
     onCheckpointChange({ ...policy, [key]: value })
   }

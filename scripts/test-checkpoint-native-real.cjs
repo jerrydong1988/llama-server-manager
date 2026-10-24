@@ -58,7 +58,9 @@ function processes() {
 }
 async function request(endpoint, body, allowFailure = false) {
   const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
-    method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json' },
+    // Hashing a multi-GB payload blocks this process longer than the server's
+    // keep-alive window. Do not reuse an expired socket or retry a state mutation.
+    method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(300000) })
   const result = await response.json()
   if (!allowFailure) assert.equal(response.status, 200, JSON.stringify(result))

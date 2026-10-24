@@ -365,6 +365,13 @@ if (BROWSER_SCENARIO === 'checkpoint-requirements') {
     },
   })
 }
+if (BROWSER_SCENARIO === 'checkpoint-multi-slot') {
+  Object.assign(state.instances[INSTANCE_ID], {
+    parallel: 4, cache_prompt: true, cache_idle_slots: true, cache_ram: 256,
+    slots_enabled: true,
+  })
+  state.instances[INSTANCE_ID].kv_checkpoint.enabled = true
+}
 if (['checkpoint-observation', 'checkpoint-hydration-delayed'].includes(BROWSER_SCENARIO ?? '')) {
   state.instances[INSTANCE_ID].kv_checkpoint.enabled = true
 }
@@ -1097,9 +1104,11 @@ mockIPC((command, payload) => {
     case 'get_checkpoint_eligibility': {
       const config = args.config as InstanceConfig
       const reasons: string[] = []
-      if (config.parallel !== 1) reasons.push('parallel_must_be_one')
+      const reviewedMulti = BROWSER_SCENARIO === 'checkpoint-multi-slot' && config.parallel === 4
+      if (config.parallel !== 1 && !reviewedMulti) reasons.push('parallel_must_be_one')
+      if (reviewedMulti && config.cache_idle_slots) reasons.push('multi_slot_idle_cache_unsupported')
       if (!config.cache_prompt) reasons.push('prompt_cache_required')
-      if (!config.cache_idle_slots || (config.cache_ram !== -1 && config.cache_ram <= 0)) {
+      if (!reviewedMulti && (!config.cache_idle_slots || (config.cache_ram !== -1 && config.cache_ram <= 0))) {
         reasons.push('prompt_cache_retention_required')
       }
       if (!config.slots_enabled) reasons.push('slots_required')

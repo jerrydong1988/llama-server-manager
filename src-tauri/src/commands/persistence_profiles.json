@@ -4,7 +4,11 @@
     "managed_lookup_cache": true,
     "artifact_sha256": "51721bd434546a540548be496a58c9878774d41f7bc594b245031f38a1e0dfeb",
     "launcher_sha256": "5c081b5db3fc7d62ba11f7b79253df7edf39975835fa8e9da5932301723410dd",
-    "draft_types": ["draft-simple", "draft-mtp", "draft-dflash"],
+    "draft_types": [
+      "draft-simple",
+      "draft-mtp",
+      "draft-dflash"
+    ],
     "max_context": 4096,
     "evidence": "docs/B11769_CACHE_LIFECYCLE.md"
   },
@@ -13,7 +17,11 @@
     "managed_lookup_cache": true,
     "artifact_sha256": "95ec5d0a33163b2cff9b212f5afa97f578908b82403758fd53a8850be1a5ae9f",
     "launcher_sha256": "fc5b3e2bb3216681a2dc0a4662fed2637229e4ddbc54ea7bbe62ff1ea35ab96a",
-    "draft_types": ["draft-simple", "draft-mtp", "draft-dflash"],
+    "draft_types": [
+      "draft-simple",
+      "draft-mtp",
+      "draft-dflash"
+    ],
     "max_context": 4096,
     "evidence": "docs/CHECKPOINT_ACCEPTANCE.md"
   },
@@ -23,7 +31,11 @@
     "base_artifact_sha256": "0f0a3a4da5876f98c8e8c84280c86dd47edd9a46472cfb6d7df782aaa6efa022",
     "artifact_sha256": "354bb24c430c58dc0c67155e0ada89a4eaf0882e7672f193b17441d057423c55",
     "launcher_sha256": "c0f82373ff2fbf69f764a37460d28870018ce5d3808495e02aa3db064aaf68a4",
-    "draft_types": ["draft-simple", "draft-mtp", "draft-dflash"],
+    "draft_types": [
+      "draft-simple",
+      "draft-mtp",
+      "draft-dflash"
+    ],
     "max_context": 4096,
     "model_scopes": [
       {
@@ -38,6 +50,34 @@
           "q8_0"
         ],
         "evidence": "docs/GEMMA4_CHECKPOINT_ACCEPTANCE.md"
+      },
+      {
+        "model_sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
+        "draft_sha256": "50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e",
+        "contexts": [
+          16384
+        ],
+        "cache_types": [
+          "f16"
+        ],
+        "parallel": [
+          4
+        ],
+        "evidence": "docs/MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md"
+      },
+      {
+        "model_sha256": "38bd64c852c4b460434cc7162fa9bdcf242faf86502581a754cb72956bb17f84",
+        "draft_sha256": "5ae8b0117bed601e8924c6305bd5b0585de361d51f0e77091bcb4252cf1f27de",
+        "contexts": [
+          16384
+        ],
+        "cache_types": [
+          "f16"
+        ],
+        "parallel": [
+          4
+        ],
+        "evidence": "docs/MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md"
       }
     ],
     "evidence": "docs/B11849_CHECKPOINT_ACCEPTANCE.md"

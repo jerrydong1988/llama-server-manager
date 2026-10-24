@@ -16,7 +16,10 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 4;
+pub(crate) const PERSISTENCE_REVISION: u8 = 5;
+fn single_slot_scope() -> Vec<i32> {
+    vec![1]
+}
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ModelPersistenceScope {
@@ -24,6 +27,8 @@ struct ModelPersistenceScope {
     draft_sha256: String,
     contexts: Vec<u32>,
     cache_types: Vec<String>,
+    #[serde(default = "single_slot_scope")]
+    parallel: Vec<i32>,
     #[allow(dead_code)]
     evidence: String,
 }
@@ -71,7 +76,8 @@ impl ModelPersistenceScope {
             .all(|(value, key)| value.is_empty() || emits(&[*key]));
         config.spec_type == "draft-mtp"
             && config.draft_tokens == 3
-            && config.parallel == 1
+            && self.parallel.contains(&config.parallel)
+            && (config.parallel == 1 || config.ctx_size == 4096 * config.parallel as u32)
             && config.ctx_checkpoints == 2
             && !config.swa_full
             && config.kv_unified
@@ -79,6 +85,7 @@ impl ModelPersistenceScope {
             && self.contexts.contains(&config.ctx_size)
             && self.cache_types.contains(&kv)
             && emitted_shape
+            && (config.parallel == 1 || emits(&["cache_idle_slots"]))
             && [
                 &config.cache_type_v,
                 &config.cache_type_draft_k,
@@ -191,6 +198,14 @@ pub(crate) fn reviewed_windowed_swa(
                     s.matches_config(config) && s.model_sha256 == model && s.draft_sha256 == draft
                 })
             })
+}
+
+pub(crate) fn reviewed_multi_slot(
+    config: &crate::models::InstanceConfig,
+    caps: &EngineCapabilities,
+    models: Option<(&str, &str)>,
+) -> bool {
+    matches!(config.parallel, 2 | 4) && reviewed_windowed_swa(config, caps, models)
 }
 
 // Recheck the runtime identity used by the final checkpoint fingerprint, after
@@ -1559,6 +1574,65 @@ mod tests {
             ]
         );
         assert!(extract_speculative_types("--model FILE\n").is_empty());
+    }
+
+    #[test]
+    fn multi_slot_scope_requires_exact_models_topology_and_emitted_shape() {
+        let profile = profiles()
+            .iter()
+            .find(|p| p.id == "windows-rocm-b11849-rocm103-sckp1-sdft1")
+            .unwrap();
+        let caps = EngineCapabilities {
+            persistence_profile: Some(profile.id.clone()),
+            persistence_revision: PERSISTENCE_REVISION,
+            checkpoint_draft_types: vec!["draft-mtp".into()],
+            speculative_types: vec!["draft-mtp".into()],
+            ..Default::default()
+        };
+        for scope in profile
+            .model_scopes
+            .iter()
+            .filter(|s| s.parallel.iter().any(|n| *n > 1))
+        {
+            let cfg = crate::models::InstanceConfig {
+                spec_type: "draft-mtp".into(),
+                draft_tokens: 3,
+                parallel: 4,
+                ctx_checkpoints: 2,
+                ctx_size: 16384,
+                ctx_size_auto: false,
+                kv_unified: true,
+                gpu_layers: 99,
+                gpu_layers_auto: false,
+                draft_gpu_layers: 99,
+                flash_attn: "on".into(),
+                fit_mode: "off".into(),
+                ..Default::default()
+            };
+            let pair = Some((scope.model_sha256.as_str(), scope.draft_sha256.as_str()));
+            assert_eq!(reviewed_multi_slot(&cfg, &caps, pair), cfg!(windows));
+            assert!(!reviewed_multi_slot(&cfg, &caps, None));
+            assert!(!reviewed_multi_slot(
+                &cfg,
+                &caps,
+                Some(("unknown", &scope.draft_sha256))
+            ));
+            for mutate in [
+                |c: &mut crate::models::InstanceConfig| c.parallel = 1,
+                |c: &mut crate::models::InstanceConfig| c.parallel = 3,
+                |c: &mut crate::models::InstanceConfig| c.ctx_size = 8192,
+                |c: &mut crate::models::InstanceConfig| c.ctx_checkpoints = 0,
+                |c: &mut crate::models::InstanceConfig| c.kv_unified = false,
+                |c: &mut crate::models::InstanceConfig| c.cache_type_draft_k = "q8_0".into(),
+                |c: &mut crate::models::InstanceConfig| {
+                    c.explicit_overrides = Some(vec!["spec_type".into()])
+                },
+            ] {
+                let mut changed = cfg.clone();
+                mutate(&mut changed);
+                assert!(!reviewed_multi_slot(&changed, &caps, pair));
+            }
+        }
     }
 
     #[test]
