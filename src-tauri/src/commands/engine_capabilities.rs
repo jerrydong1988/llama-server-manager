@@ -16,7 +16,78 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 3;
+pub(crate) const PERSISTENCE_REVISION: u8 = 4;
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelPersistenceScope {
+    model_sha256: String,
+    draft_sha256: String,
+    contexts: Vec<u32>,
+    cache_types: Vec<String>,
+    #[allow(dead_code)]
+    evidence: String,
+}
+
+impl ModelPersistenceScope {
+    fn matches_config(&self, config: &crate::models::InstanceConfig) -> bool {
+        let cache = |s: &str| {
+            if s.is_empty() {
+                "f16".to_string()
+            } else {
+                s.to_string()
+            }
+        };
+        let kv = cache(&config.cache_type_k);
+        // An explicit-override config can retain values which the command builder
+        // intentionally omits. Those values cannot qualify the effective launch.
+        let emits = |keys: &[&str]| {
+            config.explicit_overrides.as_ref().map_or(true, |fields| {
+                keys.iter()
+                    .any(|key| fields.iter().any(|field| field.as_str() == *key))
+            })
+        };
+        let emitted_shape = [
+            &["ctx_size", "ctx_size_auto"][..],
+            &["gpu_layers", "gpu_layers_auto"],
+            &["draft_gpu_layers"],
+            &["draft_model_path"],
+            &["flash_attn"],
+            &["fit_mode", "fit"],
+            &["parallel"],
+            &["ctx_checkpoints"],
+            &["draft_tokens"],
+            &["spec_type"],
+            &["kv_unified", "kv_unified_mode"],
+        ]
+        .iter()
+        .all(|keys| emits(keys))
+            && [
+                (&config.cache_type_k, "cache_type_k"),
+                (&config.cache_type_v, "cache_type_v"),
+                (&config.cache_type_draft_k, "cache_type_draft_k"),
+                (&config.cache_type_draft_v, "cache_type_draft_v"),
+            ]
+            .iter()
+            .all(|(value, key)| value.is_empty() || emits(&[*key]));
+        config.spec_type == "draft-mtp"
+            && config.draft_tokens == 3
+            && config.parallel == 1
+            && config.ctx_checkpoints == 2
+            && !config.swa_full
+            && config.kv_unified
+            && matches!(config.kv_unified_mode.as_str(), "" | "on")
+            && self.contexts.contains(&config.ctx_size)
+            && self.cache_types.contains(&kv)
+            && emitted_shape
+            && [
+                &config.cache_type_v,
+                &config.cache_type_draft_k,
+                &config.cache_type_draft_v,
+            ]
+            .iter()
+            .all(|s| cache(s) == kv)
+    }
+}
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistenceProfile {
@@ -29,6 +100,8 @@ struct PersistenceProfile {
     draft_types: Vec<String>,
     managed_lookup_cache: bool,
     max_context: u32,
+    #[serde(default)]
+    model_scopes: Vec<ModelPersistenceScope>,
     #[allow(dead_code)]
     evidence: String,
 }
@@ -65,22 +138,104 @@ fn persistence_evidence(help: &str, artifacts: Option<&str>) -> (bool, Option<St
     (detects_context_checkpoint_persistence(help), None, Vec::new())
 }
 
-pub(crate) fn checkpoint_types(config: &crate::models::InstanceConfig, caps: &EngineCapabilities) -> Vec<String> {
-    let profile = profiles().iter().find(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref());
-    let profile_scope = profile.is_some_and(|p| config.ctx_size > 0 && config.ctx_size <= p.max_context)
-        && !config.ctx_size_auto
-        && config.gpu_layers >= 99 && !config.gpu_layers_auto
-        && config.draft_gpu_layers >= 99 && config.flash_attn == "on"
-        && config.fit_mode == "off" && !config.no_kv_offload
-        && !config.cpu_moe && config.moe_cpu_layers == 0 && config.rpc_servers.trim().is_empty()
-        && config.device.trim().is_empty() && config.spec_draft_device.trim().is_empty()
-        && [&config.cache_type_k, &config.cache_type_v, &config.cache_type_draft_k, &config.cache_type_draft_v]
-            .iter().all(|s| s.is_empty() || s.as_str() == "f16");
-    caps.speculative_types.iter().filter(|kind| {
-        !kind.starts_with("draft-") || (profile_scope && profile.is_some_and(|p| p.draft_types.contains(kind)) && caps.checkpoint_draft_types.contains(kind)
-            && (kind.as_str() != "draft-simple" || paths_equal(
-                std::path::Path::new(&config.model_path), std::path::Path::new(&config.draft_model_path))))
-    }).cloned().collect()
+#[cfg(test)]
+fn checkpoint_types(config: &crate::models::InstanceConfig, caps: &EngineCapabilities) -> Vec<String> {
+    checkpoint_types_with_models(config, caps, None)
+}
+
+fn hardware_scope(config: &crate::models::InstanceConfig) -> bool {
+    !config.ctx_size_auto
+        && config.gpu_layers >= 99
+        && !config.gpu_layers_auto
+        && config.draft_gpu_layers >= 99
+        && config.flash_attn == "on"
+        && config.fit_mode == "off"
+        && !config.no_kv_offload
+        && !config.cpu_moe
+        && config.moe_cpu_layers == 0
+        && config.rpc_servers.trim().is_empty()
+        && config.device.trim().is_empty()
+        && config.spec_draft_device.trim().is_empty()
+}
+
+pub(crate) fn needs_checkpoint_model_identity(
+    config: &crate::models::InstanceConfig,
+    caps: &EngineCapabilities,
+) -> bool {
+    config.kv_checkpoint.enabled
+        && hardware_scope(config)
+        && profiles()
+            .iter()
+            .filter(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref())
+            .any(|p| p.model_scopes.iter().any(|s| s.matches_config(config)))
+}
+
+pub(crate) fn reviewed_windowed_swa(
+    config: &crate::models::InstanceConfig,
+    caps: &EngineCapabilities,
+    models: Option<(&str, &str)>,
+) -> bool {
+    let Some((model, draft)) = models else {
+        return false;
+    };
+    cfg!(windows)
+        && caps.persistence_revision == PERSISTENCE_REVISION
+        && hardware_scope(config)
+        && caps.checkpoint_draft_types.iter().any(|k| k == "draft-mtp")
+        && caps.speculative_types.iter().any(|k| k == "draft-mtp")
+        && profiles()
+            .iter()
+            .filter(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref())
+            .any(|p| {
+                p.model_scopes.iter().any(|s| {
+                    s.matches_config(config) && s.model_sha256 == model && s.draft_sha256 == draft
+                })
+            })
+}
+
+// Recheck the runtime identity used by the final checkpoint fingerprint, after
+// the potentially long model hashing step. A probe is not a launch-time lease.
+pub(crate) fn persistence_runtime_matches(caps: &EngineCapabilities, digest: &str) -> bool {
+    caps.persistence_profile.as_deref().map_or(true, |id| {
+        profile_for_artifacts(Some(digest)).is_some_and(|p| p.id == id)
+    })
+}
+
+pub(crate) fn checkpoint_types_with_models(
+    config: &crate::models::InstanceConfig,
+    caps: &EngineCapabilities,
+    models: Option<(&str, &str)>,
+) -> Vec<String> {
+    let profile = profiles()
+        .iter()
+        .find(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref());
+    let profile_scope = profile
+        .is_some_and(|p| config.ctx_size > 0 && config.ctx_size <= p.max_context)
+        && hardware_scope(config)
+        && [
+            &config.cache_type_k,
+            &config.cache_type_v,
+            &config.cache_type_draft_k,
+            &config.cache_type_draft_v,
+        ]
+        .iter()
+        .all(|s| s.is_empty() || s.as_str() == "f16");
+    caps.speculative_types
+        .iter()
+        .filter(|kind| {
+            !kind.starts_with("draft-")
+                || (kind.as_str() == "draft-mtp" && reviewed_windowed_swa(config, caps, models))
+                || (profile_scope
+                    && profile.is_some_and(|p| p.draft_types.contains(kind))
+                    && caps.checkpoint_draft_types.contains(kind)
+                    && (kind.as_str() != "draft-simple"
+                        || paths_equal(
+                            std::path::Path::new(&config.model_path),
+                            std::path::Path::new(&config.draft_model_path),
+                        )))
+        })
+        .cloned()
+        .collect()
 }
 
 #[derive(Debug)]
@@ -1143,6 +1298,17 @@ mod tests {
             }
             assert!(profile.max_context > 0 && profile.max_context <= 4096);
             assert!(!profile.evidence.is_empty());
+            for scope in &profile.model_scopes {
+                for digest in [&scope.model_sha256, &scope.draft_sha256] {
+                    assert_eq!(digest.len(), 64);
+                    assert!(digest.bytes().all(|c| c.is_ascii_hexdigit()));
+                }
+                assert!(!scope.contexts.is_empty());
+                assert!(scope.contexts.iter().all(|n| [4096, 16384].contains(n)));
+                assert!(!scope.cache_types.is_empty());
+                assert!(scope.cache_types.iter().all(|k| ["f16", "q8_0"].contains(&k.as_str())));
+                assert!(!scope.evidence.is_empty());
+            }
             let caps = EngineCapabilities {
                 persistence_profile: Some(profile.id.clone()),
                 checkpoint_draft_types: vec!["draft-eagle3".into()],
@@ -1185,6 +1351,150 @@ mod tests {
             config.ctx_size = 4096; caps.persistence_profile = None;
             assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
         }
+    }
+
+    #[test]
+    fn model_scopes_require_exact_pair_and_reviewed_launch_shape() {
+        let profile = profiles()
+            .iter()
+            .find(|p| p.id == "windows-rocm-b11849-rocm103-sckp1-sdft1")
+            .unwrap();
+        let scope = profile
+            .model_scopes
+            .first()
+            .expect("Gemma acceptance scope");
+        let caps = EngineCapabilities {
+            persistence_profile: Some(profile.id.clone()),
+            persistence_revision: PERSISTENCE_REVISION,
+            checkpoint_draft_types: vec!["draft-mtp".into()],
+            speculative_types: vec!["draft-mtp".into()],
+            ..Default::default()
+        };
+        let config = crate::models::InstanceConfig {
+            spec_type: "draft-mtp".into(),
+            draft_tokens: 3,
+            parallel: 1,
+            ctx_checkpoints: 2,
+            ctx_size: 16384,
+            ctx_size_auto: false,
+            kv_unified: true,
+            gpu_layers: 99,
+            gpu_layers_auto: false,
+            draft_gpu_layers: 99,
+            flash_attn: "on".into(),
+            fit_mode: "off".into(),
+            cache_type_k: "q8_0".into(),
+            cache_type_v: "q8_0".into(),
+            cache_type_draft_k: "q8_0".into(),
+            cache_type_draft_v: "q8_0".into(),
+            ..Default::default()
+        };
+        let pair = Some((scope.model_sha256.as_str(), scope.draft_sha256.as_str()));
+        for context in [4096, 16384] {
+            for kv in ["f16", "q8_0"] {
+                let mut tested = config.clone();
+                tested.ctx_size = context;
+                tested.cache_type_k = kv.into();
+                tested.cache_type_v = kv.into();
+                tested.cache_type_draft_k = kv.into();
+                tested.cache_type_draft_v = kv.into();
+                assert_eq!(reviewed_windowed_swa(&tested, &caps, pair), cfg!(windows));
+            }
+        }
+        let mut explicit = config.clone();
+        explicit.explicit_overrides = Some(
+            [
+                "ctx_size",
+                "gpu_layers",
+                "draft_gpu_layers",
+                "draft_model_path",
+                "flash_attn",
+                "fit_mode",
+                "parallel",
+                "ctx_checkpoints",
+                "draft_tokens",
+                "spec_type",
+                "kv_unified",
+                "cache_type_k",
+                "cache_type_v",
+                "cache_type_draft_k",
+                "cache_type_draft_v",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        );
+        assert_eq!(reviewed_windowed_swa(&explicit, &caps, pair), cfg!(windows));
+        for key in [
+            "ctx_size",
+            "draft_model_path",
+            "cache_type_v",
+            "ctx_checkpoints",
+        ] {
+            let mut missing = explicit.clone();
+            missing
+                .explicit_overrides
+                .as_mut()
+                .unwrap()
+                .retain(|field| field != key);
+            assert!(
+                !reviewed_windowed_swa(&missing, &caps, pair),
+                "unemitted {key}"
+            );
+        }
+        for altered in [
+            None,
+            Some(("changed", scope.draft_sha256.as_str())),
+            Some((scope.model_sha256.as_str(), "changed")),
+        ] {
+            assert!(!reviewed_windowed_swa(&config, &caps, altered));
+            assert!(checkpoint_types_with_models(&config, &caps, altered).is_empty());
+        }
+        let mutations: &[fn(&mut crate::models::InstanceConfig)] = &[
+            |c| c.ctx_size = 8192,
+            |c| c.parallel = 2,
+            |c| c.ctx_checkpoints = 0,
+            |c| c.draft_tokens = 1,
+            |c| c.cache_type_draft_v = "f16".into(),
+            |c| c.cache_type_k = "q4_0".into(),
+            |c| c.fit_mode = "on".into(),
+            |c| c.gpu_layers = 20,
+            |c| c.draft_gpu_layers = 0,
+            |c| c.swa_full = true,
+            |c| c.kv_unified = false,
+            |c| c.kv_unified_mode = "off".into(),
+            |c| c.spec_type = "draft-eagle3".into(),
+            |c| c.explicit_overrides = Some(vec!["spec_type".into()]),
+        ];
+        for mutate in mutations {
+            let mut altered = config.clone();
+            mutate(&mut altered);
+            assert!(!reviewed_windowed_swa(&altered, &caps, pair));
+        }
+        for mutate in [
+            (|c: &mut EngineCapabilities| c.persistence_profile = None)
+                as fn(&mut EngineCapabilities),
+            |c| c.persistence_revision -= 1,
+            |c| c.speculative_types.clear(),
+            |c| c.checkpoint_draft_types.clear(),
+            |c| c.persistence_profile = Some("windows-rocm-b11838-sckp1-sdft1".into()),
+        ] {
+            let mut altered = caps.clone();
+            mutate(&mut altered);
+            assert!(!reviewed_windowed_swa(&config, &altered, pair));
+        }
+        assert_eq!(
+            persistence_runtime_matches(&caps, &profile.artifact_sha256),
+            cfg!(windows)
+        );
+        assert!(!persistence_runtime_matches(
+            &caps,
+            profile.base_artifact_sha256.as_deref().unwrap()
+        ));
+        assert!(!persistence_runtime_matches(
+            &caps,
+            "changed-during-model-hash"
+        ));
     }
 
     fn detected(flags: &[&str]) -> EngineCapabilities {

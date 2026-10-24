@@ -25,6 +25,21 @@
     "launcher_sha256": "c0f82373ff2fbf69f764a37460d28870018ce5d3808495e02aa3db064aaf68a4",
     "draft_types": ["draft-simple", "draft-mtp", "draft-dflash"],
     "max_context": 4096,
+    "model_scopes": [
+      {
+        "model_sha256": "a6ba22cbee602e69cb27c88bc73768db0ee4bda60831898e6db8cb1856e4162a",
+        "draft_sha256": "145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b",
+        "contexts": [
+          4096,
+          16384
+        ],
+        "cache_types": [
+          "f16",
+          "q8_0"
+        ],
+        "evidence": "docs/GEMMA4_CHECKPOINT_ACCEPTANCE.md"
+      }
+    ],
     "evidence": "docs/B11849_CHECKPOINT_ACCEPTANCE.md"
   }
 ]

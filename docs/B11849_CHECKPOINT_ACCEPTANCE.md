@@ -1,5 +1,9 @@
 # b11849 Windows / ROCm checkpoint acceptance
 
+The later [Gemma 4 MTP acceptance](GEMMA4_CHECKPOINT_ACCEPTANCE.md) adds an exact
+model-pair scope for f16/q8_0 at 4096/16384 context. The Qwen evidence and generic
+build restrictions below remain distinct from that follow-up.
+
 ## Artifact and evidence scope
 
 The candidate uses the [official b11849 Windows ROCm archive](https://github.com/ggml-org/llama.cpp/releases/tag/b11849),

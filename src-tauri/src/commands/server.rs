@@ -2294,11 +2294,12 @@ impl CheckpointLaunchPlan {
     }
 }
 
-fn assess_checkpoint_eligibility(
+async fn assess_checkpoint_eligibility(
     state: &AppState,
     config: &InstanceConfig,
     workload: ModelWorkload,
     engine_capabilities: Option<&EngineCapabilities>,
+    final_fingerprint: Option<&CheckpointFingerprint>,
 ) -> CheckpointEligibility {
     let (model_architecture, main_model_artifacts_complete, model_has_swa) = {
         let models = state.models.lock().unwrap();
@@ -2328,14 +2329,30 @@ fn assess_checkpoint_eligibility(
         ))
         .is_ok();
     let model_artifacts_complete = main_model_artifacts_complete && draft_model_artifacts_complete;
+    let model_identities = if let Some(fingerprint) = final_fingerprint {
+        fingerprint.draft_model_sha256.as_ref().map(|draft|
+            (fingerprint.model_sha256.clone(), draft.clone()))
+    } else if model_has_swa == Some(true) && engine_capabilities.is_some_and(|caps|
+        crate::commands::engine_capabilities::needs_checkpoint_model_identity(config, caps)) {
+        let store = state.checkpoint_coordinator.store().clone();
+        let model = std::path::PathBuf::from(&config.model_path);
+        let draft = std::path::PathBuf::from(&config.draft_model_path);
+        tokio::task::spawn_blocking(move || {
+            Some((store.model_artifact_sha256(&model).ok()?, store.model_artifact_sha256(&draft).ok()?))
+        }).await.ok().flatten()
+    } else { None };
+    let model_digests = model_identities.as_ref().map(|(model, draft)| (model.as_str(), draft.as_str()));
+    let reviewed_swa = engine_capabilities.is_some_and(|caps|
+        crate::commands::engine_capabilities::reviewed_windowed_swa(config, caps, model_digests));
     let engine_checkpoint_capabilities = engine_capabilities
         .map(|capabilities| {
             EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
                 .with_context_checkpoint_persistence(capabilities.context_checkpoint_persistence)
+                .with_reviewed_swa_checkpoint_reuse(reviewed_swa)
         })
         .unwrap_or_default();
     let checkpoint_types = engine_capabilities
-        .map(|caps| crate::commands::engine_capabilities::checkpoint_types(config, caps))
+        .map(|caps| crate::commands::engine_capabilities::checkpoint_types_with_models(config, caps, model_digests))
         .unwrap_or_default();
     evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
         config,
@@ -2358,7 +2375,7 @@ async fn prepare_checkpoint_launch_plan(
     engine_backend: &str,
     engine_capabilities: Option<&EngineCapabilities>,
 ) -> CheckpointLaunchPlan {
-    let eligibility = assess_checkpoint_eligibility(state, config, workload, engine_capabilities);
+    let eligibility = assess_checkpoint_eligibility(state, config, workload, engine_capabilities, None).await;
     if !eligibility.eligible {
         return CheckpointLaunchPlan {
             eligibility,
@@ -2424,6 +2441,14 @@ async fn prepare_checkpoint_launch_plan(
             return CheckpointLaunchPlan::ineligible(CheckpointReasonCode::FingerprintUnavailable)
         }
     };
+    if engine_capabilities.is_some_and(|caps|
+        !crate::commands::engine_capabilities::persistence_runtime_matches(caps, &fingerprint.engine_sha256)) {
+        return CheckpointLaunchPlan::ineligible(CheckpointReasonCode::FingerprintUnavailable);
+    }
+    let eligibility = assess_checkpoint_eligibility(state, config, workload, engine_capabilities, Some(&fingerprint)).await;
+    if !eligibility.eligible {
+        return CheckpointLaunchPlan { eligibility, fingerprint: None, scratch_path: None };
+    }
     let store = state.checkpoint_coordinator.store();
     let scratch_path = match store.cleanup_scratch(instance_id) {
         Ok(_) => match store.prepare_instance(instance_id) {
@@ -2617,7 +2642,8 @@ pub async fn get_checkpoint_eligibility(
         &config,
         workload,
         capabilities.as_deref(),
-    ))
+        None,
+    ).await)
 }
 
 #[tauri::command]
