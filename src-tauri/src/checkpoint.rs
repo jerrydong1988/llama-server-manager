@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 3;
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 4;
 const CHECKPOINT_SLOT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHECKPOINT_SLOT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECKPOINT_DISK_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
@@ -215,6 +215,8 @@ pub struct EngineCheckpointCapabilities {
     pub cache_idle_slots: bool,
     pub swa_full: bool,
     pub context_checkpoint_persistence: bool,
+    // Set only by the manager after exact runtime/model/config qualification.
+    pub reviewed_swa_checkpoint_reuse: bool,
 }
 
 impl EngineCheckpointCapabilities {
@@ -231,11 +233,17 @@ impl EngineCheckpointCapabilities {
             cache_idle_slots: has("--cache-idle-slots"),
             swa_full: has("--swa-full"),
             context_checkpoint_persistence: false,
+            reviewed_swa_checkpoint_reuse: false,
         }
     }
 
     pub const fn with_context_checkpoint_persistence(mut self, supported: bool) -> Self {
         self.context_checkpoint_persistence = supported;
+        self
+    }
+
+    pub const fn with_reviewed_swa_checkpoint_reuse(mut self, supported: bool) -> Self {
+        self.reviewed_swa_checkpoint_reuse = supported;
         self
     }
 
@@ -526,7 +534,11 @@ pub fn evaluate_checkpoint_eligibility(
     if !context.model_artifacts_complete {
         push_reason(&mut reasons, CheckpointReasonCode::ModelArtifactsIncomplete);
     }
-    if context.model_has_swa == Some(true) && !config.swa_full {
+    if context.model_has_swa == Some(true) && !config.swa_full
+        && !(context.engine_capabilities.reviewed_swa_checkpoint_reuse
+            && context.engine_capabilities.context_checkpoint_persistence
+            && config.ctx_checkpoints > 0)
+    {
         push_reason(
             &mut reasons,
             CheckpointReasonCode::SlidingWindowRequiresFullCache,
@@ -4367,6 +4379,7 @@ mod tests {
                 cache_idle_slots: true,
                 swa_full: true,
                 context_checkpoint_persistence,
+                reviewed_swa_checkpoint_reuse: false,
             },
             engine_speculative_types: &[
                 "ngram-mod".into(),
@@ -4679,6 +4692,7 @@ mod tests {
                         cache_idle_slots: true,
                         swa_full: true,
                         context_checkpoint_persistence: persistence,
+                        reviewed_swa_checkpoint_reuse: false,
                     },
                     engine_speculative_types: &[],
                     model_architecture: Some(architecture),
@@ -4938,6 +4952,7 @@ mod tests {
                 cache_idle_slots: true,
                 swa_full: true,
                 context_checkpoint_persistence: true,
+                reviewed_swa_checkpoint_reuse: false,
             },
             engine_speculative_types: &[],
             model_architecture: Some("llama"),
@@ -4969,6 +4984,7 @@ mod tests {
                 cache_idle_slots: true,
                 swa_full: true,
                 context_checkpoint_persistence: true,
+                reviewed_swa_checkpoint_reuse: false,
             },
             ..base
         });
@@ -5015,6 +5031,22 @@ mod tests {
         assert!(sliding_window
             .reasons
             .contains(&CheckpointReasonCode::SlidingWindowRequiresFullCache));
+
+        let mut checkpointed = config.clone();
+        checkpointed.ctx_checkpoints = 2;
+        let reviewed_caps = base.engine_capabilities.with_reviewed_swa_checkpoint_reuse(true);
+        let reviewed = CheckpointEligibilityContext {
+            config: &checkpointed, model_has_swa: Some(true), engine_capabilities: reviewed_caps, ..base
+        };
+        assert!(evaluate_checkpoint_eligibility(reviewed).eligible);
+        let no_appendices = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+            engine_capabilities: reviewed_caps.with_context_checkpoint_persistence(false), ..reviewed
+        });
+        assert!(no_appendices.reasons.contains(&CheckpointReasonCode::SlidingWindowRequiresFullCache));
+        let mut zero_checkpoints = checkpointed.clone(); zero_checkpoints.ctx_checkpoints = 0;
+        assert!(evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+            config: &zero_checkpoints, ..reviewed
+        }).reasons.contains(&CheckpointReasonCode::SlidingWindowRequiresFullCache));
 
         let mut full_swa_config = config.clone();
         full_swa_config.swa_full = true;

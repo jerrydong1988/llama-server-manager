@@ -197,6 +197,21 @@ fn prepare_runtime_checkpoint_launch(
     (checkpoint.eligibility, Some(fingerprint))
 }
 
+fn runtime_checkpoint_fingerprint_is_current(store: &CheckpointStore, spec: &RuntimeLaunchSpec) -> bool {
+    let Some(checkpoint) = spec.checkpoint.as_ref().filter(|cp| cp.eligibility.eligible) else {
+        return true;
+    };
+    let Some(expected) = checkpoint.fingerprint.as_ref() else { return false };
+    let Some(engine) = spec.command.first() else { return false };
+    store.build_fingerprint(
+        &spec.config,
+        std::path::Path::new(&spec.config.model_path),
+        std::path::Path::new(engine),
+        &expected.engine_version,
+        &expected.backend,
+    ).is_ok_and(|current| &current == expected)
+}
+
 enum RuntimeStateReadError {
     Missing,
     Unsupported(String),
@@ -949,12 +964,10 @@ impl RuntimeSupervisor {
         }
         // Persisted launch specs may predate newly supported secret flags.
         crate::security::validate_runtime_executable(&spec.command[0], &spec.executable_sha256)?;
-        if let Some(checkpoint) = spec.checkpoint.as_ref().filter(|cp| cp.eligibility.eligible) {
-            let current = self.checkpoint_coordinator.store()
-                .engine_artifact_sha256(std::path::Path::new(&spec.command[0])).ok();
-            if current.as_deref() != checkpoint.fingerprint.as_ref().map(|fp| fp.engine_sha256.as_str()) {
-                downgrade_runtime_checkpoint(&mut spec, CheckpointReasonCode::EngineCapabilityMissing);
-            }
+        // A recovered daemon launch must not reuse an old model/draft/template
+        // qualification simply because its executable and DLLs still match.
+        if !runtime_checkpoint_fingerprint_is_current(self.checkpoint_coordinator.store(), &spec) {
+            downgrade_runtime_checkpoint(&mut spec, CheckpointReasonCode::FingerprintUnavailable);
         }
         spec.command_display = format_command_for_display(&spec.command);
         {
@@ -2142,6 +2155,48 @@ mod tests {
 
     static TEST_DIRECTORY_ID: AtomicU64 = AtomicU64::new(1);
 
+    // The IPC integration test needs the same canonical config, artifact hashes,
+    // and policy revision as production. Keep its exporter in the test binary;
+    // do not add a runtime API that can manufacture eligible launch contracts.
+    #[test]
+    #[ignore = "fixture exporter invoked by scripts/test-runtime-service.cjs"]
+    fn export_checkpoint_recovery_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("LSM_CHECKPOINT_FIXTURE_DIRECTORY")
+                .expect("the IPC test must supply its isolated fixture directory"),
+        );
+        let input = std::fs::read(directory.join("checkpoint-spec-input.json")).unwrap();
+        let mut spec: RuntimeLaunchSpec = serde_json::from_slice(&input).unwrap();
+        assert_eq!(spec.instance_id, "checkpoint-recovery-fixture");
+        let store = CheckpointStore::new(&directory);
+        let fingerprint = store
+            .build_fingerprint(
+                &spec.config,
+                std::path::Path::new(&spec.config.model_path),
+                std::path::Path::new(&spec.command[0]),
+                "recovery-fixture",
+                "test",
+            )
+            .unwrap();
+        spec.checkpoint = Some(RuntimeCheckpointLaunchSpec {
+            eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
+            eligibility: CheckpointEligibility {
+                eligible: true,
+                reason_code: CheckpointReasonCode::None,
+                reasons: Vec::new(),
+                custom_argument_blockers: Vec::new(),
+            },
+            fingerprint: Some(fingerprint),
+        });
+        assert!(super::runtime_checkpoint_fingerprint_is_current(&store, &spec));
+        let output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join("checkpoint-spec-output.json"))
+            .unwrap();
+        serde_json::to_writer(output, &spec).unwrap();
+    }
+
     #[test]
     fn stale_process_exit_preserves_the_replacement_generation() {
         use super::*;
@@ -2358,15 +2413,48 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("eligibility_revision");
-        spec.checkpoint = Some(serde_json::from_value(legacy).unwrap());
-        let (eligibility, fingerprint) = prepare_runtime_checkpoint_launch(&coordinator, &mut spec);
-        assert!(!eligibility.eligible);
-        assert_eq!(
-            eligibility.reason_code,
-            CheckpointReasonCode::EngineCapabilityMissing
-        );
-        assert!(fingerprint.is_none());
-        assert_eq!(spec.command, vec!["llama-server"]);
+        for revision in [None, Some(crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION - 1)] {
+            let mut candidate = legacy.clone();
+            if let Some(revision) = revision {
+                candidate["eligibility_revision"] = revision.into();
+            }
+            let mut attempt = spec.clone();
+            attempt.checkpoint = Some(serde_json::from_value(candidate).unwrap());
+            let (eligibility, fingerprint) = prepare_runtime_checkpoint_launch(&coordinator, &mut attempt);
+            assert!(!eligibility.eligible);
+            assert_eq!(eligibility.reason_code, CheckpointReasonCode::EngineCapabilityMissing);
+            assert!(fingerprint.is_none());
+            assert_eq!(attempt.command, vec!["llama-server"]);
+        }
+    }
+
+    #[test]
+    fn recovered_launch_rechecks_model_draft_runtime_template_and_shape() {
+        let directory = TestDirectory::new();
+        let store = CheckpointStore::new(directory.path().join("cache"));
+        let files: Vec<_> = ["model.gguf", "draft.gguf", "llama-server.exe", "template.jinja"]
+            .iter().map(|name| directory.path().join(name)).collect();
+        for file in &files { std::fs::write(file, b"original artifact").unwrap(); }
+        let mut spec = detach_spec();
+        spec.config.model_path = files[0].to_string_lossy().into_owned();
+        spec.config.draft_model_path = files[1].to_string_lossy().into_owned();
+        spec.config.chat_template_file = files[3].to_string_lossy().into_owned();
+        spec.config.spec_type = "draft-mtp".into();
+        spec.command = vec![files[2].to_string_lossy().into_owned()];
+        let mut checkpoint = eligible_checkpoint();
+        checkpoint.fingerprint = Some(store.build_fingerprint(&spec.config, &files[0], &files[2], "fixed", "test").unwrap());
+        spec.checkpoint = Some(checkpoint);
+        assert!(super::runtime_checkpoint_fingerprint_is_current(&store, &spec));
+        for file in &files {
+            std::fs::write(file, b"changed contents and length").unwrap();
+            assert!(!super::runtime_checkpoint_fingerprint_is_current(&store, &spec), "{}", file.display());
+            std::fs::write(file, b"original artifact").unwrap();
+            assert!(super::runtime_checkpoint_fingerprint_is_current(&store, &spec));
+        }
+        let mut changed = spec.clone(); changed.config.ctx_size += 1024;
+        assert!(!super::runtime_checkpoint_fingerprint_is_current(&store, &changed));
+        std::fs::remove_file(&files[1]).unwrap();
+        assert!(!super::runtime_checkpoint_fingerprint_is_current(&store, &spec));
     }
 
     #[test]

@@ -10,6 +10,12 @@ const { inspectSlotFile, assertInference, memorySampler, processMemory } = requi
 const args = Object.fromEntries(Array.from({ length: (process.argv.length - 2) / 2 }, (_, i) => [process.argv[2 + 2 * i].slice(2), process.argv[3 + 2 * i]]))
 assert.equal(process.platform, 'win32')
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp']) assert.ok(path.isAbsolute(args[key] || ''), `--${key} must be absolute`)
+for (const key of ['bin', 'root', 'engine', 'model', 'mtp', ...(args.dflash ? ['dflash'] : [])]) args[key] = path.resolve(args[key])
+const context = Number(args.context || 4096), kv = args.kv || 'f16', records = Number(args.records || 100)
+assert.ok([4096, 16384].includes(context) && ['f16', 'q8_0'].includes(kv))
+assert.ok(Number.isInteger(records) && records >= 100 && records <= 640)
+assert.ok((!args.context && !args.kv && !args.records) || args['failure-only'], 'extended shapes require --failure-only true')
+assert.ok(!args['scope-checks'] || args['failure-only'], '--scope-checks requires --failure-only true')
 for (const key of ['engine', 'model', 'mtp', ...(args.dflash ? ['dflash'] : [])]) assert.ok(fs.statSync(args[key]).isFile(), `missing ${key}`)
 assert.ok(!fs.existsSync(args.root), '--root must be new; never reuse user data')
 fs.mkdirSync(args.root, { recursive: true })
@@ -98,6 +104,11 @@ async function start() {
         assert.match(log, /ROCm|HIP/)
         const offloads = [...log.matchAll(/offloaded (\d+)\/(\d+) layers to GPU/g)]
         assert.ok(offloads.length && offloads.every(m => Number(m[1]) > 0), 'real GPU offload is required')
+        if (args['scope-checks']) {
+          assert.ok(offloads.every(m => m[1] === m[2]), 'reviewed scope requires complete GPU offload')
+          const types = [...log.matchAll(/K \((\w+)\):[^\n]*V \((\w+)\):/g)]
+          assert.ok(types.some(m => m[1] === kv && m[2] === kv), 'requested target KV types not observed')
+        }
         report.owned_pids.push(h.running.pid)
         return { pid: h.running.pid, checkpoint: c, observed, gpu_offloads: offloads.map(m => m[0]) }
       } } catch (error) { if (error.code === 'ERR_ASSERTION') throw error }
@@ -130,10 +141,13 @@ async function failureAcceptance() {
     lookup_cache_dynamic: '', lookup_cache_managed: false,
     kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
       idle_save_seconds: 0, preserve_longer: false, storage_limit_gib: 4, minimum_prompt_tokens: 16 } })
+  const eligibility = await client.call('checkpoints.eligibility', { id })
+  assert.equal(eligibility.eligible, true, JSON.stringify(eligibility))
+  record('reviewed-model-scope-eligible', { eligibility, context, kv, records })
   await client.mutate('checkpoints.clear', { id })
   const original = await start()
   const reference = await completion(basePrompt)
-  const prompt = Array.from({ length: 100 }, (_, i) => `Record ${i}: seventeen times twenty-three equals 391.\n`).join('') + basePrompt
+  const prompt = Array.from({ length: records }, (_, i) => `Record ${i}: seventeen times twenty-three equals 391.\n`).join('') + basePrompt
   const prefill = await completion(prompt, 24)
   await request('/slots/0?action=save', { filename: 'live-reference.bin' })
   const continuation = prompt + prefill.content, live = await completion(continuation)
@@ -145,12 +159,23 @@ async function failureAcceptance() {
   const generation = path.join(path.dirname(pointerFile), 'generations', pointer.generationId)
   const manifestFile = path.join(generation, 'manifest.json'), manifest = JSON.parse(fs.readFileSync(manifestFile))
   const goodFile = path.join(generation, manifest.slots[0].filename), format = inspectSlotFile(goodFile)
+  // GGSQ stores a serialized server_tokens vector, including metadata words.
+  // Reuse must cover the logical n_saved count captured in the manifest.
+  const savedTokens = manifest.slots[0].promptTokens
+  assert.ok(Number.isInteger(savedTokens) && savedTokens > 0)
   const originals = [goodFile, manifestFile].map(file => [file, sha(file)])
   assert.ok(format.liveDraft?.state.bytes > 0 && format.checkpoints.length > 0)
   // Preserve the successful reference. Only disposable generations are edited;
   // updating their hashes intentionally reaches native validation, not the store's
   // earlier checksum gate. Never use this injection against production data.
   await update({ kv_checkpoint: { auto_save: false } })
+  const fresh = await start(), recovered = await completion(continuation)
+  assert.notEqual(fresh.pid, original.pid)
+  assert.equal(fresh.checkpoint.last_outcome, 'success')
+  assertInference(live, recovered, { draft: true, reuse: true, minimumReuse: savedTokens })
+  for (const [file, digest] of originals) assert.equal(sha(file), digest)
+  record('fresh-process-automatic-stop-save-restored', { original, fresh, reference: live, recovered, format, savedTokens, context, kv, records })
+  await stop()
   for (const kind of ['invalid-draft-version', 'truncated-main']) {
     const badId = crypto.randomUUID(), badDir = path.join(path.dirname(generation), badId)
     fs.mkdirSync(badDir)
@@ -187,7 +212,7 @@ async function failureAcceptance() {
     fs.writeFileSync(pointerFile, pointerBytes)
     const restoredProcess = await start(), restored = await completion(continuation)
     assert.equal(restoredProcess.checkpoint.last_outcome, 'success')
-    assertInference(live, restored, { draft: true, reuse: true })
+    assertInference(live, restored, { draft: true, reuse: true, minimumReuse: savedTokens })
     record('fresh-process-previous-good-generation-after-failure', { kind, restoredProcess, restored })
     await stop()
   }
@@ -273,7 +298,8 @@ async function main() {
   assert.ok(!probed.capabilities.checkpointDraftTypes.includes('draft-eagle3'))
   const seed = path.join(args.root, 'external-seed.bin')
   await update({ name: 'Isolated checkpoint acceptance', engine_id: engine.id, model_path: args.model,
-    host: '127.0.0.1', port, launch_mode: 'managed', ctx_size: 4096, ctx_size_auto: false,
+    host: '127.0.0.1', port, launch_mode: 'managed', ctx_size: context, ctx_size_auto: false,
+    cache_type_k: kv, cache_type_v: kv, cache_type_draft_k: kv, cache_type_draft_v: kv, kv_unified: true,
     gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99, draft_tokens: 3, flash_attn: 'on', fit_mode: 'off',
     warmup: false, parallel: 1, cache_prompt: true, cache_idle_slots: true, cache_ram: 256, ctx_checkpoints: 2,
     slots_enabled: true, metrics: true, props: true, verbose: true, mmproj_auto: false,
@@ -283,6 +309,21 @@ async function main() {
   report.memory = sampler.summary
   if (args['failure-only']) {
     await failureAcceptance()
+    if (args['scope-checks']) {
+      const baseline = { ctx_size: context, ctx_checkpoints: 2, parallel: 1, draft_tokens: 3,
+        spec_type: 'draft-mtp', draft_model_path: args.mtp, kv_unified: true, kv_unified_mode: 'on',
+        cache_type_k: kv, cache_type_v: kv, cache_type_draft_k: kv, cache_type_draft_v: kv }
+      for (const patch of [{ ctx_size: 8192 }, { ctx_checkpoints: 0 }, { parallel: 2 }, { draft_tokens: 1 },
+        { cache_type_draft_k: kv === 'f16' ? 'q8_0' : 'f16' }, { kv_unified_mode: 'off' },
+        { draft_model_path: args.model }]) {
+        await update({ ...baseline, ...patch })
+        const blocked = await client.call('checkpoints.eligibility', { id })
+        assert.equal(blocked.eligible, false, JSON.stringify({ patch, blocked }))
+        assert.notEqual(blocked.reason_code, 'disabled')
+        record('unreviewed-model-scope-blocked', { patch, eligibility: blocked })
+      }
+      await update(baseline)
+    }
     report.passed = true
     return
   }
