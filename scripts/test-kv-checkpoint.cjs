@@ -265,3 +265,5 @@ const testModule = new Module(path.join(process.cwd(), 'kv-checkpoint.test.cjs')
 testModule.filename = path.join(process.cwd(), 'kv-checkpoint.test.cjs')
 testModule.paths = Module._nodeModulePaths(process.cwd())
 testModule._compile(bundled.outputFiles[0].text, testModule.filename)
+// Exercise the real acceptance evidence parser and rejection assertions in CI.
+require('node:child_process').execFileSync(process.execPath, ['--test', 'scripts/test-checkpoint-evidence.cjs'], { stdio: 'inherit' })

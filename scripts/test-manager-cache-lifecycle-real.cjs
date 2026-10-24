@@ -6,6 +6,7 @@ const crypto = require('node:crypto')
 const cp = require('node:child_process')
 const assert = require('node:assert/strict')
 const { managementClient, sleep } = require('./lib/management-client.cjs')
+const { inspectSlotFile, assertInference, memorySampler, processMemory } = require('./lib/checkpoint-evidence.cjs')
 const args = Object.fromEntries(Array.from({ length: (process.argv.length - 2) / 2 }, (_, i) => [process.argv[2 + 2 * i].slice(2), process.argv[3 + 2 * i]]))
 assert.equal(process.platform, 'win32')
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp']) assert.ok(path.isAbsolute(args[key] || ''), `--${key} must be absolute`)
@@ -27,7 +28,8 @@ if (args.fingerprints) {
   fs.writeFileSync(path.join(data, 'kv-checkpoints', 'fingerprints-v1.json'), bytes)
 }
 const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 600000 })
-const report = { started: new Date().toISOString(), engine: args.engine, scope: args['idle-only'] ? 'idle-long-prefix' : args['boundary-only'] ? 'zero-checkpoint-boundary' : 'full', fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] }
+let sampler
+const report = { started: new Date().toISOString(), engine: args.engine, scope: args['failure-only'] ? 'native-failure-isolation' : args['idle-only'] ? 'idle-long-prefix' : args['boundary-only'] ? 'zero-checkpoint-boundary' : 'full', fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] }
 const sha = file => {
   const hash = crypto.createHash('sha256'), buffer = Buffer.alloc(1024 * 1024)
   const fd = fs.openSync(file, 'r')
@@ -76,15 +78,29 @@ async function update(patch) {
 async function start() {
   await client.mutate('instances.start', { id })
   const until = Date.now() + 240000
+  const observed = []
   for (;;) {
     const h = await client.call('instances.health', { id })
     const c = await client.call('checkpoints.status', { id })
-    if (h.running && c.routable) {
+    const sameProcess = h.running && (!c.expected_pid || c.expected_pid === h.running.pid)
+    if (sameProcess) {
+      const previous = observed.find(p => p.pid === h.running.pid)
+      if (previous) previous.ever_routable ||= c.routable
+      else {
+        observed.push({ pid: h.running.pid, checkpoint: c, ever_routable: c.routable })
+        report.owned_pids.push(h.running.pid)
+      }
+    }
+    if (sameProcess && c.routable) {
       try { if ((await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })).ok) {
         assert.equal(h.running.private_console, true)
+        const log = fs.readFileSync(path.join(data, 'configs', 'logs', `${id}.log`), 'utf8')
+        assert.match(log, /ROCm|HIP/)
+        const offloads = [...log.matchAll(/offloaded (\d+)\/(\d+) layers to GPU/g)]
+        assert.ok(offloads.length && offloads.every(m => Number(m[1]) > 0), 'real GPU offload is required')
         report.owned_pids.push(h.running.pid)
-        return { pid: h.running.pid, checkpoint: c }
-      } } catch {}
+        return { pid: h.running.pid, checkpoint: c, observed, gpu_offloads: offloads.map(m => m[0]) }
+      } } catch (error) { if (error.code === 'ERR_ASSERTION') throw error }
     }
     if (Date.now() > until) throw Error(`not ready: ${JSON.stringify({ h, c })}`)
     await sleep(500)
@@ -92,6 +108,9 @@ async function start() {
 }
 async function stop() {
   const running = (await client.call('instances.health', { id })).running
+  if (running && ownedProcesses().some(p => p.ProcessId === running.pid)) {
+    report.process_memory = [...(report.process_memory || []), processMemory(running.pid)]
+  }
   const result = await client.mutate('instances.stop', { id })
   assert.equal((await client.call('instances.health', { id })).running, null)
   if (running) {
@@ -106,6 +125,73 @@ function killOwned(pid) {
   cp.execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
 }
 const basePrompt = 'Write the result of 17 times 23 as 391, then repeat 391 separated by spaces. Answer: 391 391 391 '
+async function failureAcceptance() {
+  await update({ spec_type: 'draft-mtp', draft_model_path: args.mtp,
+    lookup_cache_dynamic: '', lookup_cache_managed: false,
+    kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
+      idle_save_seconds: 0, preserve_longer: false, storage_limit_gib: 4, minimum_prompt_tokens: 16 } })
+  await client.mutate('checkpoints.clear', { id })
+  const original = await start()
+  const reference = await completion(basePrompt)
+  const prompt = Array.from({ length: 100 }, (_, i) => `Record ${i}: seventeen times twenty-three equals 391.\n`).join('') + basePrompt
+  const prefill = await completion(prompt, 24)
+  await request('/slots/0?action=save', { filename: 'live-reference.bin' })
+  const continuation = prompt + prefill.content, live = await completion(continuation)
+  await request('/slots/0?action=restore', { filename: 'live-reference.bin' })
+  await stop()
+  const pointerFile = walk(path.join(data, 'kv-checkpoints', id)).find(f => path.basename(f) === 'latest.json')
+  assert.ok(pointerFile)
+  const pointerBytes = fs.readFileSync(pointerFile), pointer = JSON.parse(pointerBytes)
+  const generation = path.join(path.dirname(pointerFile), 'generations', pointer.generationId)
+  const manifestFile = path.join(generation, 'manifest.json'), manifest = JSON.parse(fs.readFileSync(manifestFile))
+  const goodFile = path.join(generation, manifest.slots[0].filename), format = inspectSlotFile(goodFile)
+  const originals = [goodFile, manifestFile].map(file => [file, sha(file)])
+  assert.ok(format.liveDraft?.state.bytes > 0 && format.checkpoints.length > 0)
+  // Preserve the successful reference. Only disposable generations are edited;
+  // updating their hashes intentionally reaches native validation, not the store's
+  // earlier checksum gate. Never use this injection against production data.
+  await update({ kv_checkpoint: { auto_save: false } })
+  for (const kind of ['invalid-draft-version', 'truncated-main']) {
+    const badId = crypto.randomUUID(), badDir = path.join(path.dirname(generation), badId)
+    fs.mkdirSync(badDir)
+    const badFile = path.join(badDir, manifest.slots[0].filename)
+    fs.copyFileSync(goodFile, badFile)
+    if (kind === 'truncated-main') fs.truncateSync(badFile, Math.floor(format.mainBytes / 2))
+    else {
+      const fd = fs.openSync(badFile, 'r+'), bytes = Buffer.alloc(4); bytes.writeUInt32LE(999)
+      try { fs.writeSync(fd, bytes, 0, 4, format.liveDraft.offset + 4); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    }
+    const badManifest = structuredClone(manifest)
+    badManifest.generationId = badId; badManifest.createdAt = new Date().toISOString()
+    badManifest.slots[0].bytes = fs.statSync(badFile).size; badManifest.slots[0].sha256 = sha(badFile)
+    const badManifestFile = path.join(badDir, 'manifest.json')
+    fs.writeFileSync(badManifestFile, JSON.stringify(badManifest))
+    fs.writeFileSync(pointerFile, JSON.stringify({ ...pointer, generationId: badId, manifestSha256: sha(badManifestFile) }))
+    const recovered = await start()
+    assert.equal(recovered.checkpoint.phase, 'ready_cold')
+    assert.equal(recovered.checkpoint.reason_code, 'cold_after_restore_failure')
+    const rejected = recovered.observed.filter(p => p.pid !== recovered.pid)
+    assert.ok(rejected.length > 0, 'must observe the failed native PID, not infer restart from health')
+    for (const p of rejected) {
+      assert.equal(p.ever_routable, false, 'failed restore PID became routable')
+      assert.ok(!ownedProcesses().some(q => q.ProcessId === p.pid), 'failed native PID survived')
+    }
+    assert.ok(fs.existsSync(path.join(badDir, 'restore-rejected.json')))
+    const actual = await completion(basePrompt)
+    assertInference(reference, actual, { draft: true })
+    const desired = JSON.parse(fs.readFileSync(path.join(data, 'runtime', 'runtime-state.json')))
+    assert.equal(desired.desired_instances[id].config.kv_checkpoint.auto_restore, true)
+    for (const [file, digest] of originals) assert.equal(sha(file), digest)
+    record('failed-native-restore-restarted-before-routing', { kind, original, recovered, reference, actual, format })
+    await stop()
+    fs.writeFileSync(pointerFile, pointerBytes)
+    const restoredProcess = await start(), restored = await completion(continuation)
+    assert.equal(restoredProcess.checkpoint.last_outcome, 'success')
+    assertInference(live, restored, { draft: true, reuse: true })
+    record('fresh-process-previous-good-generation-after-failure', { kind, restoredProcess, restored })
+    await stop()
+  }
+}
 async function idleAcceptance(mode) {
   await update({ spec_type: mode === 'mtp' ? 'draft-mtp' : 'none', draft_model_path: mode === 'mtp' ? args.mtp : '',
     lookup_cache_dynamic: '', lookup_cache_managed: false,
@@ -146,9 +232,7 @@ async function idleAcceptance(mode) {
   assert.notEqual(fresh.pid, original.pid)
   assert.equal(fresh.checkpoint.last_outcome, 'success')
   const restored = await completion(continuation, 48)
-  assert.deepEqual(restored.tokens, live.tokens)
-  assert.ok(restored.timings.cache_n > 1000)
-  if (mode === 'mtp') assert.ok(restored.timings.draft_n > 0 && restored.timings.draft_n_accepted > 0)
+  assertInference(live, restored, { draft: mode === 'mtp', reuse: true, minimumReuse: saved.prompt_tokens })
   record(`fresh-process-${mode}-long-prefix-after-short-title`, { mode, original, fresh, live, restored })
   killOwned(fresh.pid)
   await sleep(1200); await stop()
@@ -156,8 +240,7 @@ async function idleAcceptance(mode) {
   const afterCrash = await start()
   const recovered = await completion(continuation, 48)
   assert.notEqual(afterCrash.pid, fresh.pid)
-  assert.deepEqual(recovered.tokens, live.tokens)
-  assert.ok(recovered.timings.cache_n > 1000)
+  assertInference(live, recovered, { draft: mode === 'mtp', reuse: true, minimumReuse: saved.prompt_tokens })
   record('idle-generation-survives-forced-exit', { mode, afterCrash, recovered })
   await stop()
 }
@@ -172,7 +255,7 @@ async function main() {
   report.version = cp.execFileSync(args.engine, ['--version'], { windowsHide: true, encoding: 'utf8' }).trim()
   // Pin auxiliary kernels as evidence too: the manager DLL contract alone does
   // not establish that HIP's external runtime assets are complete or unchanged.
-  report.runtime_assets = walk(path.dirname(args.engine)).filter(f => /\.(dll|kpack|dat|co|hsaco)$/i.test(f))
+  report.runtime_assets = [...walk(path.dirname(args.engine)), ...walk(path.join(path.dirname(args.engine), '..', '.kpack'))].filter(f => /\.(dll|kpack|dat|co|hsaco|zlib)$/i.test(f))
     .map(f => ({ path: path.relative(path.dirname(args.engine), f), bytes: fs.statSync(f).size, sha256: sha(f) }))
   await client.call('service.start')
   for (const [purpose, directory] of [['engine', path.dirname(args.engine)], ...[...new Set([args.model, args.mtp, args.dflash].filter(Boolean).map(p => path.dirname(p)))].map(p => ['model', p])]) {
@@ -193,9 +276,16 @@ async function main() {
     host: '127.0.0.1', port, launch_mode: 'managed', ctx_size: 4096, ctx_size_auto: false,
     gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99, draft_tokens: 3, flash_attn: 'on', fit_mode: 'off',
     warmup: false, parallel: 1, cache_prompt: true, cache_idle_slots: true, cache_ram: 256, ctx_checkpoints: 2,
-    slots_enabled: true, metrics: true, props: true, mmproj_auto: false,
+    slots_enabled: true, metrics: true, props: true, verbose: true, mmproj_auto: false,
     spec_type: 'ngram-cache', lookup_cache_dynamic: seed, lookup_cache_managed: true,
     kv_checkpoint: { enabled: false, auto_save: true, auto_restore: true, storage_limit_gib: 4, minimum_prompt_tokens: 16 } })
+  sampler = memorySampler(client, id)
+  report.memory = sampler.summary
+  if (args['failure-only']) {
+    await failureAcceptance()
+    report.passed = true
+    return
+  }
   if (args['idle-only']) {
     for (const mode of ['mtp', 'none']) await idleAcceptance(mode)
     report.passed = true
@@ -276,7 +366,7 @@ async function main() {
   }
   await update({ ctx_checkpoints: 2, slot_save_path: '', kv_checkpoint: { enabled: true } })
   for (const patch of [{ cache_type_draft_k: 'q8_0' }, { cache_type_draft_k: '', ctx_size: 8192 },
-    { ctx_size: 4096, spec_type: 'draft-eagle3' }]) {
+    { ctx_size: 4096, spec_type: 'draft-eagle3' }, { spec_type: 'draft-mtp', draft_model_path: args.mtp, parallel: 2 }]) {
     await update(patch)
     const eligibility = await client.call('checkpoints.eligibility', { id })
     assert.equal(eligibility.eligible, false, JSON.stringify(eligibility))
@@ -286,6 +376,7 @@ async function main() {
   report.passed = true
 }
 main().catch(e => { report.error = e.stack; process.exitCode = 1; console.error(e) }).finally(async () => {
+  await sampler?.stop()
   try { await stop() } catch (e) { report.cleanup_stop_error = e.message }
   try { await shutdownService() } catch (e) { report.cleanup_service_error = e.message; report.passed = false; process.exitCode = 1 }
   for (const process of ownedProcesses()) {

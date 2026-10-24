@@ -25,6 +25,7 @@
     "docs:screenshots": "node scripts/generate-guide-screenshots.mjs",
     "test:runtime-service": "node scripts/test-runtime-service.cjs && node scripts/test-router-quota-compat.cjs",
     "test:management": "node scripts/test-management.cjs",
+    "test:checkpoint-evidence": "node --test scripts/test-checkpoint-evidence.cjs",
     "package:management": "node scripts/package-management.cjs",
     "check:llama-upstream": "node scripts/check-llama-upstream.cjs",
     "test:cross-platform": "node scripts/test-cross-platform-paths.cjs",
