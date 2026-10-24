@@ -2155,6 +2155,48 @@ mod tests {
 
     static TEST_DIRECTORY_ID: AtomicU64 = AtomicU64::new(1);
 
+    // The IPC integration test needs the same canonical config, artifact hashes,
+    // and policy revision as production. Keep its exporter in the test binary;
+    // do not add a runtime API that can manufacture eligible launch contracts.
+    #[test]
+    #[ignore = "fixture exporter invoked by scripts/test-runtime-service.cjs"]
+    fn export_checkpoint_recovery_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("LSM_CHECKPOINT_FIXTURE_DIRECTORY")
+                .expect("the IPC test must supply its isolated fixture directory"),
+        );
+        let input = std::fs::read(directory.join("checkpoint-spec-input.json")).unwrap();
+        let mut spec: RuntimeLaunchSpec = serde_json::from_slice(&input).unwrap();
+        assert_eq!(spec.instance_id, "checkpoint-recovery-fixture");
+        let store = CheckpointStore::new(&directory);
+        let fingerprint = store
+            .build_fingerprint(
+                &spec.config,
+                std::path::Path::new(&spec.config.model_path),
+                std::path::Path::new(&spec.command[0]),
+                "recovery-fixture",
+                "test",
+            )
+            .unwrap();
+        spec.checkpoint = Some(RuntimeCheckpointLaunchSpec {
+            eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
+            eligibility: CheckpointEligibility {
+                eligible: true,
+                reason_code: CheckpointReasonCode::None,
+                reasons: Vec::new(),
+                custom_argument_blockers: Vec::new(),
+            },
+            fingerprint: Some(fingerprint),
+        });
+        assert!(super::runtime_checkpoint_fingerprint_is_current(&store, &spec));
+        let output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join("checkpoint-spec-output.json"))
+            .unwrap();
+        serde_json::to_writer(output, &spec).unwrap();
+    }
+
     #[test]
     fn stale_process_exit_preserves_the_replacement_generation() {
         use super::*;

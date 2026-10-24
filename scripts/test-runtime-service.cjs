@@ -274,32 +274,6 @@ async function verifyCheckpointRecovery(endpoint, token, dataDir, launchedPids) 
   const port = await reserveLoopbackPort()
   const instanceRoot = path.join(dataDir, 'kv-checkpoints', instanceId)
   const scratch = path.join(instanceRoot, 'scratch')
-  // The runtime independently verifies the actual executable/library bundle.
-  const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-  const adjacent = fs.readdirSync(path.dirname(process.execPath)).filter(name => /(?:\.dll|\.dylib|\.so(?:\..*)?)$/i.test(name))
-    .sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : a.localeCompare(b))
-    .map(name => path.join(path.dirname(process.execPath), name))
-  const artifacts = [process.execPath, ...adjacent]
-  const word = number => { const bytes = Buffer.alloc(4); bytes.writeUInt32LE(number); return bytes }
-  const bundleHash = artifacts.length === 1 ? digest(process.execPath) : crypto.createHash('sha256').update(Buffer.concat([
-    Buffer.from('llama-engine-artifact-set-v1\0'), word(artifacts.length),
-    ...artifacts.flatMap(file => { const name = Buffer.from(path.basename(file).toLowerCase()); return [word(name.length), name, Buffer.from(digest(file))] }),
-  ])).digest('hex')
-  const fingerprint = {
-    algorithm: 'sha256', digest: 'a'.repeat(64), modelSha256: 'b'.repeat(64),
-    engineSha256: bundleHash, engineVersion: 'recovery-fixture', backend: 'test',
-  }
-  const generationId = crypto.randomUUID()
-  const generation = path.join(instanceRoot, fingerprint.digest, 'generations', generationId)
-  fs.mkdirSync(generation, { recursive: true, mode: 0o700 })
-  const payload = Buffer.from('a valid file whose restore poisons the engine')
-  fs.writeFileSync(path.join(generation, 'slot-0.bin'), payload, { mode: 0o600 })
-  fs.writeFileSync(path.join(generation, 'manifest.json'), JSON.stringify({
-    schemaVersion: 1, stateFormat: 'llama.cpp-slot-state', generationId, instanceId,
-    fingerprint, createdAt: new Date().toISOString(),
-    slots: [{ id: 0, filename: 'slot-0.bin', promptTokens: 512, bytes: payload.length,
-      sha256: crypto.createHash('sha256').update(payload).digest('hex') }],
-  }), { mode: 0o600 })
   const eventsPath = path.join(dataDir, 'checkpoint-fixture-events.jsonl')
   const fixturePath = path.join(dataDir, 'checkpoint-fixture.cjs')
   fs.writeFileSync(fixturePath, `
@@ -334,18 +308,44 @@ http.createServer((request, response) => {
   })
 }).listen(Number(port), '127.0.0.1')
 `, 'utf8')
-  const spec = {
+  const modelPath = path.join(dataDir, 'checkpoint-fixture-model.gguf')
+  fs.writeFileSync(modelPath, 'isolated fixture model identity', { mode: 0o600, flag: 'wx' })
+  const inputSpec = {
     ...testLaunchSpec(dataDir, port), instance_id: instanceId,
     config: {
       ...testLaunchSpec(dataDir, port).config,
+      model_path: modelPath,
       kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
         storage_limit_gib: 1, minimum_prompt_tokens: 1 },
     },
     command: [process.execPath, fixturePath, String(port), eventsPath, '--slot-save-path', scratch],
-    checkpoint: { eligibility_revision: 3, eligibility: { eligible: true, reason_code: 'none', reasons: [] }, fingerprint },
   }
-  spec.executable_sha256 = crypto.createHash('sha256').update(fs.readFileSync(spec.command[0])).digest('hex')
-  spec.command_display = spec.command.join(' ')
+  inputSpec.executable_sha256 = crypto.createHash('sha256').update(fs.readFileSync(inputSpec.command[0])).digest('hex')
+  inputSpec.command_display = inputSpec.command.join(' ')
+  fs.writeFileSync(path.join(dataDir, 'checkpoint-spec-input.json'), JSON.stringify(inputSpec), { mode: 0o600, flag: 'wx' })
+  // Generate the current contract with production Rust serialization/hashing.
+  // The exporter exists only in the test binary, never in the shipped runtime.
+  await new Promise((resolve, reject) => childProcess.execFile('cargo', [
+    'test', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--bin', 'llama-server-manager',
+    'runtime_service::supervisor::tests::export_checkpoint_recovery_fixture', '--', '--ignored', '--exact',
+  ], {
+    cwd: path.resolve(__dirname, '..'), windowsHide: true, timeout: 180_000, maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, LSM_CHECKPOINT_FIXTURE_DIRECTORY: dataDir },
+  }, (error, stdout, stderr) => error
+    ? reject(new Error(`checkpoint fixture export failed: ${stdout}\n${stderr}`, { cause: error })) : resolve()))
+  const spec = JSON.parse(fs.readFileSync(path.join(dataDir, 'checkpoint-spec-output.json'), 'utf8'))
+  const fingerprint = spec.checkpoint.fingerprint
+  const generationId = crypto.randomUUID()
+  const generation = path.join(instanceRoot, fingerprint.digest, 'generations', generationId)
+  fs.mkdirSync(generation, { recursive: true, mode: 0o700 })
+  const payload = Buffer.from('a valid file whose restore poisons the engine')
+  fs.writeFileSync(path.join(generation, 'slot-0.bin'), payload, { mode: 0o600 })
+  fs.writeFileSync(path.join(generation, 'manifest.json'), JSON.stringify({
+    schemaVersion: 1, stateFormat: 'llama.cpp-slot-state', generationId, instanceId,
+    fingerprint, createdAt: new Date().toISOString(),
+    slots: [{ id: 0, filename: 'slot-0.bin', promptTokens: 512, bytes: payload.length,
+      sha256: crypto.createHash('sha256').update(payload).digest('hex') }],
+  }), { mode: 0o600 })
   const started = await request(endpoint, token, { command: 'start_instance', payload: { spec } }, 'checkpoint-start')
   assert.equal(started.reply?.result, 'instance', JSON.stringify(started))
   const oldPid = started.reply.payload.pid
@@ -357,7 +357,8 @@ http.createServer((request, response) => {
     const running = state?.running?.[instanceId]
     if (running) launchedPids.add(running.pid)
     const checkpoint = state?.checkpoints?.[instanceId]
-    if (running?.pid === oldPid) assert.equal(checkpoint?.routable, false, 'poisoned PID became routable')
+    if (running?.pid === oldPid) assert.equal(checkpoint?.routable, false,
+      `restore candidate PID became routable: ${JSON.stringify(checkpoint)}`)
     if (running?.pid !== oldPid && checkpoint?.phase === 'ready_cold') {
       recovered = { running, checkpoint }
       break

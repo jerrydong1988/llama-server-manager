@@ -169,5 +169,10 @@ of this change. CI validates manager behavior; local ROCm runs supply GPU eviden
 
 Local validation also passed `npm run check:release` (185 browser tests plus
 regressions and type checks), `npm run build`, 601 manager Rust tests and four
-CLI tests (three opt-in tests ignored), strict all-target/all-feature Clippy,
-and the release binary build used by the manager campaigns.
+CLI tests, strict all-target/all-feature Clippy, and the release binary build
+used by the manager campaigns. `npm run test:runtime-service` also passed on
+Windows, including poisoned-process replacement and router quota compatibility.
+Its checkpoint fixture obtains the current revision and canonical fingerprint
+from a test-only Rust exporter instead of hardcoded fake identities. That
+exporter is explicitly invoked by the IPC test; it is one of four tests ignored
+by the default Rust test run and is absent from the shipped runtime binary.
