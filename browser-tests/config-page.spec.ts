@@ -390,7 +390,7 @@ for (const fail of [false, true]) {
 test('checkpoint requirements are explicit and repaired only after confirmation', async ({ page }) => {
   await openConfiguration(page, 'checkpoint-requirements')
 
-  await expect(page.getByText('并行 slot 数必须设为 1')).toBeVisible()
+  await expect(page.getByText('当前构建、模型或配置尚未验证多 slot，请使用 1 个 slot')).toBeVisible()
   await expect(page.getByText('必须启用 prompt cache')).toBeVisible()
   await expect(page.getByText(/Harness 元数据请求之后保留已恢复前缀/)).toBeVisible()
   await expect(page.getByText(/滑动窗口模型必须启用 SWA 完整缓存/)).toBeVisible()
@@ -414,6 +414,19 @@ test('checkpoint requirements are explicit and repaired only after confirmation'
     swa_full: true,
     ctx_checkpoints: 32,
   })
+})
+
+test('repairing reviewed multi-slot retention preserves its qualified topology', async ({ page }) => {
+  await openConfiguration(page, 'checkpoint-multi-slot')
+  const repair = page.getByRole('button', { name: '应用必需设置', exact: true })
+  await repair.click()
+  await expect(page.getByText('可使用受管检查点', { exact: true })).toBeVisible()
+  await expect(repair).toHaveCount(0)
+  const config = await page.evaluate(() => {
+    const calls = window.__TAURI_BROWSER_TEST__.calls.filter(c => c.command === 'get_checkpoint_eligibility')
+    return (calls[calls.length - 1]?.payload as { config?: Record<string, unknown> })?.config
+  })
+  expect(config).toMatchObject({ parallel: 4, cache_idle_slots: false, cache_ram: 256 })
 })
 
 test('idle checkpoint and longer-prefix retention are explicit saved policies', async ({ page }) => {

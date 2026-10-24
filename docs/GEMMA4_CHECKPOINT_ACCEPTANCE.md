@@ -1,5 +1,9 @@
 # Gemma 4 MTP checkpoint acceptance on b11849
 
+This report covers the 12B single-slot scope. The separate
+[multi-slot acceptance](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md) covers the later
+31B MTP four-slot scope and its different idle-cache requirement.
+
 ## Fixed candidate and qualification boundary
 
 This extends the [b11849 acceptance](B11849_CHECKPOINT_ACCEPTANCE.md) for one

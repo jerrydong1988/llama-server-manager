@@ -174,6 +174,9 @@ fn prepare_runtime_checkpoint_launch(
     if checkpoint.eligibility_revision != crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION {
         return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::EngineCapabilityMissing);
     }
+    if checkpoint.eligibility.slot_count != spec.config.parallel as u32 {
+        return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::ParallelMustBeOne);
+    }
     let Some(fingerprint) = checkpoint.fingerprint else {
         return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::FingerprintUnavailable);
     };
@@ -2185,6 +2188,7 @@ mod tests {
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),
                 custom_argument_blockers: Vec::new(),
+                slot_count: 1,
             },
             fingerprint: Some(fingerprint),
         });
@@ -2308,7 +2312,10 @@ mod tests {
     fn detach_spec() -> RuntimeLaunchSpec {
         RuntimeLaunchSpec {
             instance_id: "instance-1".into(),
-            config: InstanceConfig::default(),
+            config: InstanceConfig {
+                parallel: 1,
+                ..InstanceConfig::default()
+            },
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
@@ -2339,6 +2346,7 @@ mod tests {
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),
                 custom_argument_blockers: Vec::new(),
+                slot_count: 1,
             },
             fingerprint: Some(checkpoint_fingerprint()),
         }
@@ -2362,6 +2370,28 @@ mod tests {
         assert!(eligibility.eligible);
         assert_eq!(fingerprint, Some(checkpoint_fingerprint()));
         assert_eq!(spec.command.len(), 3);
+    }
+
+    #[test]
+    fn runtime_checkpoint_rejects_a_changed_slot_count() {
+        let directory = TestDirectory::new();
+        let coordinator = CheckpointCoordinator::new(CheckpointStore::new(directory.path()));
+        let expected = coordinator.store().prepare_instance("instance-1").unwrap();
+        let mut spec = detach_spec();
+        spec.command = vec![
+            "llama-server".into(),
+            "--slot-save-path".into(),
+            expected.to_string_lossy().into(),
+        ];
+        spec.checkpoint = Some(eligible_checkpoint());
+        spec.config.parallel = 4;
+        let (eligibility, _) = prepare_runtime_checkpoint_launch(&coordinator, &mut spec);
+        assert!(!eligibility.eligible);
+        assert_eq!(
+            eligibility.reason_code,
+            CheckpointReasonCode::ParallelMustBeOne
+        );
+        assert_eq!(spec.command, vec!["llama-server"]);
     }
 
     #[test]

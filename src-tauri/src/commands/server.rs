@@ -2332,7 +2332,7 @@ async fn assess_checkpoint_eligibility(
     let model_identities = if let Some(fingerprint) = final_fingerprint {
         fingerprint.draft_model_sha256.as_ref().map(|draft|
             (fingerprint.model_sha256.clone(), draft.clone()))
-    } else if model_has_swa == Some(true) && engine_capabilities.is_some_and(|caps|
+    } else if engine_capabilities.is_some_and(|caps|
         crate::commands::engine_capabilities::needs_checkpoint_model_identity(config, caps)) {
         let store = state.checkpoint_coordinator.store().clone();
         let model = std::path::PathBuf::from(&config.model_path);
@@ -2344,11 +2344,14 @@ async fn assess_checkpoint_eligibility(
     let model_digests = model_identities.as_ref().map(|(model, draft)| (model.as_str(), draft.as_str()));
     let reviewed_swa = engine_capabilities.is_some_and(|caps|
         crate::commands::engine_capabilities::reviewed_windowed_swa(config, caps, model_digests));
+    let reviewed_multi = engine_capabilities.is_some_and(|caps|
+        crate::commands::engine_capabilities::reviewed_multi_slot(config, caps, model_digests));
     let engine_checkpoint_capabilities = engine_capabilities
         .map(|capabilities| {
             EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
                 .with_context_checkpoint_persistence(capabilities.context_checkpoint_persistence)
                 .with_reviewed_swa_checkpoint_reuse(reviewed_swa)
+                .with_reviewed_multi_slot(reviewed_multi)
         })
         .unwrap_or_default();
     let checkpoint_types = engine_capabilities
@@ -5974,6 +5977,7 @@ mod perf_parser_tests {
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),
                 custom_argument_blockers: Vec::new(),
+                slot_count: 1,
             },
             fingerprint: None,
             scratch_path: Some(scratch.clone()),

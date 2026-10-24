@@ -38,15 +38,15 @@ Scanning never executes every discovered binary. Probes run only for explicitly 
 
 ## 有状态检查点采用更严格策略 / Stricter Stateful Checkpoint Policy
 
-引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的证据门：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎运行库、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。完整的主模型与草稿模型分片集都会按索引逐片摘要后聚合；引擎启动器及同目录动态运行库也会聚合。任一组成变化都产生安全 miss。滑动窗口模型还必须启用且支持 SWA 完整缓存。
+引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的证据门：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎运行库、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。完整的主模型与草稿模型分片集都会按索引逐片摘要后聚合；引擎启动器及同目录动态运行库也会聚合。任一组成变化都产生安全 miss。滑动窗口模型默认要求受支持的 SWA 完整缓存；只有精确验收的 windowed-SWA 模型组合例外。
 
-Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus exact target/draft model artifacts, engine runtime libraries, version/backend, and state-bearing configuration fingerprint. Complete GGUF shard sets and adjacent dynamic engine libraries are hashed and aggregated, so any changed component causes a safe miss. Sliding-window models additionally require supported full SWA cache.
+Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus exact target/draft model artifacts, engine runtime libraries, version/backend, and state-bearing configuration fingerprint. Complete GGUF shard sets and adjacent dynamic engine libraries are hashed and aggregated, so any changed component causes a safe miss. Sliding-window models require supported full SWA cache unless an exact reviewed windowed-SWA scope applies.
 
-推测解码能力探测还会读取引擎实际报告的 `--spec-type` 候选。普通命令可以包含多个逗号分隔类型，并按 llama.cpp 固定优先级规范化。可重建 `ngram-*` 沿用原 slot 格式；`draft-*` 只有在引擎的 `--slot-save-path` 帮助明确包含 `slot KV cache and context checkpoints` 能力标记时才放行，表示 target、draft 与相关上下文会共同序列化。自动推测、未知类型和外部 lookup 状态仍退回冷启动。`qwen4exp` 已由 B10679 跨进程实测及上游实现确认使用 hybrid recurrent memory：普通 prompt cache 和 `ngram-mod` 可用，但 slot restore 后没有 target cache hit，因此继续列为 checkpoint 反例。
+推测解码能力探测还会读取引擎实际报告的 `--spec-type` 候选。普通命令可以包含多个逗号分隔类型，并按 llama.cpp 固定优先级规范化。可重建 `ngram-*` 沿用原 slot 格式；`draft-*` 还须命中精确构建 persistence profile 的类型与配置范围；帮助标记不能单独授予完整 draft 恢复资格。自动推测、未知类型和外部 lookup 状态仍退回冷启动。`qwen4exp` 已由 B10679 跨进程实测及上游实现确认使用 hybrid recurrent memory：普通 prompt cache 和 `ngram-mod` 可用，但 slot restore 后没有 target cache hit，因此继续列为 checkpoint 反例。
 
-Runtime probing also records the engine-reported `--spec-type` choices. Ordinary commands may combine comma-separated types in normalized llama.cpp priority order. Rebuildable `ngram-*` types retain the original slot behavior; `draft-*` is admitted only when `--slot-save-path` explicitly advertises context checkpoints for target/draft state. Automatic speculation, unknown types, and external lookup state still fall back cold. B10679 cross-process testing confirms that `qwen4exp` remains an explicit checkpoint counterexample.
+Runtime probing also records the engine-reported `--spec-type` choices. Ordinary commands may combine comma-separated types in normalized llama.cpp priority order. Rebuildable `ngram-*` types retain the original slot behavior; `draft-*` additionally requires an exact reviewed bundle profile and its tested type/configuration scope; the help marker alone does not qualify full draft restoration. Automatic speculation, unknown types, and external lookup state still fall back cold. B10679 cross-process testing confirms that `qwen4exp` remains an explicit checkpoint counterexample.
 
-帮助标记是必要的能力声明，不能单独证明跨进程复用。Draft 状态及实验性 `qwen35` 还必须启用 `ctx_checkpoints > 0`；其它已知 hybrid/recurrent 架构保持禁用。上游基线同时跟踪这两类内存架构，分类新增或变化须重新审阅。
+帮助标记或审阅后的精确构建记录可以确认基础能力，但不能单独证明任意模型跨进程复用。Draft 状态及实验性 `qwen35` 还必须启用 `ctx_checkpoints > 0`；其它已知 hybrid/recurrent 架构保持禁用。上游基线同时跟踪这两类内存架构，分类新增或变化须重新审阅。
 
 资格不满足或 restore 发送前验证失败可直接冷启动。一旦 restore 已发送，失败后必须关闭旧 PID、启动干净进程并确认健康，再恢复路由；不会依赖 erase 清理潜在的残留状态。进程替换失败时继续关闭路由。完整范围和操作说明见 [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md)。
 
@@ -78,3 +78,5 @@ node scripts/check-llama-upstream.cjs --write
 ```
 
 常规发版检查保持离线，只使用已提交的稳定版注册表和已复核的前瞻参数注册表，验证 Rust 实际生成的全部参数。
+
+已验证的多 slot 组合使用额外的模型、并行数、总上下文、KV 类型与 idle-cache 契约，见 [多 slot 验收](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md)。没有对应证据的并行形态仍拒绝自动持久化。
