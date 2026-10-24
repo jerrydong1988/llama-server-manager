@@ -122,10 +122,13 @@ export interface CheckpointStatus {
   reason_code: string
   message: string
   generation_id?: string
+  checkpoint_slots?: number[]
+  slot_count?: number
   prompt_tokens?: number
   bytes?: number
   duration_ms?: number
   reuse_observation?: {
+    slot_id?: number
     task_id: number
     cached_tokens: number
     processed_tokens: number
@@ -135,6 +138,7 @@ export interface CheckpointStatus {
 }
 
 export interface CheckpointEligibility {
+  slot_count?: number
   eligible: boolean
   reason_code: string
   reasons: string[]

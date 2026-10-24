@@ -57,17 +57,20 @@ test('checkpoint file verification does not invent request cache hits', async ({
     window.__TAURI_BROWSER_TEST__.emitEvent('checkpoint-status', {
       instance_id: 'browser-test-instance', phase, routable: phase === 'ready',
       expected_pid: 1234, last_operation: 'restore', last_outcome: 'success',
+      slot_count: 4, checkpoint_slots: [3],
       reason_code: 'none', reasons: [], updated_at: Date.now(),
       reuse_observation: cachedTokens === undefined ? undefined : {
-        task_id: 7, cached_tokens: cachedTokens, processed_tokens: 512, observed_at: Date.now(),
+        slot_id: 3, task_id: 7, cached_tokens: cachedTokens, processed_tokens: 512, observed_at: Date.now(),
       },
     })
   }, { phase, cachedTokens })
 
   await emit('ready')
   await expect(page.getByText('已就绪（文件已验证）', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 / 4 · Slot 3', { exact: true })).toBeVisible()
   await expect(page.getByText('最近观测请求复用 token: --', { exact: true })).toBeVisible()
   await emit('ready', 0)
+  await expect(page.getByText('Slot 3', { exact: true })).toBeVisible()
   await expect(page.getByText('最近观测请求复用 token: 0', { exact: true })).toBeVisible()
   await expect(page.getByText('最近观测请求预填充 token: 512', { exact: true })).toBeVisible()
   await expect(page.getByText('该请求预填充耗时: --', { exact: true })).toBeVisible()

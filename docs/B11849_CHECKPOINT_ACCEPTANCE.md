@@ -4,6 +4,10 @@ The later [Gemma 4 MTP acceptance](GEMMA4_CHECKPOINT_ACCEPTANCE.md) adds an exac
 model-pair scope for f16/q8_0 at 4096/16384 context. The Qwen evidence and generic
 build restrictions below remain distinct from that follow-up.
 
+The subsequent [manager multi-slot acceptance](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md)
+adds narrowly qualified four-slot Qwen 27B and Gemma 31B MTP scopes. Native results
+in this historical report alone do not grant manager multi-slot eligibility.
+
 ## Artifact and evidence scope
 
 The candidate uses the [official b11849 Windows ROCm archive](https://github.com/ggml-org/llama.cpp/releases/tag/b11849),
@@ -124,9 +128,9 @@ DFlash use the default empty blob. Therefore these tests cover all state exposed
 by the tested modes, including main/draft KV and hybrid recurrent state, but
 do not certify a nonempty EAGLE3 speculative-state restore. EAGLE3 remains blocked.
 
-Four-slot native results do not enable manager multi-slot persistence. The
-manager's single-slot manifest/eligibility, explicit context <=4096 and existing
-draft configuration restrictions remain in force. No SWA bitwise-logits claim
+Four-slot native results in this report alone did not enable manager multi-slot
+persistence. Later exact exceptions are documented in the linked multi-slot
+acceptance; generic single-slot and draft restrictions remain. No SWA bitwise-logits claim
 is made. The repeated arithmetic fixture is a correctness/recovery sentinel,
 not a representative performance or draft-acceptance benchmark.
 

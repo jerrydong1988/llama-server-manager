@@ -1,25 +1,25 @@
 # KV / Prefill Cache Checkpoint
 
-KV / Prefill Cache Checkpoint 是一个默认关闭的实验性功能。它在受控停止本机 `llama-server` 前保存 slot 0 的提示词/KV 状态，并在相同实例再次启动时、管理器代理开放路由之前恢复该状态。它的目标是减少 DeepSeek Harness 等客户端在新会话中重复注入相同长前缀时的 prefill 等待。
+KV / Prefill Cache Checkpoint 是一个默认关闭的实验性功能。它在受控停止本机 `llama-server` 前保存已验证 slot 集合的提示词/KV 状态，并在相同实例再次启动时、管理器代理开放路由之前完整恢复和校验该集合。它的目标是减少 DeepSeek Harness 等客户端在新会话中重复注入相同长前缀时的 prefill 等待。
 
-KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves prompt/KV state from slot 0 before a controlled local `llama-server` stop, then restores it before the manager proxy routes traffic after the next start. Its primary goal is to avoid repeating a long prefill when clients such as DeepSeek Harness inject the same context into a new session.
+KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves the qualified set of slot states before a controlled local `llama-server` stop, then restores and verifies the complete set before the manager proxy routes traffic after the next start. Its primary goal is to avoid repeating a long prefill when clients such as DeepSeek Harness inject the same context into a new session.
 
 ## 支持范围 / Supported Scope
 
 当前实验范围采用可验证的资格条件。以下条件必须同时成立。draft 构建资格以 [CHECKPOINT_ACCEPTANCE.md](CHECKPOINT_ACCEPTANCE.md) 和内置 persistence profile 为准；历史帮助文字不能单独授予资格。
 
 - 实例使用本机、受管、结构化启动模式和一个文本 GGUF 逻辑模型；单文件和同目录内命名完整、索引连续的分片集均可。
-- `parallel = 1`，启用 prompt cache、slots API 和 idle-slot cache。
-- Cache RAM 必须为正数，或设为 `-1` 表示不限制；`0` 会关闭所需的二级 prompt cache。
+- 启用 prompt cache 和 slots API。默认范围为 `parallel = 1`；多 slot 必须命中[精确模型、构建与配置验收](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md)。当前四 slot 组合仅限固定 b11849/ROCm、Qwen 27B 或 Gemma 31B + MTP、总上下文 16384 和 f16 KV。
+- 单 slot 需启用 idle-slot cache，Cache RAM 为正数或 `-1`。已验证的四 slot 组合必须显式关闭 idle-slot cache，以免上游清空其它空闲 slot；此时不会把二级 RAM prompt cache 当作可持久化 slot。
 - 上游是无 TLS、无自定义 path/API prefix 的 loopback HTTP 端点。
 - 所选引擎明确公开 `--slots`、`--slot-save-path`、`--cache-ram` 和 `--cache-idle-slots`。
-- 滑动窗口注意力模型还必须启用 `--swa-full`，且引擎必须支持该参数。
+- 滑动窗口模型默认要求受支持的 `--swa-full`；命中精确 windowed-SWA 验收范围时，遵守该范围的配置要求。
 - 推测解码关闭，或只使用当前引擎 `--help` 明确报告的类型。`ngram-*` 可从恢复后的 target prompt 重建；`draft-*` 还要求精确构建命中内置 persistence profile、类型和配置位于该 profile 的范围，且 `ctx_checkpoints > 0`。帮助文字本身不会授予 draft 资格。
 - 配置外部草稿模型时必须显式选择至少一个受支持的 `draft-*` 类型，且草稿 GGUF（包括完整分片集）必须可读取；`spec-default`、未知类型和外部 lookup cache 仍不支持检查点。
 - 模型架构必须可读。已知 hybrid/recurrent 架构默认关闭检查点；唯一保留的 hybrid 实验组合是已有跨进程验收记录的 `qwen35`，还须满足上述 context 持久化声明和 `ctx_checkpoints > 0`。`qwen35moe`、`qwen4exp` 等其它混合架构不会因此放行。上游基线同时记录 hybrid/recurrent 分类，新增架构必须重新审阅。
 - 不使用多模型 preset、router、Embedding、Reranker、LoRA 或 mmproj/multimodal。自定义参数只允许检查点安全分类器明确认可的纯加载 I/O 参数；当前包括取值为 `auto`、`on` 或 `off` 的 `--lazy-mode`、`-lzm` 与旧 `--tensor-read-lazy`。未知、缺值、非法、互相冲突或会改变推理状态的自定义参数仍会阻断，并在配置页显示具体标志。
 
-The experimental scope supports one manager-owned local text-generation slot. Rebuildable `ngram-*` types use the original slot format; `draft-*` also requires an exact bundle persistence profile, its qualified type/configuration envelope, and positive `ctx_checkpoints`. Help text alone never qualifies a draft mode. Known hybrid/recurrent architectures are excluded except experimentally validated `qwen35` with both context requirements; this exception does not cover `qwen35moe` or `qwen4exp`. The upstream baseline tracks memory architecture classifications for review. Custom arguments remain fail-closed except validated lazy-loading aliases. External lookup state, automatic speculation, and multimodal state remain excluded. Sliding-window models additionally require full SWA cache.
+The default scope supports one manager-owned local text-generation slot. The exact four-slot exception, including its required idle-cache setting, is documented in [MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md). Rebuildable `ngram-*` types use the original slot format; `draft-*` also requires an exact bundle persistence profile, its qualified type/configuration envelope, and positive `ctx_checkpoints`. Help text alone never qualifies a draft mode. Known hybrid/recurrent architectures are excluded except experimentally validated `qwen35` with both context requirements; this exception does not cover `qwen35moe` or `qwen4exp`. The upstream baseline tracks memory architecture classifications for review. Custom arguments remain fail-closed except validated lazy-loading aliases. External lookup state, automatic speculation, and multimodal state remain excluded. Sliding-window models require full SWA cache unless an exact reviewed windowed-SWA scope applies.
 
 不符合条件只会关闭本次运行的 checkpoint；实例仍按原来的冷启动流程运行。配置页会显示稳定的资格原因，不会静默猜测兼容性。
 
@@ -31,13 +31,13 @@ An ineligible configuration disables checkpointing only for that run. The instan
 2. 打开实例的“参数配置”，找到“KV / Prefill 缓存检查点”。
 3. 启用功能，并保持“受控停止时保存”和“路由前恢复”开启。
 4. 如果资格检查列出可修复的缓存/slot 条件，审阅内存影响后点击“应用必需设置”。
-5. 对滑动窗口模型，确认启用 SWA 完整缓存；它会增加 KV 内存占用。
+5. 按当前资格检查处理 SWA、并行数和上下文要求；不要将另一模型组合的设置直接套用。
 6. 保存配置，从实例管理页启动实例。
 7. 让 DeepSeek Harness 使用“实例路由”页面提供的管理器代理地址，例如 `http://127.0.0.1:<proxy-port>/v1`，不要使用实例的直连端口。
 
 The restore-before-first-request guarantee applies only to traffic through the manager proxy. A client that connects directly to the `llama-server` port can race the restore operation and is outside this guarantee.
 
-## DeepSeek Harness 注意事项 / DeepSeek Harness Notes
+## 单 slot Harness 路径 / Single-slot Harness Path
 
 DeepSeek Harness 创建新会话时可能先发送一个较短的标题或会话元数据请求，然后再发送完整仓库上下文。该短请求会占用唯一 slot。启用 idle-slot cache 并提供足够的 Cache RAM 后，llama.cpp 可以把刚恢复的长前缀保留在二级 prompt cache 中，供随后主请求复用。因此这两个设置是 Harness 路径的资格条件，而不仅是性能建议。
 
@@ -47,9 +47,9 @@ Cache RAM 是容量上限，不是永久 pin。多个不相关的大前缀仍可
 
 Cache RAM is a capacity limit, not a permanent pin. Competing large prefixes can still evict entries. If `cache_n` drops substantially, increase the budget, reduce competing prefixes, or route title generation to another instance.
 
-受控停止只保存当时 slot 0 的前缀，不会导出 Cache RAM 中其它历史前缀。若停止前最后处理的是短标题请求，保存的可能就是该短前缀。当前 provider 无法提供多前缀磁盘缓存语义。
+受控停止保存已验证集合中各 slot 的前缀；开启“保留较长检查点”时，各 slot 独立保留较长旧状态。空闲保存需等待所有 slot 空闲。多 slot 模式关闭 idle-slot cache，不能承诺任意历史前缀在同进程中复用；不会导出 Cache RAM 中其它历史前缀，也不是任意多前缀磁盘数据库。
 
-A controlled stop saves only the current slot 0 prefix, not other historical prefixes in Cache RAM. A short title request immediately before stopping may therefore become the saved prefix. This provider does not offer a persistent multi-prefix cache.
+A controlled stop saves each qualified slot; the longer-prefix policy retains older states independently per slot. Idle saving waits for every slot to be idle. Multi-slot mode disables idle-slot caching and does not promise arbitrary in-process historical reuse. It does not export other Cache RAM prefixes or provide an arbitrary multi-prefix disk database.
 
 ## 推测解码与 Qwen3.8-Flash-Next / Speculation and Qwen3.8-Flash-Next
 
@@ -92,9 +92,13 @@ Checkpoint 文件包含由系统提示、仓库说明、工具定义和用户上
 
 Checkpoint files contain prompt-derived model state and must be treated as sensitive local data. They are stored under the current user's private application data, while logs and status messages omit payloads, prompts, API keys, and private paths. A checkpoint is not a portable conversation backup.
 
-每个实例使用独立容量上限和 generation LRU。恢复时只保留一个 scratch payload：restore 返回后先删除输入 scratch，再创建验证副本；创建每个已知大小的 scratch 前都会检查 payload 大小外加 64 MiB 余量。因此瞬时空间约为已保留 generations 加一个 payload，而不是同一 payload 的三份副本。slot save/restore 的总请求上限为 30 分钟，健康与 slots 探测使用最多 2 秒的短超时。只有实例完全停止且没有保存/恢复操作时，才能在实例页点击“清除检查点”。清除只删除该实例经过边界校验的 checkpoint 根目录，不删除模型或实例配置，且不可恢复。
+每个实例使用独立容量上限和 generation LRU。恢复时只保留一个 scratch payload：restore 返回后先删除输入 scratch，再创建验证副本；创建每个已知大小的 scratch 前都会检查 payload 大小外加 64 MiB 余量。因此瞬时空间约为已保留 generations 加一个 payload，而不是同一 payload 的三份副本。每个 slot save/restore 请求上限为 30 分钟，健康与 slots 探测使用最多 2 秒的短超时。只有实例完全停止且没有保存/恢复操作时，才能在实例页点击“清除检查点”。清除只删除该实例经过边界校验的 checkpoint 根目录，不删除模型或实例配置，且不可恢复。
 
 Each instance has its own capacity limit and generation LRU. Restore keeps only one scratch payload at a time and checks for the payload size plus 64 MiB of free-space headroom before each known-size staging operation. Slot save/restore requests may run for up to 30 minutes; health and slot probes retain a two-second ceiling. Clear is allowed only while the instance is fully stopped and no save or restore is active. It removes only that instance's validated checkpoint root, not its model or configuration, and cannot be undone.
+
+多 slot 保存会先暂存整组 payload，再原子发布代次，因此保存期间还需容纳整组新文件。恢复仍按单个 scratch 逐项处理，容量与 token 状态显示为各 slot 的合计。
+
+Multi-slot saves stage the whole payload set before publication and need space for that complete new set. Restore still stages one payload at a time; capacity and token status report aggregate totals.
 
 ## 验证与排障 / Verification and Troubleshooting
 

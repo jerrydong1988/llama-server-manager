@@ -314,6 +314,7 @@ http.createServer((request, response) => {
     ...testLaunchSpec(dataDir, port), instance_id: instanceId,
     config: {
       ...testLaunchSpec(dataDir, port).config,
+      parallel: 1,
       model_path: modelPath,
       kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
         storage_limit_gib: 1, minimum_prompt_tokens: 1 },

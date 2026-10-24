@@ -66,6 +66,15 @@ export function CheckpointStatusCard({ instance }: { instance: Instance }) {
               {checkpointOperationLabel(status.last_operation, t.checkpoint)} · {checkpointOutcomeLabel(status.last_outcome, t.checkpoint)}
             </div>
           </div>
+          {status.slot_count !== undefined && (
+            <div className="col-span-2">
+              <div className="text-slate-500">{t.checkpoint.savedSlots}</div>
+              <div className="mt-0.5 text-slate-800 dark:text-slate-200">
+                {status.checkpoint_slots?.length ?? 0} / {status.slot_count}
+                {!!status.checkpoint_slots?.length && ` · Slot ${status.checkpoint_slots.join(', ')}`}
+              </div>
+            </div>
+          )}
           <div>
             <div className="text-slate-500">{t.checkpoint.promptTokens}</div>
             <div className="mt-0.5 text-slate-800 dark:text-slate-200">{status.prompt_tokens?.toLocaleString() ?? '--'}</div>
@@ -93,6 +102,7 @@ export function CheckpointStatusCard({ instance }: { instance: Instance }) {
       {status?.phase === 'ready' && (
         <div className="space-y-2 border-t border-violet-200 pt-2 text-xs dark:border-violet-500/20">
           <p className="text-slate-500">{t.checkpoint.restoreVerifiedHint}</p>
+          {observation?.slot_id !== undefined && <div>Slot {observation.slot_id}</div>}
           <div>{t.checkpoint.observedCachedTokens}: {observation?.cached_tokens.toLocaleString() ?? '--'}</div>
           <div>{t.checkpoint.observedProcessedTokens}: {observation?.processed_tokens.toLocaleString() ?? '--'}</div>
           <div>{t.checkpoint.observedPrefill}: {prefillMs == null ? '--' : `${prefillMs.toLocaleString()} ms`}</div>

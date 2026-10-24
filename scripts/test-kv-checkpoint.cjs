@@ -23,7 +23,7 @@ assert.match(checkpointSource, /HASH_CACHE_SCHEMA_VERSION: u32 = 2/, 'persistent
 assert.match(checkpointSource, /\.pending-/, 'generation commits must stage through a pending directory')
 assert.match(checkpointSource, /CHECKPOINT_SLOT_OPERATION_TIMEOUT[^\n]*30 \* 60/, 'large slot operations must receive a long-running timeout')
 assert.doesNotMatch(checkpointSource, /\.min\(Duration::from_secs\(30\)\)/, 'slot operation timeouts must not be clamped to 30 seconds')
-assert.match(checkpointSource, /fs::rename\(scratch_payload, &destination\)/, 'generation commits must move scratch payloads without duplicating them')
+assert.match(checkpointSource, /fs::rename\(source, &destination\)/, 'generation commits must move scratch payloads without duplicating them')
 assert.match(checkpointSource, /ensure_scratch_capacity/, 'known-size checkpoint staging must preflight free disk space')
 assert.match(checkpointSource, /AfterManifestWrite/, 'storage tests must inject a manifest-last failure')
 for (const faultPoint of [
@@ -38,7 +38,7 @@ for (const faultPoint of [
 assert.match(checkpointSource, /FILE_ATTRIBUTE_REPARSE_POINT/, 'Windows reparse points must be rejected')
 assert.match(checkpointSource, /trait SlotBackend/, 'slot lifecycle tests must use an injectable backend')
 assert.match(checkpointSource, /gate_allows_routing/, 'checkpoint restore must own a routing gate')
-assert.match(checkpointSource, /verified_sha256 != slot\.sha256/, 'restore must verify a save round trip')
+assert.match(checkpointSource, /verify_scratch_payload[\s\S]*?!= slot\.sha256/, 'restore must verify a save round trip')
 assert.match(checkpointSource, /StaleProcessEvent/, 'checkpoint events must be bound to the active process')
 assert.match(checkpointSource, /CHECKPOINT_SAFE_LAZY_FLAGS/, 'checkpoint eligibility must explicitly classify safe lazy-loading flags')
 assert.match(checkpointSource, /custom_argument_blockers/, 'checkpoint eligibility must return concrete custom-argument blockers')
