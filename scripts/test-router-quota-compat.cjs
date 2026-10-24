@@ -7,6 +7,7 @@ const path = require('node:path')
 const { spawnRuntime, readToken, runtimeEndpoint, request, reserveLoopbackPort, waitForExit } = require('./test-runtime-service.cjs')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const outputFields = ['max_tokens', 'max_completion_tokens', 'max_output_tokens', 'n_predict', 'max_new_tokens']
+const coldRequestCount = 12
 
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-quota-compat-'))
@@ -19,7 +20,7 @@ async function main() {
     res.setHeader('content-type', 'application/json')
     if (req.url === '/health') return res.end('{"status":"ok"}')
     if (req.url === '/props') return res.end('{"default_generation_settings":{"n_ctx":128}}')
-    if (req.url === '/slots') return res.end('[{"id":0,"n_ctx":128,"is_processing":false}]')
+    if (req.url === '/slots') return res.end(JSON.stringify(Array.from({ length: coldRequestCount }, (_, id) => ({ id, n_ctx: 128, is_processing: false }))))
     if (req.url === '/metrics') return res.end('')
     if (req.url === '/v1/models') return res.end('{"data":[{"id":"private-model"}]}')
     if (req.url.endsWith('/input_tokens') || req.url.endsWith('/count_tokens') || req.url === '/tokenize') {
@@ -75,6 +76,13 @@ async function main() {
     }
     const post = (route, body) => fetch(`http://127.0.0.1:${proxyPort}${route}`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'localmodel', ...body }), signal: AbortSignal.timeout(15000) })
     const prompt = { messages: [{ role: 'user', content: 'Hello' }] }
+    // Exercise first-open contention before any request has initialized the ledger.
+    const firstRequests = await Promise.all(Array.from({ length: coldRequestCount }, async () => {
+      const response = await post('/v1/chat/completions', prompt)
+      return { status: response.status, body: await response.text() }
+    }))
+    for (const response of firstRequests) assert.equal(response.status, 200, `cold ledger: ${response.body}`)
+    assert.equal(received.length, coldRequestCount, 'Every admitted cold-start request must reach the backend once')
     const cases = [
       ['/v1/chat/completions', prompt, 32], // Octop / LangChain default request
       ['/v1/chat/completions', { ...prompt, max_tokens: null }, 32],
@@ -94,7 +102,7 @@ async function main() {
       await configure(12 + Math.max(1, output))
       const before = received.length
       const response = await post(route, body)
-      assert.equal(response.status, 200, await response.text())
+      assert.equal(response.status, 200, `case ${caseIndex} ${route} ${JSON.stringify(body)}: ${await response.text()}`)
       assert.equal(received.length, before + 1)
       const upstream = received.at(-1).body
       const canonical = route === '/v1/responses' ? 'max_output_tokens' : 'max_tokens'
@@ -200,6 +208,9 @@ async function main() {
     for (const headers of credentials) assert.equal((await authRequest('/v1/chat/completions', headers)).status, 200)
     console.log('Authentication passed: disabled/blank/all/mixed keys; Bearer and x-api-key; inference/discovery aliases; hot reload; quota preservation; explicit anonymous mode.')
     console.log(`Quota compatibility passed: ${cases.length} client shapes; default/context fit; exact reservation boundary; actionable errors; soft-only pass-through; count exemption; tools/images preserved.`)
+  } catch (error) {
+    console.error(`Quota fixture runtime ${service?.pid} exit=${service?.exitCode}: ${service?.runtimeStderr().slice(-8192) || '(no stderr)'}`)
+    throw error
   } finally {
     clearInterval(heartbeat)
     if (service && endpoint && token && service.exitCode === null) await request(endpoint, token, { command: 'shutdown', payload: { stop_instances: true } }, 'cleanup').catch(() => {})

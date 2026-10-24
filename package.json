@@ -37,7 +37,8 @@
   },
   "overrides": {
     "braces": "$braces",
-    "postcss-selector-parser": "7.1.6"
+    "postcss-selector-parser": "7.1.6",
+    "zod": "4.6.6"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.6",

@@ -4,12 +4,14 @@ use crate::models::ProxyApiKey;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[path = "usage_quota_maintenance.rs"]
 mod maintenance;
 pub(crate) use maintenance::{maintain, storage, QuotaStorage};
 
 const MAX_TOKENS: u64 = 9_007_199_254_740_991;
+const BUSY_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum QuotaError {
@@ -61,10 +63,42 @@ fn path() -> PathBuf {
     crate::utils::get_data_dir().join("router-quota.db")
 }
 
+fn unavailable(stage: &str, error: impl std::fmt::Display) -> QuotaError {
+    // Keep database details local; the public response remains fail-closed.
+    eprintln!("Quota admission failed during {stage}: {error}");
+    QuotaError::Unavailable
+}
+
 fn open(path: &Path) -> Result<Connection, String> {
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    conn.busy_timeout(std::time::Duration::from_secs(3))
-        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match open_once(path, deadline.saturating_duration_since(Instant::now())) {
+            Ok(conn) => {
+                conn.busy_timeout(BUSY_TIMEOUT).map_err(|e| e.to_string())?;
+                return Ok(conn);
+            }
+            Err(error) => {
+                let busy = matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                );
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if !busy || remaining.is_zero() {
+                    return Err(format!("open/initialize ledger: {error}"));
+                }
+                // Concurrent first opens can fail WAL lock promotion immediately,
+                // without invoking SQLite's busy handler. Retry only idempotent
+                // initialization on a fresh connection, within the same deadline.
+                // Never replay reservations or uncertain commits here.
+                std::thread::sleep(remaining.min(Duration::from_millis(10)));
+            }
+        }
+    }
+}
+
+fn open_once(path: &Path, timeout: Duration) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(timeout)?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
          CREATE TABLE IF NOT EXISTS quota_periods (
@@ -78,8 +112,7 @@ fn open(path: &Path) -> Result<Connection, String> {
          CREATE INDEX IF NOT EXISTS quota_request_date ON quota_requests(day);
          CREATE INDEX IF NOT EXISTS quota_request_key_day ON quota_requests(key_id,day);
          CREATE INDEX IF NOT EXISTS quota_request_key_month ON quota_requests(key_id,month);",
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     Ok(conn)
 }
 
@@ -143,16 +176,18 @@ fn reserve_at(
     if amount == 0 || amount > MAX_TOKENS {
         return Err(QuotaError::Unmetered);
     }
-    let (day, month) = super::usage_budgets::periods(now).map_err(|_| QuotaError::Unavailable)?;
-    let mut conn = open(path).map_err(|_| QuotaError::Unavailable)?;
+    let (day, month) =
+        super::usage_budgets::periods(now).map_err(|e| unavailable("resolve periods", e))?;
+    let mut conn = open(path).map_err(|e| unavailable("open", e))?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| QuotaError::Unavailable)?;
+        .map_err(|e| unavailable("begin reservation", e))?;
     for (kind, start, limit) in [
         ("day", day, key.daily_token_limit),
         ("month", month, key.monthly_token_limit),
     ] {
-        let current = period(&tx, &key.id, kind, start).map_err(|_| QuotaError::Unavailable)?;
+        let current =
+            period(&tx, &key.id, kind, start).map_err(|e| unavailable("read period", e))?;
         let total = current
             .settled
             .saturating_add(current.held)
@@ -164,14 +199,15 @@ fn reserve_at(
             "INSERT INTO quota_periods(key_id,kind,start,held,pending) VALUES (?1,?2,?3,?4,1)
              ON CONFLICT(key_id,kind,start) DO UPDATE SET held=held+excluded.held,pending=pending+1",
             params![key.id, kind, start, amount as i64],
-        ).map_err(|_| QuotaError::Unavailable)?;
+        ).map_err(|e| unavailable("reserve period", e))?;
     }
     tx.execute(
         "INSERT INTO quota_requests VALUES (?1,?2,?3,?4,?5,'pending',NULL,?6)",
         params![id, key.id, day, month, amount as i64, now],
     )
-    .map_err(|_| QuotaError::Unavailable)?;
-    tx.commit().map_err(|_| QuotaError::Unavailable)?;
+    .map_err(|e| unavailable("insert reservation", e))?;
+    tx.commit()
+        .map_err(|e| unavailable("commit reservation", e))?;
     Ok(QuotaPermit {
         path: path.into(),
         id: id.into(),
@@ -195,7 +231,7 @@ pub(crate) async fn reserve(
         )
     })
     .await
-    .map_err(|_| QuotaError::Unavailable)?
+    .map_err(|e| unavailable("reservation worker", e))?
 }
 
 fn settle(path: &Path, id: &str, actual: Option<u64>, complete: bool) -> Result<(), String> {
@@ -341,6 +377,31 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_first_reservations_initialize_the_ledger() {
+        for _ in 0..12 {
+            let (_dir, path) = db();
+            let ready = std::sync::Arc::new(std::sync::Barrier::new(12));
+            let threads: Vec<_> = (0..12)
+                .map(|n| {
+                    let path = path.clone();
+                    let ready = ready.clone();
+                    std::thread::spawn(move || {
+                        ready.wait();
+                        reserve_at(&path, &key(), &n.to_string(), 1, 0).map(persist)
+                    })
+                })
+                .collect();
+            let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+            assert!(results.iter().all(Result::is_ok), "{results:?}");
+            let conn = open(&path).unwrap();
+            for kind in ["day", "month"] {
+                let value = period(&conn, "key", kind, 0).unwrap();
+                assert_eq!((value.held, value.pending), (12, 12));
+            }
+        }
+    }
+
+    #[test]
     fn concurrent_reservations_are_atomic_and_survive_reopen() {
         let (_dir, path) = db();
         open(&path).unwrap();
@@ -352,12 +413,15 @@ mod tests {
                 })
             })
             .collect();
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 4);
         assert_eq!(
-            threads
-                .into_iter()
-                .filter_map(|t| t.join().unwrap().ok())
+            results
+                .iter()
+                .filter(|r| matches!(r, Err(QuotaError::Exceeded)))
                 .count(),
-            4
+            8,
+            "Contention must not masquerade as an unavailable ledger: {results:?}"
         );
         assert_eq!(
             period(&open(&path).unwrap(), "key", "day", 0).unwrap().held,
@@ -484,5 +548,17 @@ mod tests {
         assert!(settle(&path, "a", Some(1), true).is_err());
         tx.rollback().unwrap();
         assert_eq!(period(&conn, "key", "day", 0).unwrap().held, 50);
+    }
+
+    #[test]
+    fn corrupt_ledger_is_rejected_without_replacing_it() {
+        let (_dir, path) = db();
+        let original = b"not a SQLite ledger; preserve for diagnosis";
+        std::fs::write(&path, original).unwrap();
+        assert!(matches!(
+            reserve_at(&path, &key(), "a", 1, 0),
+            Err(QuotaError::Unavailable)
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 }

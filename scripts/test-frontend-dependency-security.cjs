@@ -68,6 +68,26 @@ async function main() {
     if (location.endsWith('node_modules/brace-expansion')) assert.equal(metadata.version, '5.0.12')
     if (location.endsWith('node_modules/source-map-js')) assert.equal(metadata.version, '1.2.2')
     if (location.endsWith('node_modules/postcss-selector-parser')) assert.equal(metadata.version, '7.1.6')
+    if (location.endsWith('node_modules/zod')) assert.equal(metadata.version, '4.6.6')
+  }
+
+  // GHSA-mrhx-c7xc-m3w5: upper bounds must reject before visiting elements.
+  const { z } = require('zod')
+  let visited = 0
+  const element = z.string().superRefine(() => { visited += 1 })
+  for (const [schema, oversized, valid] of [
+    [z.array(element).max(2), Array(10000).fill('x'), ['x']],
+    [z.set(element).max(2), new Set(['a', 'b', 'c']), new Set(['a'])],
+    [z.map(element, element).max(2), new Map([['a', 'a'], ['b', 'b'], ['c', 'c']]), new Map([['a', 'a']])],
+  ]) {
+    visited = 0
+    const result = schema.safeParse(oversized)
+    assert.equal(result.success, false)
+    assert.equal(result.error.issues.length, 1)
+    assert.equal(result.error.issues[0].code, 'too_big')
+    assert.equal(visited, 0, 'Oversized collections must not walk every element')
+    assert.deepEqual(schema.parse(valid), valid)
+    assert.ok(visited > 0, 'Valid inputs still receive element validation')
   }
 
   for (const entry of ['parse', 'compile', 'expand', 'stringify', 'lib/compile', 'lib/expand', 'lib/stringify']) {
