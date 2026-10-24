@@ -142,6 +142,47 @@ pub(crate) fn resolve_engine_runtime_artifacts(path: &Path) -> Option<Vec<PathBu
     Some(artifacts)
 }
 
+/// Fixed ROCm bundle layout, including sibling kpack data. Fail closed on
+/// unreadable/empty trees or links; never follow a directory outside this bundle.
+pub(crate) fn resolve_engine_auxiliary_artifacts(path: &Path) -> Option<Vec<(String, PathBuf)>> {
+    fn visit(dir: &Path, label: &str, out: &mut Vec<(String, PathBuf)>, depth: usize) -> Option<()> {
+        if depth > 16 || fs::symlink_metadata(dir).ok()?.file_type().is_symlink() {
+            return None;
+        }
+        let before = out.len();
+        for entry in fs::read_dir(dir).ok()? {
+            let entry = entry.ok()?;
+            let kind = entry.file_type().ok()?;
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if fs::symlink_metadata(entry.path()).ok()?.file_attributes() & 0x400 != 0 {
+                    return None;
+                }
+            }
+            let name = entry.file_name().into_string().ok()?.to_ascii_lowercase();
+            let label = format!("{label}/{name}");
+            if kind.is_symlink() { return None; }
+            if kind.is_dir() {
+                visit(&entry.path(), &label, out, depth + 1)?;
+            } else if kind.is_file() {
+                out.push((label, entry.path()));
+                if out.len() > 4096 { return None; }
+            } else { return None; }
+        }
+        (out.len() > before).then_some(())
+    }
+    let parent = path.parent()?;
+    let mut files = Vec::new();
+    for (dir, label) in [(parent.join("rocblas"), "rocblas"),
+        (parent.join("hipblaslt"), "hipblaslt"), (parent.parent()?.join(".kpack"), "../.kpack")] {
+        visit(&dir, label, &mut files, 0)?;
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    if files.windows(2).any(|pair| pair[0].0 == pair[1].0) { return None; }
+    Some(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -576,7 +576,9 @@ const STATE_FORMAT: &str = "llama.cpp-slot-state";
 const SLOT_FILENAME: &str = "slot-0.bin";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_HASH_CACHE_ENTRIES: usize = 256;
+// Reviewed ROCm bundles include hundreds of external kernel files. Keep the
+// cache bounded without evicting a whole bundle during its own fingerprint pass.
+const MAX_HASH_CACHE_ENTRIES: usize = 4096;
 const HASH_CACHE_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 
 fn is_manager_slot_filename(filename: &str) -> bool {
@@ -1617,26 +1619,15 @@ impl CheckpointStore {
     }
 
     pub fn content_sha256(&self, path: &Path) -> StoreResult<String> {
+        Ok(self.content_sha256_many(&[path.to_path_buf()])?.remove(0))
+    }
+
+    fn content_sha256_many(&self, paths: &[PathBuf]) -> StoreResult<Vec<String>> {
         self.ensure_root()?;
         let _guard = self
             .hash_cache_lock
             .lock()
             .map_err(|_| CheckpointStoreError::io("fingerprint cache lock failed"))?;
-        let canonical = fs::canonicalize(path).map_err(|_| {
-            CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint input is unavailable",
-            )
-        })?;
-        let before = validate_regular_file(&canonical).map_err(|_| {
-            CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint input is unavailable",
-            )
-        })?;
-        let modified_before = modified_unix_nanos(&before)?;
-        let identity_before = file_identity(&canonical, &before)?;
-        let key = canonical_path_cache_key(&canonical);
         let cache_path = self.root.join("fingerprints-v1.json");
         let mut cache = match read_bounded(&cache_path, MAX_METADATA_BYTES) {
             Ok(bytes) => serde_json::from_slice::<HashCacheFile>(&bytes)
@@ -1647,57 +1638,76 @@ impl CheckpointStore {
         };
         let now_unix_secs = Utc::now().timestamp().max(0) as u64;
         maintain_hash_cache(&mut cache, now_unix_secs);
-        let cached_digest = cache.entries.get(&key).and_then(|entry| {
-            (entry.size == before.len()
-                && entry.modified_unix_nanos == modified_before
-                && entry.file_identity == identity_before
-                && is_lower_hex_digest(&entry.sha256))
-            .then(|| entry.sha256.clone())
-        });
-        if let Some(digest) = cached_digest {
-            if let Some(entry) = cache.entries.get_mut(&key) {
-                entry.last_used_unix_secs = now_unix_secs;
+        let mut digests = Vec::with_capacity(paths.len());
+        for path in paths {
+            let canonical = fs::canonicalize(path).map_err(|_| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::FingerprintUnavailable,
+                    "fingerprint input is unavailable",
+                )
+            })?;
+            let before = validate_regular_file(&canonical).map_err(|_| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::FingerprintUnavailable,
+                    "fingerprint input is unavailable",
+                )
+            })?;
+            let modified_before = modified_unix_nanos(&before)?;
+            let identity_before = file_identity(&canonical, &before)?;
+            let key = canonical_path_cache_key(&canonical);
+            let cached_digest = cache.entries.get(&key).and_then(|entry| {
+                (entry.size == before.len()
+                    && entry.modified_unix_nanos == modified_before
+                    && entry.file_identity == identity_before
+                    && is_lower_hex_digest(&entry.sha256))
+                .then(|| entry.sha256.clone())
+            });
+            if let Some(digest) = cached_digest {
+                if let Some(entry) = cache.entries.get_mut(&key) {
+                    entry.last_used_unix_secs = now_unix_secs;
+                }
+                digests.push(digest);
+                continue;
             }
-            self.write_hash_cache(&cache_path, &cache)?;
-            return Ok(digest);
-        }
 
-        let digest = sha256_file(&canonical).map_err(|_| {
-            CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint input could not be hashed",
-            )
-        })?;
-        let after = validate_regular_file(&canonical).map_err(|_| {
-            CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint input changed while hashing",
-            )
-        })?;
-        let modified_after = modified_unix_nanos(&after)?;
-        let identity_after = file_identity(&canonical, &after)?;
-        if before.len() != after.len()
-            || modified_before != modified_after
-            || identity_before != identity_after
-        {
-            return Err(CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint input changed while hashing",
-            ));
+            let digest = sha256_file(&canonical).map_err(|_| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::FingerprintUnavailable,
+                    "fingerprint input could not be hashed",
+                )
+            })?;
+            let after = validate_regular_file(&canonical).map_err(|_| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::FingerprintUnavailable,
+                    "fingerprint input changed while hashing",
+                )
+            })?;
+            let modified_after = modified_unix_nanos(&after)?;
+            let identity_after = file_identity(&canonical, &after)?;
+            if before.len() != after.len()
+                || modified_before != modified_after
+                || identity_before != identity_after
+            {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::FingerprintUnavailable,
+                    "fingerprint input changed while hashing",
+                ));
+            }
+            cache.entries.insert(
+                key,
+                HashCacheEntry {
+                    size: after.len(),
+                    modified_unix_nanos: modified_after,
+                    file_identity: identity_after,
+                    sha256: digest.clone(),
+                    last_used_unix_secs: now_unix_secs,
+                },
+            );
+            digests.push(digest);
         }
-        cache.entries.insert(
-            key,
-            HashCacheEntry {
-                size: after.len(),
-                modified_unix_nanos: modified_after,
-                file_identity: identity_after,
-                sha256: digest.clone(),
-                last_used_unix_secs: now_unix_secs,
-            },
-        );
         maintain_hash_cache(&mut cache, now_unix_secs);
         self.write_hash_cache(&cache_path, &cache)?;
-        Ok(digest)
+        Ok(digests)
     }
 
     pub fn model_artifact_sha256(&self, model_path: &Path) -> StoreResult<String> {
@@ -1735,7 +1745,8 @@ impl CheckpointStore {
         let mut canonical = Vec::with_capacity(40 + artifacts.len() * 112);
         canonical.extend_from_slice(b"llama-engine-artifact-set-v1\0");
         canonical.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
-        for artifact in &artifacts {
+        let digests = self.content_sha256_many(&artifacts)?;
+        for (artifact, digest) in artifacts.iter().zip(digests) {
             let name = artifact
                 .file_name()
                 .unwrap_or_default()
@@ -1743,7 +1754,29 @@ impl CheckpointStore {
                 .to_ascii_lowercase();
             canonical.extend_from_slice(&(name.len() as u32).to_le_bytes());
             canonical.extend_from_slice(name.as_bytes());
-            canonical.extend_from_slice(self.content_sha256(artifact)?.as_bytes());
+            canonical.extend_from_slice(digest.as_bytes());
+        }
+        let base = sha256_bytes(&canonical);
+        if crate::commands::engine_capabilities::requires_auxiliary_runtime(&base) {
+            self.engine_auxiliary_sha256(engine_path, &base)
+        } else {
+            Ok(base)
+        }
+    }
+
+    fn engine_auxiliary_sha256(&self, engine_path: &Path, base: &str) -> StoreResult<String> {
+        let files = crate::model_artifacts::resolve_engine_auxiliary_artifacts(engine_path)
+            .ok_or_else(|| CheckpointStoreError::new(CheckpointReasonCode::FingerprintUnavailable,
+                "qualified engine auxiliary runtime assets are unavailable"))?;
+        let mut canonical = b"llama-engine-runtime-set-v2\0".to_vec();
+        canonical.extend_from_slice(base.as_bytes());
+        canonical.extend_from_slice(&(files.len() as u32).to_le_bytes());
+        let paths = files.iter().map(|(_, file)| file.clone()).collect::<Vec<_>>();
+        let digests = self.content_sha256_many(&paths)?;
+        for ((label, _), digest) in files.into_iter().zip(digests) {
+            canonical.extend_from_slice(&(label.len() as u32).to_le_bytes());
+            canonical.extend_from_slice(label.as_bytes());
+            canonical.extend_from_slice(digest.as_bytes());
         }
         Ok(sha256_bytes(&canonical))
     }
@@ -5730,6 +5763,54 @@ mod tests {
 
         fs::write(&implementation, b"implementation two").unwrap();
         assert_ne!(store.engine_artifact_sha256(&engine).unwrap(), initial);
+    }
+
+    #[test]
+    fn qualified_auxiliary_identity_detects_kernel_changes_additions_and_missing_roots() {
+        let sandbox = TestSandbox::new("engine-auxiliary-hash");
+        let store = sandbox.store();
+        let bin = sandbox.path.join("bin");
+        for name in ["bin/rocblas", "bin/hipblaslt", ".kpack"] {
+            fs::create_dir_all(sandbox.path.join(name)).unwrap();
+            fs::write(sandbox.path.join(name).join("kernel.dat"), b"kernel one").unwrap();
+        }
+        let engine = bin.join("llama-server.exe");
+        fs::write(&engine, b"launcher").unwrap();
+        let initial = store.engine_auxiliary_sha256(&engine, "base").unwrap();
+        fs::write(bin.join("readme.txt"), b"notes").unwrap();
+        assert_eq!(store.engine_auxiliary_sha256(&engine, "base").unwrap(), initial);
+        let kernel = sandbox.path.join(".kpack/kernel.dat");
+        fs::write(&kernel, b"changed kernel contents").unwrap();
+        let changed = store.engine_auxiliary_sha256(&engine, "base").unwrap();
+        assert_ne!(changed, initial);
+        fs::write(bin.join("rocblas/added.co"), b"additional kernel").unwrap();
+        assert_ne!(store.engine_auxiliary_sha256(&engine, "base").unwrap(), changed);
+        fs::remove_file(kernel).unwrap();
+        assert_eq!(store.engine_auxiliary_sha256(&engine, "base").unwrap_err().reason_code,
+            CheckpointReasonCode::FingerprintUnavailable);
+    }
+
+    #[test]
+    fn batch_hash_cache_retains_a_full_runtime_and_revalidates_changed_files() {
+        let sandbox = TestSandbox::new("batch-artifact-hash");
+        let store = sandbox.store();
+        let files = (0..320).map(|i| {
+            let file = sandbox.path.join(format!("kernel-{i}.dat"));
+            fs::write(&file, format!("kernel {i}")).unwrap();
+            file
+        }).collect::<Vec<_>>();
+        let first = store.content_sha256_many(&files).unwrap();
+        assert_eq!(first.len(), files.len());
+        assert_eq!(store.content_sha256_many(&files).unwrap(), first);
+        let cache: HashCacheFile = serde_json::from_slice(
+            &fs::read(store.root.join("fingerprints-v1.json")).unwrap()).unwrap();
+        assert_eq!(cache.entries.len(), files.len(), "one bundle must not evict itself");
+        fs::write(&files[0], b"changed kernel with different length").unwrap();
+        let changed = store.content_sha256_many(&files).unwrap();
+        assert_ne!(changed[0], first[0]);
+        assert_eq!(changed[1..], first[1..]);
+        fs::remove_file(&files[1]).unwrap();
+        assert!(store.content_sha256_many(&files).is_err());
     }
 
     #[test]

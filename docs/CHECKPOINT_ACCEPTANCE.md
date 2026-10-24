@@ -6,6 +6,9 @@
 It is compiled into the manager; it is not an instance setting or a user-editable
 capability override. Qualification matches the launcher and adjacent runtime DLL
 content digest, not a directory name, version string, help text or release label.
+Newer profiles can also require external runtime kernel/data trees. See the
+[b11849 acceptance and artifact identity](B11849_CHECKPOINT_ACCEPTANCE.md) for
+the separate derived ROCm bundle, native multi-slot matrix and failure isolation.
 The probe cache revision changes when this contract changes. A cached profile ID
 and its draft modes must match the same registry entry at launch.
 

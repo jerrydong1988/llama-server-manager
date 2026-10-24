@@ -16,12 +16,14 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 2;
+pub(crate) const PERSISTENCE_REVISION: u8 = 3;
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistenceProfile {
     id: String,
     artifact_sha256: String,
+    #[serde(default)]
+    base_artifact_sha256: Option<String>,
     #[allow(dead_code)]
     launcher_sha256: String,
     draft_types: Vec<String>,
@@ -35,6 +37,12 @@ fn profiles() -> &'static [PersistenceProfile] {
     static PROFILES: std::sync::OnceLock<Vec<PersistenceProfile>> = std::sync::OnceLock::new();
     PROFILES.get_or_init(|| serde_json::from_str(include_str!("persistence_profiles.json"))
         .expect("embedded persistence profiles must be valid"))
+}
+
+// Newly reviewed bundles may require HIP's external kernel/data trees in
+// addition to adjacent DLLs. Existing reviewed identities remain unchanged.
+pub(crate) fn requires_auxiliary_runtime(base_artifacts: &str) -> bool {
+    profiles().iter().any(|p| p.base_artifact_sha256.as_deref() == Some(base_artifacts))
 }
 
 fn profile_for_artifacts(artifacts: Option<&str>) -> Option<&'static PersistenceProfile> {
@@ -1125,6 +1133,13 @@ mod tests {
             for digest in [&profile.artifact_sha256, &profile.launcher_sha256] {
                 assert_eq!(digest.len(), 64);
                 assert!(digest.bytes().all(|c| c.is_ascii_hexdigit()));
+            }
+            if let Some(base) = &profile.base_artifact_sha256 {
+                assert_eq!(base.len(), 64);
+                assert!(base.bytes().all(|c| c.is_ascii_hexdigit()));
+                assert_ne!(base, &profile.artifact_sha256);
+                assert!(profile_for_artifacts(Some(base)).is_none());
+                assert!(requires_auxiliary_runtime(base));
             }
             assert!(profile.max_context > 0 && profile.max_context <= 4096);
             assert!(!profile.evidence.is_empty());
