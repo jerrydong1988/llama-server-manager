@@ -1,5 +1,6 @@
 // Opt-in Windows/ROCm integration campaign. Never uses the default manager root.
 // --bin DIR --root NEW_DIR --engine EXE --model GGUF --mtp GGUF [--dflash GGUF]
+// --lookup-only true repeats only managed n-gram Windows exit/write-failure checks.
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
@@ -8,6 +9,9 @@ const assert = require('node:assert/strict')
 const { managementClient, sleep } = require('./lib/management-client.cjs')
 const { inspectSlotFile, assertInference, memorySampler, processMemory } = require('./lib/checkpoint-evidence.cjs')
 const args = Object.fromEntries(Array.from({ length: (process.argv.length - 2) / 2 }, (_, i) => [process.argv[2 + 2 * i].slice(2), process.argv[3 + 2 * i]]))
+const lookupOnly = args['lookup-only'] === 'true'
+assert.ok(args['lookup-only'] === undefined || lookupOnly, '--lookup-only must be true when supplied')
+assert.ok(!lookupOnly || !['failure-only', 'idle-only', 'boundary-only', 'scope-checks'].some(key => args[key]), '--lookup-only cannot be combined with another campaign selector')
 assert.equal(process.platform, 'win32')
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp']) assert.ok(path.isAbsolute(args[key] || ''), `--${key} must be absolute`)
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp', ...(args.dflash ? ['dflash'] : [])]) args[key] = path.resolve(args[key])
@@ -341,24 +345,43 @@ async function main() {
     assert.equal(results()[0].outcome, 'candidate_committed_flush_unverified')
     assert.equal(fs.existsSync(seed), false)
     record('windows-graceful-stop-publishes-private-candidate', { started, stopped, gpu, timings: generated.timings, results: results() })
-    const oldManifest = sha(latest())
+    const oldPointer = latest(), oldManifest = sha(oldPointer)
+    const oldGeneration = JSON.parse(fs.readFileSync(oldPointer))
+    assert.match(oldGeneration.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    const oldPayload = path.join(path.dirname(oldPointer), `${oldGeneration.id}.bin`)
+    const verifyOldPayload = () => {
+      assert.equal(fs.statSync(oldPayload).size, oldGeneration.bytes)
+      assert.equal(sha(oldPayload), oldGeneration.sha256, 'committed n-gram payload changed')
+    }
+    verifyOldPayload()
+    record('committed-ngram-payload-baseline', { generation: oldGeneration })
     started = await start(); await completion(basePrompt + '391 391 ', 64)
     // Denied native write must not be reported as a verified flush or replace old bytes.
     const work = walk(lookupRoot).find(f => path.basename(f).startsWith('work-') && f.endsWith('.bin'))
     assert.ok(work); fs.chmodSync(work, 0o444)
     try { await stop() } finally { if (fs.existsSync(work)) fs.chmodSync(work, 0o666) }
     assert.equal(sha(latest()), oldManifest)
+    verifyOldPayload()
     assert.equal(results()[0].full_flush_verified, false)
     record('denied-write-retains-old-generation', { results: results() })
     started = await start(); await completion(basePrompt + '391 ', 64); killOwned(started.pid)
     await sleep(1200); await stop()
     assert.equal(sha(latest()), oldManifest)
+    verifyOldPayload()
     record('forced-exit-retains-old-generation', { pid: started.pid, results: results() })
     started = await start(); await completion(basePrompt + '391 391 391 ', 64)
     await shutdownService()
     assert.equal(results()[0].clean_exit, true)
+    verifyOldPayload()
+    assert.equal(results()[0].full_flush_verified, false)
     record('background-service-shutdown-flushes-private-copy', { pid: started.pid, results: results() })
+    record('old-ngram-payload-survives-write-failure-force-and-clean-exit', { generation: oldGeneration })
     await client.call('service.start')
+    if (lookupOnly) {
+      report.scope = 'managed n-gram Windows lifecycle only; no KV/draft qualification'
+      report.passed = true
+      return
+    }
   }
 
   const cases = [...(args['boundary-only'] ? [] : [['mtp', args.mtp, 2], ...(args.dflash ? [['dflash', args.dflash, 2]] : []), ['simple', args.model, 2]]),
