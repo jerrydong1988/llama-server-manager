@@ -292,6 +292,27 @@ test('a cancelled cluster scan cannot overwrite or stop its replacement', async 
   await expect(page.getByRole('button', { name: '扫描局域网', exact: true })).toBeVisible()
 })
 
+test('a management refresh supersedes an older cluster page scan', async ({ page }) => {
+  await openTab(page, 'cluster', 'cluster-scan-race')
+  await page.getByRole('button', { name: '扫描局域网', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'scan_workers_tcp').length
+  ))).toBe(1)
+  const reads = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'get_workers').length)
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent('management-config-changed', {
+    operation: 'cluster.remove', revision: 0, status: 'succeeded',
+  }))
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'get_workers').length
+  ))).toBe(reads + 1)
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.releaseWorkerScan([{
+    id: 'removed-worker', host: '192.168.1.10', port: 50052, name: 'Removed Worker', origin: 'manual',
+    devices: [], status: 'Offline', auto_discovered: false,
+  }]))
+  await expect(page.getByRole('button', { name: '扫描局域网', exact: true })).toBeVisible()
+  await expect(page.getByText('Removed Worker', { exact: true })).toHaveCount(0)
+})
+
 test('a newly added cluster worker is immediately connection-tested', async ({ page }) => {
   await openTab(page, 'cluster', 'cluster-add-worker')
 

@@ -29,14 +29,17 @@ function execute(file, args, options = {}) {
     child.stderr?.on('data', chunk => { stderr += chunk })
     const timer = setTimeout(() => { child.kill(); reject(new Error(`process timed out: ${path.basename(file)}`)) }, 90000)
     child.on('error', error => { clearTimeout(timer); reject(error) })
-    child.on('close', code => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
+    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout, stderr }) })
     if (options.input) child.stdin.end(options.input)
   })
 }
 
 async function call(operation, argumentsValue = {}, extra = [], success = true) {
   const result = await execute(cli, ['--app', executable, '--data-dir', data, ...operation.split('.'), '--args', JSON.stringify(argumentsValue), ...extra])
-  const response = JSON.parse(result.stdout || result.stderr)
+  let response
+  try { response = JSON.parse(result.stdout || result.stderr) } catch (cause) {
+    throw new Error(`${operation}: invalid CLI JSON; exit=${result.code}, signal=${result.signal}; stdout=${JSON.stringify(result.stdout.slice(0, 4096))}; stderr=${JSON.stringify(result.stderr.slice(0, 4096))}`, { cause })
+  }
   if (success) assert.equal(result.code, 0, `${operation}: ${JSON.stringify(response)}`)
   checks++
   return response

@@ -4,6 +4,7 @@ import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
 import { getManagementRevision, hasUnsavedManagementChanges } from './managementRevision'
 import { beginEngineInventoryRequest, beginModelInventoryRequest, isCurrentEngineInventoryRequest, isCurrentModelInventoryRequest } from './bootstrap'
+import { refreshWorkerInventory } from './workerInventory'
 import type {
   AppState,
   CheckpointStatus,
@@ -48,7 +49,6 @@ let runtimeManagedIds = new Set<string>()
 let lastReportedRuntimeStatusError: string | null = null
 let runtimeBridgeWarnings = new Set<string>()
 let managementDownloadRefresh = 0
-let managementWorkerRefresh = 0
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -209,10 +209,7 @@ export function registerGlobalStoreListeners(
       }).catch(error => { if (isCurrentModelInventoryRequest(generation)) report(error) })
     }
     if (operation.startsWith('cluster.')) {
-      const generation = ++managementWorkerRefresh
-      void invoke<AppState['workers']>('get_workers').then(workers => {
-        if (generation === managementWorkerRefresh) store.setState({ workers })
-      }).catch(error => { if (generation === managementWorkerRefresh) report(error) })
+      void refreshWorkerInventory(workers => store.setState({ workers })).catch(report)
     }
     if (operation.startsWith('downloads.')) {
       const refresh = ++managementDownloadRefresh
