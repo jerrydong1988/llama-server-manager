@@ -384,13 +384,14 @@ pub async fn dispatch(app: &tauri::AppHandle, name: &str, args: &Value) -> Resul
             } else {
                 config::resolve_directory_path(&path)
             };
+            let directory_key = crate::path_utils::directory_identity_key(&path);
             let updated = config::management_update(&state, &text(args, "revision"), |global| {
                 let directories = if purpose == "engine" {
                     &mut global.engine_dirs
                 } else {
                     &mut global.model_dirs
                 };
-                directories.retain(|old| !crate::path_utils::paths_equal(&config::resolve_directory_path(old), &path));
+                directories.retain(|old| crate::path_utils::directory_identity_key(&config::resolve_directory_path(old)) != directory_key);
                 if name.ends_with("add") {
                     directories.push(path.to_string_lossy().into());
                 }

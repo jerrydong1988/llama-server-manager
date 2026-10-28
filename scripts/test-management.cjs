@@ -138,7 +138,8 @@ async function run() {
   }
   let directoryRevision = (await call('service.status')).data.revision
   await mutate('directories.remove', { purpose: 'model', path: path.join(data, 'legacy-models'), revision: directoryRevision })
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8')).model_dirs, ['models'])
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8')).model_dirs, ['models'],
+    `relative model directory removal: requested=${path.join(data, 'legacy-models')} host=${(await call('service.status')).data.data_directory}`)
   directoryRevision = (await call('service.status')).data.revision
   await mutate('paths.authorize', { purpose: 'model', path: modelDir })
   await mutate('directories.add', { purpose: 'model', path: modelDir, revision: directoryRevision })
