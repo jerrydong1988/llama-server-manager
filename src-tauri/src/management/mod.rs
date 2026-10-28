@@ -3,6 +3,7 @@ mod catalog;
 pub(crate) mod desktop;
 mod extended;
 mod history;
+mod journal;
 mod operations;
 mod scheduling;
 #[allow(dead_code)]
@@ -168,19 +169,9 @@ impl Host {
             {
                 return Err(Failure::new("BUSY", "management task queue is full"));
             }
-            while tasks.len() >= 200 {
-                if let Some(index) = tasks
-                    .iter()
-                    .position(|task| task.status != "queued" && task.status != "running")
-                {
-                    tasks.remove(index);
-                } else {
-                    break;
-                }
-            }
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().timestamp_millis();
-            tasks.push(Task {
+            journal::enqueue(&self.directory, &mut tasks, Task {
                 id: id.clone(),
                 operation: request.operation.clone(),
                 request_digest: digest,
@@ -190,11 +181,7 @@ impl Host {
                 updated_at: now,
                 result: None,
                 error: None,
-            });
-            if let Err(error) = persist_tasks(&self.directory, &tasks) {
-                tasks.pop();
-                return Err(error);
-            }
+            })?;
             id
         };
         self.notify_tasks_changed(&task_id);
@@ -223,6 +210,15 @@ impl Host {
                 Ok(false) => { host.cancellations.lock().unwrap().remove(&task_copy); return; },
                 Err(error) => {
                     eprintln!("management task persistence failed: {}", error.message);
+                    // No side effect has begun. Release queue capacity and tell
+                    // clients why this task will not run, even if storage is
+                    // still unavailable. A later journal write persists it;
+                    // restart recovery never replays the older queued record.
+                    let failure = safe_error(Failure::new("TASK_START_PERSIST_FAILED",
+                        format!("operation was not executed: {}", error.message)));
+                    if let Err(error) = host.update_task(&task_copy, "failed", Some(Err(failure))) {
+                        eprintln!("management task failure persistence failed: {}", error.message);
+                    }
                     host.cancellations.lock().unwrap().remove(&task_copy);
                     return;
                 }
@@ -293,11 +289,7 @@ impl Host {
 
     fn begin_task(&self, id: &str) -> Result<bool, Failure> {
         let mut tasks = self.tasks.lock().unwrap();
-        let task = tasks.iter_mut().find(|task| task.id == id).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))?;
-        if task.status == "cancelled" { return Ok(false); }
-        task.status = "running".into();
-        task.updated_at = chrono::Utc::now().timestamp_millis();
-        persist_tasks(&self.directory, &tasks)?;
+        if !journal::begin(&self.directory, &mut tasks, id)? { return Ok(false); }
         drop(tasks);
         self.notify_tasks_changed(id);
         Ok(true)
@@ -349,10 +341,13 @@ impl Host {
             Some(Err(error)) => task.error = Some(error),
             None => {}
         }
-        persist_tasks(&self.directory, &tasks)?;
+        // Completion describes what actually happened, even when the journal
+        // cannot record it. Publish that result instead of hiding it from GUI
+        // listeners; never roll back a completed side effect to running.
+        let persisted = persist_tasks(&self.directory, &tasks);
         drop(tasks);
         self.notify_tasks_changed(id);
-        Ok(())
+        persisted
     }
 }
 

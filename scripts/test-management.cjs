@@ -96,12 +96,54 @@ async function run() {
       launch_mode: id === 'shared-manual' ? 'manual' : 'managed',
       manual_command: `--model "${model}" --host 127.0.0.1`, explicit_overrides: [],
     }])), instance_order: ['shared-managed', 'shared-manual'],
-    model_dirs: [], engine_dirs: [], default_engine_id: '', running: {},
+    model_dirs: ['models', 'legacy-models'], engine_dirs: ['fixture-engine', 'missing-engine'], default_engine_id: '', running: {},
   }), 'utf8')
+
+  // Seed the bounded journal before host startup, then fail an enqueue commit.
+  // No running task or production data is involved in this fault injection.
+  const journal = path.join(data, 'management', 'tasks.json')
+  fs.mkdirSync(path.dirname(journal))
+  const seededHistory = Array.from({ length: 200 }, (_, i) => ({
+    id: `seed-${i}`, operation: 'models.refresh',
+    request_digest: crypto.createHash('sha256').update(JSON.stringify({ arguments: {}, operation: 'models.refresh' })).digest('hex'),
+    idempotency_key: `seed-key-${i}`, status: 'succeeded', created_at: i, updated_at: i, result: {}, error: null,
+  }))
+  fs.writeFileSync(journal, JSON.stringify(seededHistory), 'utf8')
 
   const started = await call('service.start')
   hostPid = started.data.pid
   assert.equal(started.data.protocol, 1)
+  const journalBackup = journal + '.test-backup'
+  fs.renameSync(journal, journalBackup); fs.mkdirSync(journal)
+  try {
+    assert.equal((await call('engines.rename', { id: 'missing', name: 'not executed' }, [], false)).ok, false)
+    assert.equal((await call('tasks.list')).data.length, 200)
+    assert.equal((await call('tasks.get', { id: 'seed-0' })).data.idempotency_key, 'seed-key-0')
+  } finally { fs.rmdirSync(journal); fs.renameSync(journalBackup, journal) }
+  const retainedReplay = await call('models.refresh', {}, ['--idempotency-key', 'seed-key-0'])
+  assert.equal(retainedReplay.data.replayed, true)
+  assert.equal(retainedReplay.data.task_id, 'seed-0')
+  await call('tasks.delete', { id: 'seed-199' })
+  const retainedHistory = JSON.parse(fs.readFileSync(journal, 'utf8'))
+  assert.equal(retainedHistory.length, 199)
+  assert.equal(retainedHistory[0].id, 'seed-0')
+  await call('tasks.clear')
+
+  // Removal uses the same data-directory base as reads, including missing
+  // directories, which cannot be normalized with filesystem canonicalization.
+  for (const directory of (await call('engines.list')).data.directories) {
+    const revision = (await call('service.status')).data.revision
+    await mutate('directories.remove', { purpose: 'engine', path: directory, revision })
+    assert.ok(!(await call('engines.list')).data.directories.includes(directory))
+  }
+  let directoryRevision = (await call('service.status')).data.revision
+  await mutate('directories.remove', { purpose: 'model', path: path.join(data, 'legacy-models'), revision: directoryRevision })
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8')).model_dirs, ['models'],
+    `relative model directory removal: requested=${path.join(data, 'legacy-models')} host=${(await call('service.status')).data.data_directory}`)
+  directoryRevision = (await call('service.status')).data.revision
+  await mutate('paths.authorize', { purpose: 'model', path: modelDir })
+  await mutate('directories.add', { purpose: 'model', path: modelDir, revision: directoryRevision })
+  assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8')).model_dirs.length, 1, 'adding an absolute alias must not duplicate the relative root')
   assert.equal((await rawRequest({ token: 'wrong-token' })).error.code, 'UNAUTHORIZED')
   assert.equal((await rawRequest({ version: 999 })).error.code, 'VERSION_MISMATCH')
   assert.equal((await rawRequest({ operation: 'no.such.operation' })).error.code, 'NOT_FOUND')
@@ -282,6 +324,34 @@ async function run() {
   fs.unlinkSync(path.join(engineDir, 'probe-delay-ms'))
   assert.equal((await call('engines.list')).data.engines[0].name, 'Agent test engine')
   assert.equal((await call('system.port', { port })).data, true)
+  // Fail queued -> running after admission. The operation must never execute,
+  // must report a terminal error, and must not strand active queue capacity.
+  fs.writeFileSync(path.join(engineDir, 'probe-delay-ms'), '3000', 'utf8')
+  const faultProbe = await call('engines.probe_all')
+  for (let i = 0; i < 100; i++) {
+    if ((await call('tasks.get', { id: faultProbe.data.task_id })).data.status === 'running') break
+    await wait(20)
+  }
+  assert.equal((await call('tasks.get', { id: faultProbe.data.task_id })).data.status, 'running')
+  const faultRename = await call('engines.rename', { id: engineId, name: 'Must never be applied' }, ['--idempotency-key', 'fault-rename'])
+  assert.equal((await call('tasks.get', { id: faultRename.data.task_id })).data.status, 'queued')
+  fs.renameSync(journal, journalBackup); fs.mkdirSync(journal)
+  let failedStart
+  try {
+    for (let i = 0; i < 200; i++) {
+      failedStart = (await call('tasks.get', { id: faultRename.data.task_id })).data
+      if (failedStart.status === 'failed') break
+      await wait(50)
+    }
+    assert.equal(failedStart.status, 'failed')
+    assert.equal(failedStart.error.code, 'TASK_START_PERSIST_FAILED')
+    assert.equal((await call('engines.list')).data.engines[0].name, 'Agent test engine')
+  } finally { fs.rmdirSync(journal); fs.renameSync(journalBackup, journal); fs.unlinkSync(path.join(engineDir, 'probe-delay-ms')) }
+  assert.equal((await call('tasks.cancel', { id: faultRename.data.task_id })).data.status, 'failed')
+  assert.equal((await call('engines.rename', { id: engineId, name: 'Must never be applied' }, ['--idempotency-key', 'fault-rename'])).data.replayed, true)
+  await mutate('engines.rename', { id: engineId, name: 'Agent test engine' })
+  assert.equal(JSON.parse(fs.readFileSync(journal, 'utf8')).find(task => task.id === faultRename.data.task_id).status, 'failed')
+  await call('tasks.delete', { id: faultRename.data.task_id })
   await call('runtime.status')
   await mutate('runtime.clear_error', {})
   await call('system.autostart')
@@ -429,12 +499,12 @@ async function run() {
   // A crash can leave queued/running records on disk. Recovery must preserve
   // terminal history, mark unfinished work interrupted, and advance its timestamp.
   const journalPath = path.join(data, 'management', 'tasks.json')
-  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'))
-  for (const status of ['queued', 'running']) journal.push({
+  const recoveredJournal = JSON.parse(fs.readFileSync(journalPath, 'utf8'))
+  for (const status of ['queued', 'running']) recoveredJournal.push({
     id: `journal-${status}`, operation: 'models.refresh', request_digest: `journal-${status}`,
     idempotency_key: null, status, created_at: 1, updated_at: 1, result: null, error: null,
   })
-  fs.writeFileSync(journalPath, JSON.stringify(journal), 'utf8')
+  fs.writeFileSync(journalPath, JSON.stringify(recoveredJournal), 'utf8')
   // Terminal and paused tasks live on disk, outside the active scheduler queue.
   const history = ['paused', 'completed', 'error'].map((status, index) => ({
     id: `history-${status}`, repo_id: 'fixture/history', source: 'huggingface',

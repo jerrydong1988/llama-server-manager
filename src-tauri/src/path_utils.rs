@@ -77,6 +77,21 @@ pub(crate) fn paths_equal(left: &Path, right: &Path) -> bool {
     path_identity_key(left) == path_identity_key(right)
 }
 
+/// Directory configuration can outlive the directory itself. Resolve the
+/// nearest accessible ancestor so Windows short names (and directory aliases)
+/// compare consistently even when the remaining suffix no longer exists.
+/// This is an identity comparison, not an authorization or containment check.
+pub(crate) fn directory_identity_key(path: &Path) -> String {
+    for ancestor in path.ancestors() {
+        if let Ok(canonical) = std::fs::canonicalize(ancestor) {
+            if let Ok(suffix) = path.strip_prefix(ancestor) {
+                return path_identity_key(&canonical.join(suffix));
+            }
+        }
+    }
+    path_identity_key(path)
+}
+
 fn path_is_within_text(candidate: &str, root: &str, windows_semantics: bool) -> bool {
     let candidate = normalize_path_text(candidate, windows_semantics);
     let root = normalize_path_text(root, windows_semantics);
@@ -113,6 +128,29 @@ pub(crate) fn path_is_within(candidate: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_identity_resolves_short_names_with_missing_descendants() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        let root = std::env::temp_dir().join(format!("lsm-directory-identity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let outcome = std::panic::catch_unwind(|| {
+            let canonical = std::fs::canonicalize(&root).unwrap();
+            let input: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+            let mut output = vec![0u16; 32768];
+            let length = unsafe { GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32) } as usize;
+            assert!(length > 0 && length < output.len(), "{}", std::io::Error::last_os_error());
+            let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&output[..length]));
+            for suffix in ["", "missing", "missing/nested"] {
+                assert_eq!(directory_identity_key(&short.join(suffix)), directory_identity_key(&canonical.join(suffix)));
+            }
+        });
+        // Preserve cleanup even when an assertion fails.
+        std::fs::remove_dir(&root).unwrap();
+        outcome.unwrap();
+    }
 
     #[test]
     fn windows_drive_aliases_share_one_identity() {

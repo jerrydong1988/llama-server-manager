@@ -18,12 +18,16 @@ pub fn management_revision() -> u64 {
     MANAGEMENT_REVISION.load(std::sync::atomic::Ordering::Acquire)
 }
 
+pub(crate) fn resolve_directory_path(directory: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(directory);
+    if path.is_relative() { crate::utils::get_data_dir().join(path) } else { path }
+}
+
 pub fn management_config_revision(global: &GlobalConfig) -> String {
     let roots = |directories: &[String]| {
         let mut seen=HashSet::new();
         directories.iter().map(|directory| {
-            let path=std::path::PathBuf::from(directory);
-            crate::path_utils::path_identity_key(&if path.is_relative() {crate::utils::get_data_dir().join(path)}else{path})
+            crate::path_utils::path_identity_key(&resolve_directory_path(directory))
         }).filter(|path|seen.insert(path.clone())).collect::<Vec<_>>()
     };
     let value = serde_json::json!({
