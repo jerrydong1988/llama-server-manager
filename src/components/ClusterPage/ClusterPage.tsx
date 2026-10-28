@@ -3,6 +3,7 @@ import { ask } from '@tauri-apps/plugin-dialog'
 import { invokeApp as invoke } from '../../lib/ipc'
 import { Check, Copy, Network, Play, Plus, Radio, RefreshCw, Server, Square, StopCircle, Trash2, X, Zap } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
+import { refreshWorkerInventory } from '../../store/workerInventory'
 import { useI18n } from '../../i18n'
 import { getClusterLabels } from '../../i18n/pageLabels'
 import { formatPathForDisplay, pathsEqual } from '../../utils/path'
@@ -139,22 +140,20 @@ export default function ClusterPage() {
   }, [showAddDialog, showLaunchWizard, showLocalLaunch])
 
   useEffect(() => {
-    void invoke<WorkerInfo[]>('get_workers')
-      .then(setWorkers)
+    let active = true
+    void refreshWorkerInventory(setWorkers, 'get_workers', () => active)
       .catch(error => {
         console.error('Failed to load workers:', error)
         addRuntimeWarning(`${labels.workerLoadFailed}: ${errorMessage(error)}`)
       })
+    return () => { active = false }
   }, [addRuntimeWarning, labels.workerLoadFailed, setWorkers])
 
   const handleScan = async () => {
     const generation = ++scanGenerationRef.current
     setClusterScanning(true)
     try {
-      const discovered: WorkerInfo[] = await invoke('scan_workers_tcp')
-      if (generation === scanGenerationRef.current) {
-        setWorkers(discovered)
-      }
+      await refreshWorkerInventory(setWorkers, 'scan_workers_tcp', () => generation === scanGenerationRef.current)
     } catch (error) {
       if (generation === scanGenerationRef.current) {
         console.error('Scan failed:', error)
@@ -217,8 +216,7 @@ export default function ClusterPage() {
           await invoke('stop_local_worker', { port: localPort }).catch(() => {})
           throw error
         }
-        const all: WorkerInfo[] = await invoke('get_workers')
-        setWorkers(all)
+        await refreshWorkerInventory(setWorkers)
         setShowLocalLaunch(false)
       }
     } catch (error) {
@@ -279,8 +277,7 @@ export default function ClusterPage() {
           await invoke('stop_ssh_tunnel', { port: tunnelPort }).catch(() => {})
           throw error
         }
-        const all: WorkerInfo[] = await invoke('get_workers')
-        setWorkers(all)
+        await refreshWorkerInventory(setWorkers)
         setShowLaunchWizard(false)
         setLaunchStep(0)
       } else {
@@ -310,8 +307,7 @@ export default function ClusterPage() {
     }
     try {
       await invoke('add_worker', { host: formData.host, port: formData.port, name: formData.name, origin: 'manual' })
-      const all: WorkerInfo[] = await invoke('get_workers')
-      setWorkers(all)
+      const all = await refreshWorkerInventory(setWorkers)
       setShowAddDialog(false)
       const added = all.find(worker => worker.host === formData.host && worker.port === formData.port)
       if (added) await handleTest(added)
@@ -323,8 +319,7 @@ export default function ClusterPage() {
   const handleApprove = async (worker: WorkerInfo) => {
     try {
       await invoke('approve_worker', { id: worker.id })
-      const all: WorkerInfo[] = await invoke('get_workers')
-      setWorkers(all)
+      await refreshWorkerInventory(setWorkers)
     } catch (error) {
       addRuntimeWarning(`worker approval failed: ${errorMessage(error)}`)
     }
@@ -338,6 +333,7 @@ export default function ClusterPage() {
     try {
       await invoke('remove_worker', { id: worker.id })
       removeWorker(worker.id)
+      await refreshWorkerInventory(setWorkers)
     } catch (error) {
       console.error('Failed to remove worker:', error)
     }

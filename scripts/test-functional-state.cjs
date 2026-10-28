@@ -118,6 +118,40 @@ async function managementInventoryOrdering() {
     }
   }
 }
+async function workerPageRefreshOrdering() {
+  const { refreshWorkerInventory } = require(path.join(root, 'src/store/workerInventory.ts'))
+  reset(); state.instances = []; state.workers = []
+  const pending = []
+  const flush = () => new Promise(resolve => setImmediate(resolve))
+  invokeHook = name => ['get_workers', 'scan_workers_tcp'].includes(name)
+    ? new Promise((resolve, reject) => pending.push({ resolve, reject })) : Promise.resolve({})
+  const apply = workers => set({ workers })
+  const changed = () => emit('management-config-changed', { operation: 'cluster.remove', revision: 0, status: 'succeeded' })
+  const pageRead = refreshWorkerInventory(apply)
+  changed()
+  pending[1].resolve([{ id: 'management' }]); await flush()
+  pending[0].reject(new Error('obsolete page read')); await pageRead
+  assert.equal(state.workers[0].id, 'management')
+  assert.equal(state.runtimeWarnings.length, 0)
+  changed()
+  const scan = refreshWorkerInventory(apply, 'scan_workers_tcp')
+  pending[3].resolve([{ id: 'page-scan' }]); await scan
+  pending[2].resolve([{ id: 'obsolete-management' }]); await flush()
+  assert.equal(state.workers[0].id, 'page-scan', 'page scans supersede earlier management refreshes')
+  const beforeDelete = refreshWorkerInventory(apply)
+  apply([])
+  const afterDelete = refreshWorkerInventory(apply)
+  pending[4].resolve([{ id: 'deleted' }]); await beforeDelete
+  assert.deepEqual(state.workers, [], 'local removal invalidates in-flight reads')
+  pending[5].resolve([]); await afterDelete
+  let active = true
+  const cancelled = refreshWorkerInventory(apply, 'scan_workers_tcp', () => active)
+  active = false; pending[6].reject(new Error('cancelled scan')); await cancelled
+  assert.deepEqual(state.workers, [])
+  const current = refreshWorkerInventory(apply)
+  pending[7].reject(new Error('current failure'))
+  await assert.rejects(current, /current failure/)
+}
 ;(async () => {
   reset()
   registerGlobalStoreListeners({ getState: get, setState: set }, [])
@@ -128,5 +162,6 @@ async function managementInventoryOrdering() {
   await resume(true)
   await enqueueFailure()
   await managementInventoryOrdering()
-  console.log('Functional state regressions passed: early completion, resume snapshots, stale runs, enqueue rollback, management inventory ordering.')
+  await workerPageRefreshOrdering()
+  console.log('Functional state regressions passed: early completion, resume snapshots, stale runs, enqueue rollback, management and page inventory ordering.')
 })().catch(error => { console.error(error); process.exitCode = 1 })
