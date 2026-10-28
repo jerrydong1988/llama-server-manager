@@ -3,6 +3,7 @@ import { listen, type Event } from '@tauri-apps/api/event'
 import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
 import { getManagementRevision, hasUnsavedManagementChanges } from './managementRevision'
+import { beginEngineInventoryRequest, beginModelInventoryRequest, isCurrentEngineInventoryRequest, isCurrentModelInventoryRequest } from './bootstrap'
 import type {
   AppState,
   CheckpointStatus,
@@ -47,6 +48,7 @@ let runtimeManagedIds = new Set<string>()
 let lastReportedRuntimeStatusError: string | null = null
 let runtimeBridgeWarnings = new Set<string>()
 let managementDownloadRefresh = 0
+let managementWorkerRefresh = 0
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -195,13 +197,22 @@ export function registerGlobalStoreListeners(
       }
     }
     if (operation.startsWith('engines.')) {
-      void invoke<AppState['engines']>('get_engines').then(engines => store.setState({ engines })).catch(report)
+      const generation = beginEngineInventoryRequest()
+      void invoke<AppState['engines']>('get_engines').then(engines => {
+        if (isCurrentEngineInventoryRequest(generation)) store.setState({ engines })
+      }).catch(error => { if (isCurrentEngineInventoryRequest(generation)) report(error) })
     }
     if (operation.startsWith('models.')) {
-      void invoke<AppState['models']>('get_models').then(models => store.setState({ models })).catch(report)
+      const generation = beginModelInventoryRequest()
+      void invoke<AppState['models']>('get_models').then(models => {
+        if (isCurrentModelInventoryRequest(generation)) store.setState({ models })
+      }).catch(error => { if (isCurrentModelInventoryRequest(generation)) report(error) })
     }
     if (operation.startsWith('cluster.')) {
-      void invoke<AppState['workers']>('get_workers').then(workers => store.setState({ workers })).catch(report)
+      const generation = ++managementWorkerRefresh
+      void invoke<AppState['workers']>('get_workers').then(workers => {
+        if (generation === managementWorkerRefresh) store.setState({ workers })
+      }).catch(error => { if (generation === managementWorkerRefresh) report(error) })
     }
     if (operation.startsWith('downloads.')) {
       const refresh = ++managementDownloadRefresh

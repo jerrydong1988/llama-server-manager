@@ -81,6 +81,43 @@ async function enqueueFailure() {
   assert.deepEqual(state.downloadQueue, [])
   assert.equal(state.runtimeWarnings.length, 1)
 }
+async function managementInventoryOrdering() {
+  const bootstrap = require(path.join(root, 'src/store/bootstrap.ts'))
+  const flush = () => new Promise(resolve => setImmediate(resolve))
+  for (const [operation, field, command, beginScan, applyScan] of [
+    ['engines.rename', 'engines', 'get_engines', bootstrap.beginEngineInventoryRequest,
+      (items, generation) => bootstrap.applyEngineInventory(items, set, {}, generation)],
+    ['models.delete', 'models', 'get_models', bootstrap.beginModelInventoryRequest,
+      (items, generation) => bootstrap.applyModelInventory(items.map(item => ({ ...item, path: `/models/${item.id}.gguf` })), get, set, {}, generation)],
+    ['cluster.remove', 'workers', 'get_workers'],
+  ]) {
+    reset(); state.instances = []
+    const pending = []
+    invokeHook = name => name === command
+      ? new Promise((resolve, reject) => pending.push({ resolve, reject })) : Promise.resolve({})
+    const changed = () => emit('management-config-changed', { operation, revision: 0, status: 'succeeded' })
+    const olderScan = beginScan?.()
+    changed(); changed()
+    assert.equal(pending.length, 2)
+    pending[1].resolve([{ id: 'new' }]); await flush()
+    pending[0].resolve([{ id: 'old' }]); await flush()
+    if (applyScan) applyScan([{ id: 'older-scan' }], olderScan)
+    assert.equal(state[field][0].id, 'new', `${field}: stale replies and scans must not overwrite new state`)
+    changed(); changed()
+    pending[3].resolve([{ id: 'newest' }]); await flush()
+    pending[2].reject(new Error('old request failed')); await flush()
+    assert.equal(state.runtimeWarnings.length, 0, 'ignore failures from superseded refreshes')
+    changed()
+    if (beginScan) {
+      applyScan([{ id: 'manual-scan' }], beginScan())
+      pending[4].resolve([{ id: 'late-management' }]); await flush()
+      assert.equal(state[field][0].id, 'manual-scan', 'new scans also supersede management refreshes')
+    } else {
+      pending[4].reject(new Error('current request failed')); await flush()
+      assert.equal(state.runtimeWarnings.length, 1, 'current failures remain visible')
+    }
+  }
+}
 ;(async () => {
   reset()
   registerGlobalStoreListeners({ getState: get, setState: set }, [])
@@ -90,5 +127,6 @@ async function enqueueFailure() {
   await resume(false)
   await resume(true)
   await enqueueFailure()
-  console.log('Functional state regressions passed: early completion, resume snapshots, stale runs, enqueue rollback.')
+  await managementInventoryOrdering()
+  console.log('Functional state regressions passed: early completion, resume snapshots, stale runs, enqueue rollback, management inventory ordering.')
 })().catch(error => { console.error(error); process.exitCode = 1 })
