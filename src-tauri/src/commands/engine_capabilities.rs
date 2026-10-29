@@ -981,6 +981,8 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--models-dir"
         | "--models-preset"
         | "--models-max"
+        | "--models-memory-margin"
+        | "--connect-code"
         | "--sse-ping-interval"
         | "--tags"
         | "--media-path"
@@ -998,6 +1000,7 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--mmproj-offload"
         | "--skip-chat-parsing"
         | "--reasoning-preserve"
+        | "--connect"
         | "--no-reasoning-preserve"
         | "--jinja"
         | "--no-jinja"
@@ -1701,6 +1704,42 @@ mod tests {
         let mut unknown = detected(&["-m"]);
         unknown.status = "partial".to_string();
         assert!(unsupported_command_flags(&command, &unknown).is_empty());
+    }
+
+    #[test]
+    fn v080_flags_are_checked_against_the_selected_engine() {
+        let flags = extract_supported_flags(
+            "--connect  open tunnel\n--connect-code CODE  connection code\n--models-memory-margin N  free MiB\n",
+        );
+        for arguments in [
+            vec![
+                "--connect",
+                "--connect-code",
+                "0123456789012345678901234567890123456789",
+                "--models-memory-margin",
+                "1024",
+            ],
+            vec![
+                "--connect",
+                "--connect-code=0123456789012345678901234567890123456789",
+                "--models-memory-margin=1024",
+            ],
+        ] {
+            let command = std::iter::once("llama-server")
+                .chain(arguments)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let current = EngineCapabilities {
+                status: "detected".into(),
+                supported_flags: flags.clone(),
+                ..EngineCapabilities::default()
+            };
+            assert!(unsupported_command_flags(&command, &current).is_empty());
+            assert_eq!(
+                unsupported_command_flags(&command, &detected(&[])),
+                vec!["--connect", "--connect-code", "--models-memory-margin"],
+            );
+        }
     }
 
     #[test]

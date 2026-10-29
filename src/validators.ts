@@ -99,6 +99,7 @@ export const KNOWN_FLAGS = new Set([
 ])
 
 export const SECURITY_SENSITIVE_CUSTOM_FLAGS = new Set([
+  '--connect', '--connect-code',
   '--host', '--port', '--api-key', '--api-key-file', '--ssl-key-file', '--ssl-cert-file',
   '--path', '--api-prefix', '--cors-origins', '--cors-methods', '--cors-headers',
   '--cors-credentials', '--no-cors-credentials',

@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 5;
+// v0.8.0 adds LFM3 to the hybrid denylist; persisted approvals must be reassessed.
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 6;
 const MAX_CHECKPOINT_SLOTS: u32 = 4;
 fn one_slot() -> u32 {
     1
@@ -355,6 +356,7 @@ fn is_known_hybrid_or_recurrent(architecture: &str) -> bool {
         "granitehybrid",
         "plamo2",
         "lfm2",
+        "lfm3",
         "nemotronh",
         "kimilinear",
         "kimik3",
@@ -4920,9 +4922,12 @@ mod tests {
             "qwen35",
             "qwen35moe",
             "deepseek4",
+            "deepseek41",
             "kimi_k3",
             "bailingmoe3",
             "lfm2",
+            "lfm3",
+            "LFM3",
             "nemotron_h",
             "plamo2",
             "minimax_01",

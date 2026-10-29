@@ -1,6 +1,6 @@
 export function maskStartupCommandSecrets(cmdStr: string): string {
   return cmdStr.replace(
-    /((?:--api-key|--hf-token|-hft)(?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s]+)/g,
+    /((?:--api-key|--hf-token|-hft|--connect-code)(?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s]+)/g,
     '$1********',
   )
 }
@@ -9,8 +9,8 @@ export function maskCommandArguments(args: string[]): string[] {
   let hideNext = false
   return args.map(arg => {
     if (hideNext) { hideNext = false; return '********' }
-    if (/^(--api-key|--hf-token|-hft)$/.test(arg)) { hideNext = true; return arg }
-    return arg.replace(/^(--api-key|--hf-token|-hft)=.*$/s, '$1=********')
+    if (/^(--api-key|--hf-token|-hft|--connect-code)$/.test(arg)) { hideNext = true; return arg }
+    return arg.replace(/^(--api-key|--hf-token|-hft|--connect-code)=.*$/s, '$1=********')
   })
 }
 

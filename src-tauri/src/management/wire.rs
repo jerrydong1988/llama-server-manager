@@ -171,13 +171,25 @@ pub fn redact(value: &mut Value) {
                                 continue;
                             }
                             if let Some(text) = argument.as_str() {
-                                if ["--api-key", "--api-key-file", "--hf-token", "-hft"]
-                                    .contains(&text)
+                                if [
+                                    "--api-key",
+                                    "--api-key-file",
+                                    "--hf-token",
+                                    "-hft",
+                                    "--connect-code",
+                                ]
+                                .contains(&text)
                                 {
                                     sensitive = true;
-                                } else if ["--api-key=", "--api-key-file=", "--hf-token=", "-hft="]
-                                    .iter()
-                                    .any(|prefix| text.starts_with(prefix))
+                                } else if [
+                                    "--api-key=",
+                                    "--api-key-file=",
+                                    "--hf-token=",
+                                    "-hft=",
+                                    "--connect-code=",
+                                ]
+                                .iter()
+                                .any(|prefix| text.starts_with(prefix))
                                 {
                                     *argument = Value::String("[REDACTED]".into());
                                 }
@@ -212,7 +224,7 @@ mod tests {
 
     #[test]
     fn redaction_retains_key_metadata_and_masks_command_arguments() {
-        let mut value = serde_json::json!({"api_keys":[{"id":"a","key":"private","tokens":10}],"command":["--api-key","private","--hf-token=private","--port","8080"]});
+        let mut value = serde_json::json!({"api_keys":[{"id":"a","key":"private","tokens":10}],"command":["--api-key","private","--hf-token=private","--port","8080","--connect-code","private","--connect-code=private"]});
         redact(&mut value);
         assert_eq!(value["api_keys"][0]["id"], "a");
         assert_eq!(value["api_keys"][0]["key"], "[REDACTED]");

@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-10-16",
+  "verifiedAt": "2026-10-29",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.7.0",
-  "upstreamCommit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
-  "upstreamMasterChecked": "a30fb4924dcfec81c1b2c20634bd47fa4403061a",
+  "upstreamRelease": "v0.8.0",
+  "upstreamCommit": "8642541b255bfb5dc39cd351a178be09013a55d6",
+  "upstreamMasterChecked": "8ab29faec401829db0e617f40af2c942f4a9eaab",
   "releaseSnapshot": {
-    "ref": "v0.7.0",
-    "commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
-    "parameterCount": 258,
-    "snapshotHash": "731b562c84a7bbdb0111aa032bd11ea3ab94bb2a1ac7980aceee0ae098efd21a",
+    "ref": "v0.8.0",
+    "commit": "8642541b255bfb5dc39cd351a178be09013a55d6",
+    "parameterCount": 261,
+    "snapshotHash": "449a1c51628ce54dd177744fcea461a2cf7bd1908ca1a0d1f899f79a0d571a45",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -204,6 +204,22 @@
         ],
         "synopsisHash": "e1e563312d9bde7614094033c2d5194713e1c698a3da06e669ce6f8dcdd83b77",
         "descriptionHash": "edc1a2a769aa00eb9869e09ae5e0bbbb47756832e2762055994e874496b0df25"
+      },
+      {
+        "canonical": "--connect",
+        "aliases": [
+          "--connect"
+        ],
+        "synopsisHash": "352e67d9284377ab652ca7072d48f6cc171372423174036bc38f24ad1258af19",
+        "descriptionHash": "14e1aa254a946f15dd0551b589fca206e61fa0dea0fc62b89ee6a517e20f5932"
+      },
+      {
+        "canonical": "--connect-code",
+        "aliases": [
+          "--connect-code"
+        ],
+        "synopsisHash": "0422325da993d7ac04a5ae964bbb5ba704875bd439ac34fed61bcfc716487f95",
+        "descriptionHash": "4e6f61d3059cd60c1d8acd364451e9749d2f79f5207a665760011fec1e4687aa"
       },
       {
         "canonical": "--cont-batching",
@@ -1067,6 +1083,14 @@
         "descriptionHash": "e53f2d394b74b716d3de2cd475bcebce9bf995dd63ef0b3fb673d0f665996226"
       },
       {
+        "canonical": "--models-memory-margin",
+        "aliases": [
+          "--models-memory-margin"
+        ],
+        "synopsisHash": "ed787b947a48c0e769bb390820a1e170d5fe32343b61e4c09952e4837e8cf073",
+        "descriptionHash": "ca476c9330394b3d138655110f3d9ef61b880831ea882c6a1aa3c00eee42d81d"
+      },
+      {
         "canonical": "--models-preset",
         "aliases": [
           "--models-preset"
@@ -1315,7 +1339,7 @@
           "--reasoning-preserve"
         ],
         "synopsisHash": "ec8323c80897d00b419d498eb1fee33d65836ba8da345f92273afed7b4141504",
-        "descriptionHash": "319ef9537427f02d8993b2bf27a09d2d745e50d8291eec93ec9431738123eed5"
+        "descriptionHash": "9c0a77e9a49b9d9a4325ce4f325a2e724b1dc338103cf11efb19705cd94dd649"
       },
       {
         "canonical": "--repack",
@@ -2242,6 +2266,7 @@
       "hybrid": [
         "bailingmoe3",
         "deepseek4",
+        "deepseek41",
         "falcon-h1",
         "glm5-next",
         "granitehybrid",
@@ -2250,6 +2275,7 @@
         "kimi-linear",
         "lfm2",
         "lfm2moe",
+        "lfm3",
         "minimax-01",
         "nemotron_h",
         "nemotron_h_moe",
@@ -2271,9 +2297,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "a30fb4924dcfec81c1b2c20634bd47fa4403061a",
-    "parameterCount": 258,
-    "snapshotHash": "731b562c84a7bbdb0111aa032bd11ea3ab94bb2a1ac7980aceee0ae098efd21a",
+    "commit": "8ab29faec401829db0e617f40af2c942f4a9eaab",
+    "parameterCount": 261,
+    "snapshotHash": "449a1c51628ce54dd177744fcea461a2cf7bd1908ca1a0d1f899f79a0d571a45",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2463,6 +2489,22 @@
         ],
         "synopsisHash": "e1e563312d9bde7614094033c2d5194713e1c698a3da06e669ce6f8dcdd83b77",
         "descriptionHash": "edc1a2a769aa00eb9869e09ae5e0bbbb47756832e2762055994e874496b0df25"
+      },
+      {
+        "canonical": "--connect",
+        "aliases": [
+          "--connect"
+        ],
+        "synopsisHash": "352e67d9284377ab652ca7072d48f6cc171372423174036bc38f24ad1258af19",
+        "descriptionHash": "14e1aa254a946f15dd0551b589fca206e61fa0dea0fc62b89ee6a517e20f5932"
+      },
+      {
+        "canonical": "--connect-code",
+        "aliases": [
+          "--connect-code"
+        ],
+        "synopsisHash": "0422325da993d7ac04a5ae964bbb5ba704875bd439ac34fed61bcfc716487f95",
+        "descriptionHash": "4e6f61d3059cd60c1d8acd364451e9749d2f79f5207a665760011fec1e4687aa"
       },
       {
         "canonical": "--cont-batching",
@@ -3326,6 +3368,14 @@
         "descriptionHash": "e53f2d394b74b716d3de2cd475bcebce9bf995dd63ef0b3fb673d0f665996226"
       },
       {
+        "canonical": "--models-memory-margin",
+        "aliases": [
+          "--models-memory-margin"
+        ],
+        "synopsisHash": "ed787b947a48c0e769bb390820a1e170d5fe32343b61e4c09952e4837e8cf073",
+        "descriptionHash": "ca476c9330394b3d138655110f3d9ef61b880831ea882c6a1aa3c00eee42d81d"
+      },
+      {
         "canonical": "--models-preset",
         "aliases": [
           "--models-preset"
@@ -3574,7 +3624,7 @@
           "--reasoning-preserve"
         ],
         "synopsisHash": "ec8323c80897d00b419d498eb1fee33d65836ba8da345f92273afed7b4141504",
-        "descriptionHash": "319ef9537427f02d8993b2bf27a09d2d745e50d8291eec93ec9431738123eed5"
+        "descriptionHash": "9c0a77e9a49b9d9a4325ce4f325a2e724b1dc338103cf11efb19705cd94dd649"
       },
       {
         "canonical": "--repack",
@@ -4501,6 +4551,7 @@
       "hybrid": [
         "bailingmoe3",
         "deepseek4",
+        "deepseek41",
         "falcon-h1",
         "glm5-next",
         "granitehybrid",
@@ -4509,6 +4560,7 @@
         "kimi-linear",
         "lfm2",
         "lfm2moe",
+        "lfm3",
         "minimax-01",
         "nemotron_h",
         "nemotron_h_moe",
@@ -4553,6 +4605,9 @@
     "--no-models-autoload"
   ],
   "intentionalCustomArgsOnly": {
+    "routerMemoryBudget": [
+      "--models-memory-margin"
+    ],
     "processAndHelp": [
       "--help",
       "--version",
@@ -4596,6 +4651,12 @@
       "--video-ffmpeg-dir",
       "--video-fps",
       "--video-timestamp-interval"
+    ]
+  },
+  "intentionalManualCommandOnly": {
+    "experimentalPeerTunnel": [
+      "--connect",
+      "--connect-code"
     ]
   }
 }
