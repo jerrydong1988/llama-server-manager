@@ -285,10 +285,13 @@ pub(crate) fn format_command_for_display(command: &[String]) -> String {
         let value = if hide_next {
             hide_next = false;
             "********".to_string()
-        } else if matches!(argument.as_str(), "--api-key" | "--hf-token" | "-hft") {
+        } else if matches!(
+            argument.as_str(),
+            "--api-key" | "--hf-token" | "-hft" | "--connect-code"
+        ) {
             hide_next = true;
             argument.clone()
-        } else if let Some(flag) = ["--api-key=", "--hf-token=", "-hft="]
+        } else if let Some(flag) = ["--api-key=", "--hf-token=", "-hft=", "--connect-code="]
             .into_iter()
             .find(|flag| argument.starts_with(flag))
         {
@@ -308,7 +311,7 @@ pub(crate) fn format_command_for_display(command: &[String]) -> String {
 pub(crate) fn redact_command_secrets(text: &str) -> String {
     static SECRET: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(|| {
         regex_lite::Regex::new(
-            r#"((?:--api-key|--hf-token|-hft)(?:\s+|=))(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)"#,
+            r#"((?:--api-key|--hf-token|-hft|--connect-code)(?:\s+|=))(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)"#,
         )
         .unwrap()
     });
@@ -1922,6 +1925,8 @@ fn validate_cache_and_draft_parameters(
 }
 
 const SECURITY_SENSITIVE_CUSTOM_FLAGS: &[&str] = &[
+    "--connect",
+    "--connect-code",
     "--host",
     "--port",
     "--api-key",
@@ -6528,6 +6533,9 @@ mod perf_parser_tests {
             "--api-key-file C:/outside/key.txt",
             "--ssl-key-file=key.pem",
             "--path /shadow",
+            "--connect",
+            "--connect-code 0123456789012345678901234567890123456789",
+            "--connect-code=0123456789012345678901234567890123456789",
         ] {
             let config = InstanceConfig {
                 model_path: "model.gguf".into(),
@@ -6546,6 +6554,65 @@ mod perf_parser_tests {
             ..InstanceConfig::default()
         };
         assert!(prepare_launch_checked(safe, "llama-server").is_ok());
+    }
+
+    #[test]
+    fn v080_custom_router_memory_and_manual_tunnel_arguments_are_preserved() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            models_dir: "models".into(),
+            custom_args: vec!["--models-memory-margin 1024".into()],
+            ..InstanceConfig::default()
+        };
+        let (_, _, command) = prepare_launch_checked(config, "llama-server").unwrap();
+        assert!(has_flag_value(&command, "--models-memory-margin", "1024"));
+        let code = "0123456789012345678901234567890123456789";
+        for argument in [
+            format!("--connect-code {code}"),
+            format!("--connect-code={code}"),
+        ] {
+            let config = InstanceConfig {
+                launch_mode: "manual".into(),
+                manual_command: format!("-m model.gguf --connect {argument}"),
+                ..InstanceConfig::default()
+            };
+            let (_, _, command) = prepare_launch_checked(config, "llama-server").unwrap();
+            assert!(command.iter().any(|value| value == "--connect"));
+            assert!(command.iter().any(|value| value.contains(code)));
+            let display = format_command_for_display(&command);
+            assert!(display.contains("--connect-code"));
+            assert!(!display.contains(code));
+            let log = redact_command_secrets(&format!("launch --connect {argument} --port 8080"));
+            assert!(!log.contains(code));
+            assert!(log.ends_with("--port 8080"));
+        }
+    }
+
+    #[test]
+    fn reasoning_preservation_inherits_or_emits_exactly_one_explicit_switch() {
+        for (value, expected) in [
+            ("", None),
+            ("on", Some("--reasoning-preserve")),
+            ("off", Some("--no-reasoning-preserve")),
+        ] {
+            for tracked in [false, true] {
+                let config = InstanceConfig {
+                    model_path: "model.gguf".into(),
+                    reasoning_preserve: value.into(),
+                    explicit_overrides: tracked.then(|| vec!["reasoning_preserve".into()]),
+                    ..InstanceConfig::default()
+                };
+                let command = generate_normalized_command(&config, "llama-server");
+                let switches = command
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|flag| {
+                        matches!(*flag, "--reasoning-preserve" | "--no-reasoning-preserve")
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(switches, expected.into_iter().collect::<Vec<_>>());
+            }
+        }
     }
 
     #[test]

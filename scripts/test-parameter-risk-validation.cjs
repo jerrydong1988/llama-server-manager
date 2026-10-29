@@ -189,6 +189,8 @@ const entry = `
   // Custom-argument detection covers packed rows, aliases, and --flag=value without
   // treating a quoted flag-looking value as another option.
   assert.equal(has('warnD1', { custom_args: ['--temp=0.5'] }), true)
+  assert.equal(has('warnD1', { custom_args: ['--connect'] }), true)
+  assert.equal(has('warnD1', { custom_args: ['--connect-code=example'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--temperature 0.5'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--top-p 0.9 --seed 7'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--prompt "--temp"'] }), false)

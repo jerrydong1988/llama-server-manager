@@ -22,6 +22,8 @@ async function run() {
   assert.deepEqual(JSON.parse(child.stdout), literals, 'copied command preserves literal argv without interpolation')
   assert.deepEqual(maskCommandArguments(['x', '--hf-token', 'secret', '-hft=secret', '--api-key=secret', '--port', '1']), ['x', '--hf-token', '********', '-hft=********', '--api-key=********', '--port', '1'])
   assert.ok(!maskStartupCommandSecrets('x --hf-token "a secret" -hft=second --api-key third').includes('secret'))
+  assert.deepEqual(maskCommandArguments(['x', '--connect', '--connect-code', 'secret', '--connect-code=secret', '--port', '8080']), ['x', '--connect', '--connect-code', '********', '--connect-code=********', '--port', '8080'])
+  assert.equal(maskStartupCommandSecrets('x --connect-code secret --connect-code=secret --port 8080'), 'x --connect-code ******** --connect-code=******** --port 8080')
   assert.equal(formatConfigValue('api_key', 'secret', { emptyValue: 'empty' }, {} as any), '********')
   assert.ok(!formatConfigValue('manual_command', 'x --hf-token secret', { emptyValue: 'empty' }, {} as any).includes('secret'))
 

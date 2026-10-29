@@ -50,13 +50,18 @@ assert.match(loadAdapter, /supported\.contains\("--mmap"\) && supported\.contain
 const guide = read('GUIDE.md')
 assert.ok(guide.includes(`${baseline.releaseSnapshot.parameterCount} 个参数条目`), 'Chinese guide parameter count is stale')
 assert.ok(guide.includes(`${baseline.releaseSnapshot.parameterCount} parameter entries`), 'English guide parameter count is stale')
-for (const group of ['advancedSlotSizing', 'denseFfnPlacement', 'syntheticBenchmarks', 'videoInput']) {
+for (const group of ['advancedSlotSizing', 'denseFfnPlacement', 'syntheticBenchmarks', 'videoInput', 'routerMemoryBudget']) {
   const flags = baseline.intentionalCustomArgsOnly[group]
   assert.ok(flags?.length, `missing reviewed custom-only group: ${group}`)
   for (const flag of flags) {
     assert.ok(officialAliases.has(flag), `reviewed custom-only flag is absent from stable: ${flag}`)
   }
 }
+for (const flag of baseline.intentionalManualCommandOnly.experimentalPeerTunnel) {
+  assert.ok(officialAliases.has(flag), `reviewed manual-only flag is absent from stable: ${flag}`)
+  assert.ok(guide.includes(flag), `manual-only flag is undocumented: ${flag}`)
+}
+assert.match(upstreamWatcher, /intentionalManualCommandOnly: baseline\.intentionalManualCommandOnly/, 'baseline refresh must preserve manual-only review decisions')
 assert.ok(emittedFlags.length >= 80, `expected a substantial command registry, found ${emittedFlags.length}`)
 for (const flag of emittedFlags) {
   assert.ok(

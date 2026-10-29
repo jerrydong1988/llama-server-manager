@@ -109,7 +109,7 @@
     chatTemplateFile: '\u6A21\u677F\u6587\u4EF6', chatTemplateFileTip: '自定义 Jinja 聊天模板文件路径 (*.jinja)。[场景] 有自定义提示格式的微调模型。仅其中一个生效。',
     reasoningFormat: '\u63A8\u7406\u683C\u5F0F', reasoningFormatTip: '控制思考/推理标签的处理方式。"none"=标签保留在内容中，"deepseek"=提取到 reasoning_content 字段(新格式)，"deepseek-legacy"=标签保留但同时填充 reasoning_content。[场景] API 消费者用 "deepseek"。',
     reasoningSwitch: '\u63A8\u7406\u5F00\u5173', reasoningTip: '控制聊天模板如何启用或抑制模型的推理输出。auto 交给模板和模型能力判断；on/off 明确覆盖。它主要影响请求格式、输出内容和 token 消耗，不会让模型文件本身加载得更快。',
-    reasoningPreserve: '保留推理轨迹', reasoningPreserveTip: '在完整对话历史中保留推理轨迹。继承所选引擎默认值：v0.4.1 默认开启，较旧引擎可能由聊天模板决定；需要模板支持保留推理轨迹。',
+    reasoningPreserve: '保留推理轨迹', reasoningPreserveTip: '在完整对话历史中保留推理轨迹。继承时不传入开关，由所选引擎决定：v0.8.0 遵循聊天模板默认值，v0.7.0 默认开启。显式开启或关闭仍需模板支持保留推理轨迹。',
     jinja: 'Jinja \u6A21\u677F', jinjaTip: '启用 Jinja2 模板引擎用于聊天格式化。使用含 Jinja 高级功能(循环、条件)的自定义模板文件时需要。[场景] 启用后可访问 Jinja 高级特性。',
     skipChatParsing: '\u8DF3\u8FC7\u804A\u5929\u89E3\u6790', skipChatParsingTip: '绕过所有聊天模板解析——原始提示直接传递。模型看到的即为你输入的内容。[场景] 调试提示格式问题或使用无聊天模板的模型。[权衡] 禁用结构化对话功能。',
     reasoningEffort: '\u63A8\u7406\u529B\u5EA6', reasoningEffortTip: '把 minimal/low/medium/high/xhigh/max 传给聊天模板。所选引擎支持时使用 --reasoning-effort，旧兼容引擎回退到 --chat-template-kwargs 中的 reasoning_effort。只有模板和模型识别该提示时才生效；不确定时保持继承。',

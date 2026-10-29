@@ -207,6 +207,7 @@ async function main() {
       structuredFlagsAdded: baseline.structuredFlagsAdded || [],
       defaultTrueNegativeFlags: baseline.defaultTrueNegativeFlags || [],
       intentionalCustomArgsOnly: baseline.intentionalCustomArgsOnly || {},
+      intentionalManualCommandOnly: baseline.intentionalManualCommandOnly || {},
     }
     fs.writeFileSync(baselinePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
     console.log(`Updated llama.cpp baseline to ${latestRelease.tag_name} (${releaseSnapshot.parameterCount} parameters).`)
