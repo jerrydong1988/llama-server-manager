@@ -1,13 +1,13 @@
 // Opt-in Windows ROCm candidate qualification. Automatic manager persistence is
 // deliberately disabled: an unreviewed artifact must earn its registry entry.
 // --bin DIR --root NEW_DIR --engine EXE --model GGUF --draft GGUF
-// --mode mtp|dflash|simple|none --parallel 1|2|4 --port PORT
+// --mode mtp|mtp-ngram|dflash|simple|none --parallel 1|2|4 --port PORT
 // Optional: --context TOKENS --kv f16|q8_0 --draft-kv f16|q8_0
 // --records COUNT --predict TOKENS --cycles COUNT --stress-predict TOKENS --checkpoints 0|2
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process')
 const assert = require('node:assert/strict')
 const { managementClient, sleep } = require('./lib/management-client.cjs')
-const { sha256, inspectSlotFile, assertFullRead, assertInference, memorySampler, processMemory } = require('./lib/checkpoint-evidence.cjs')
+const { sha256, inspectSlotFile, assertFullRead, assertInference, memorySampler, processMemory, speculativeTrace } = require('./lib/checkpoint-evidence.cjs')
 const args = Object.fromEntries(Array.from({ length: (process.argv.length - 2) / 2 }, (_, i) => [process.argv[2 + 2 * i].slice(2), process.argv[3 + 2 * i]]))
 assert.equal(process.platform, 'win32')
 for (const key of ['bin', 'root', 'engine', 'model', 'draft']) {
@@ -15,7 +15,11 @@ for (const key of ['bin', 'root', 'engine', 'model', 'draft']) {
   args[key] = path.resolve(args[key])
 }
 for (const key of ['engine', 'model', 'draft']) assert.ok(fs.statSync(args[key]).isFile())
-assert.ok(['mtp', 'dflash', 'simple', 'none'].includes(args.mode))
+assert.ok(['mtp', 'mtp-ngram', 'dflash', 'simple', 'none'].includes(args.mode))
+const specType = args.mode === 'mtp-ngram' ? 'ngram-mod,draft-mtp' : args.mode === 'none' ? 'none' : `draft-${args.mode}`
+// The accepted/total line is gated by LLAMA_TRACE upstream. This environment
+// belongs only to the isolated controller and its child engine processes.
+if (args.mode === 'mtp-ngram') process.env.LLAMA_TRACE = '1'
 const hasDraft = args.mode !== 'none', checkpointCount = Number(args.checkpoints ?? 2)
 assert.ok([0, 2].includes(checkpointCount))
 assert.ok(hasDraft || checkpointCount > 0, 'no-draft no-checkpoint files have no inspectable appendices')
@@ -39,9 +43,9 @@ fs.mkdirSync(slots)
 const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 600000 })
 let sampler
 const report = { started: new Date().toISOString(), scope: 'native API candidate, not automatic manager qualification',
-  mode: args.mode, parallel, context, kv, draftKv, records, predict, cycles, stressPredict, checkpointCount,
+  mode: args.mode, specType, parallel, context, kv, draftKv, records, predict, cycles, stressPredict, checkpointCount,
   engine: args.engine, model: args.model, draft: args.draft,
-  environment: { GGML_CUDA_NO_PINNED: process.env.GGML_CUDA_NO_PINNED || null }, events: [], owned_pids: [], stop_verifications: [] }
+  environment: { GGML_CUDA_NO_PINNED: process.env.GGML_CUDA_NO_PINNED || null, LLAMA_TRACE: process.env.LLAMA_TRACE || null }, events: [], owned_pids: [], stop_verifications: [] }
 const logPath = path.join(data, 'configs', 'logs', `${id}.log`)
 const record = (name, details = {}) => {
   report.events.push({ ...details, name, at: new Date().toISOString() })
@@ -114,7 +118,10 @@ async function stop(label) {
   if (old) {
     assert.ok(!processes().some(p => p.ProcessId === old.pid), 'old process is still alive')
     report.stop_verifications.push({ pid: old.pid, exited: true, at: new Date().toISOString() })
-    if (fs.existsSync(logPath)) fs.copyFileSync(logPath, path.join(args.root, `${label}.log`))
+    if (fs.existsSync(logPath)) {
+      fs.copyFileSync(logPath, path.join(args.root, `${label}.log`))
+      record('native-speculation-trace', { label, pid: old.pid, trace: speculativeTrace(fs.readFileSync(logPath, 'utf8')) })
+    }
   }
 }
 const sentinel = slot => `Slot ${slot}. Write the result of 17 times 23 as 391, then repeat 391 separated by spaces. Answer: 391 391 391 `
@@ -122,12 +129,14 @@ const longPrompt = (slot, revised = false, rewriteAfter = records - 20) => 'Refe
   Array.from({ length: records }, (_, i) => `Record ${i}: ${revised && i > rewriteAfter ? 'nineteen times twenty-three equals 437' : 'seventeen times twenty-three equals 391'}.\n`).join('') +
   (revised ? `Slot ${slot}. Use the result in the last record. Repeat that result separated by spaces. Answer: 437 437 437 ` : sentinel(slot))
 const immutable = new Map()
+const rollbackPrefix = [...Array(15).fill('391'), '397'].join(' ')
+const rollbackGrammar = { grammar: `root ::= "${rollbackPrefix}" (" " "397")*` }
 const assertImmutable = () => { for (const [file, hash] of immutable) assert.equal(sha256(file), hash, `old checkpoint changed: ${file}`) }
 async function inferenceEverySlot(references, name) {
   const results = []
   for (let slot = 0; slot < parallel; slot++) {
     const result = await completion(slot, sentinel(slot))
-    assertInference(references[slot], result, { draft: hasDraft })
+    assertInference(references[slot], result, { draft: hasDraft, draftCounts: args.mode === 'mtp-ngram' ? 'rate' : 'exact' })
     results.push({ slot, content: result.content, tokens: result.tokens, timings: result.timings })
   }
   record(name, { results, monitoring: (await client.call('instances.health', { id })).monitoring })
@@ -154,13 +163,25 @@ async function main() {
     gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99, draft_tokens: 3, flash_attn: 'on', fit_mode: 'off',
     warmup: false, parallel, cache_prompt: true, cache_idle_slots: false, cache_ram: 1, ctx_checkpoints: checkpointCount,
     slots_enabled: true, metrics: true, props: true, verbose: true, mmproj_auto: false, slot_save_path: slots,
-    spec_type: hasDraft ? `draft-${args.mode}` : 'none', draft_model_path: hasDraft ? args.draft : '', kv_unified: true,
+    spec_type: specType, draft_model_path: hasDraft ? args.draft : '', kv_unified: true,
     cache_type_k: kv, cache_type_v: kv, cache_type_draft_k: draftKv, cache_type_draft_v: draftKv,
     kv_checkpoint: { enabled: false, auto_save: false, auto_restore: false } }, true)
   sampler = memorySampler(client, id)
   report.memory = sampler.summary
   const eligibility = await client.call('checkpoints.eligibility', { id })
   assert.equal(eligibility.eligible, false); record('automatic-persistence-disabled', eligibility)
+  let noDraftRollbackReference, noDraftAfterRollbackReference
+  if (args.mode === 'mtp-ngram') {
+    await update({ spec_type: 'none', draft_model_path: '' })
+    await start('no-draft-reference')
+    noDraftRollbackReference = await completion(0, sentinel(0), 128, false, rollbackGrammar)
+    assert.ok(noDraftRollbackReference.content.startsWith(rollbackPrefix))
+    noDraftAfterRollbackReference = await completion(0, sentinel(0) + noDraftRollbackReference.content, 128)
+    assert.ok(noDraftAfterRollbackReference.content.includes('397'))
+    record('no-draft-reference-for-mixed-rollback', { result: noDraftRollbackReference })
+    await stop('no-draft-reference')
+    await update({ spec_type: specType, draft_model_path: args.draft })
+  }
   const firstPid = await start('baseline'), references = [], checkpoints = [], lives = []
   const rewriteReference = await completion(0, longPrompt(0, true), predict, false)
   assert.ok(rewriteReference.content.includes('437') && !rewriteReference.content.includes('391'), 'rewrite fixture must change the answer')
@@ -267,7 +288,32 @@ async function main() {
     assertInference(lives[state.slot], restored, { draft: hasDraft, reuse: true, minimumReuse: state.saved.n_saved })
   }
   record('old-checkpoints-recover-in-new-process-after-faults', { pid: finalPid }); assertImmutable()
-  await stop('final-recovery'); report.passed = true
+  if (args.mode === 'mtp-ngram') {
+    // Train the ngram, then change the last digit near the 64-token boundary.
+    // This is a rollback correctness fixture, not unconstrained model quality.
+    await completion(0, sentinel(0), 128, false)
+    const before = fs.statSync(logPath).size
+    const rollback = await completion(0, sentinel(0), 128, false, rollbackGrammar)
+    const trace = speculativeTrace(fs.readFileSync(logPath).subarray(before).toString('utf8'))
+    assertInference(noDraftRollbackReference, rollback, { marker: '397' })
+    assert.ok(trace.checkpointRollbacks.some(r => r.drafted === 64 && r.drafted - r.accepted >= 1 && r.drafted - r.accepted <= 3),
+      '64-token mixed draft with only 1-3 rejections did not restore its speculative checkpoint')
+    record('mixed-long-draft-rollback-matches-no-draft', { reference: noDraftRollbackReference, result: rollback, trace })
+    const after = await completion(0, sentinel(0) + rollback.content, 128)
+    assertInference(noDraftAfterRollbackReference, after, { marker: '397', reuse: true,
+      minimumReuse: noDraftAfterRollbackReference.timings.cache_n })
+    record('unconstrained-cached-inference-after-mixed-rollback', { reference: noDraftAfterRollbackReference, result: after })
+    assertImmutable()
+  }
+  await stop('final-recovery')
+  if (args.mode === 'mtp-ngram') {
+    const traces = report.events.filter(e => e.name === 'native-speculation-trace').map(e => e.trace)
+    for (const type of ['ngram-mod', 'draft-mtp'])
+      assert.ok(traces.some(t => t.statistics[type]?.accepted > 0), `${type} did not accept tokens`)
+    assert.ok(traces.some(t => t.checkpointRollbacks.some(r => r.drafted > 3 && r.accepted < r.drafted)),
+      'mixed long-draft checkpoint rollback was not exercised')
+  }
+  report.passed = true
 }
 main().catch(error => { report.error = error.stack; report.passed = false; process.exitCode = 1; console.error(error) })
   .finally(async () => {

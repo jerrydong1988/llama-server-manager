@@ -97,16 +97,27 @@ function assertFullRead(saved, restored) {
   assert.equal(restored.n_restored, saved.n_saved, 'restored token count mismatch')
 }
 
-function assertInference(reference, actual, { draft = false, reuse = false, minimumReuse = 1, marker = '391' } = {}) {
+function assertInference(reference, actual, { draft = false, draftCounts = 'exact', reuse = false, minimumReuse = 1, marker = '391' } = {}) {
   assert.ok(Array.isArray(actual.tokens) && actual.tokens.length > 0, 'missing generated token evidence')
   assert.deepEqual(actual.tokens, reference.tokens, 'deterministic inference changed')
   assert.equal(actual.content, reference.content)
   assert.ok(actual.content.includes(marker), 'expected sentinel was not generated')
   if (reuse) assert.ok(actual.timings.cache_n >= minimumReuse, 'insufficient prompt reuse')
   if (draft) {
+    assert.ok(['exact', 'rate'].includes(draftCounts), 'unknown draft comparison policy')
     assert.ok(actual.timings.draft_n > 0 && actual.timings.draft_n_accepted > 0, 'no accepted speculative tokens')
-    assert.equal(actual.timings.draft_n, reference.timings.draft_n)
-    assert.equal(actual.timings.draft_n_accepted, reference.timings.draft_n_accepted)
+    for (const t of [actual.timings, reference.timings])
+      assert.ok(Number.isSafeInteger(t.draft_n) && Number.isSafeInteger(t.draft_n_accepted)
+        && t.draft_n > 0 && t.draft_n_accepted >= 0 && t.draft_n_accepted <= t.draft_n, 'invalid draft counters')
+    if (draftCounts === 'exact') {
+      assert.equal(actual.timings.draft_n, reference.timings.draft_n)
+      assert.equal(actual.timings.draft_n_accepted, reference.timings.draft_n_accepted)
+    } else {
+      // For same-process health checks, ngram learning can change the amount
+      // drafted. Fresh-process restore assertions retain the exact default.
+      assert.equal(actual.timings.draft_n_accepted / actual.timings.draft_n,
+        reference.timings.draft_n_accepted / reference.timings.draft_n, 'draft acceptance rate changed')
+    }
   }
 }
 
@@ -138,4 +149,17 @@ function processMemory(pid) {
   return JSON.parse(output)
 }
 
-module.exports = { sha256, inspectSlotFile, assertFullRead, assertInference, memorySampler, processMemory }
+// Native counters are cumulative within one engine process. Keep each mode
+// separate: an aggregate acceptance rate cannot prove a mixed pipeline ran.
+function speculativeTrace(log) {
+  const statistics = {}, checkpointRollbacks = []
+  for (const match of log.matchAll(/statistics\s+([\w-]+):[^\r\n]*#gen tokens\s*=\s*(\d+),\s*#acc tokens\s*=\s*(\d+)/g)) {
+    statistics[match[1]] = { generated: Number(match[2]), accepted: Number(match[3]) }
+  }
+  for (const match of log.matchAll(/accepted\s+(\d+)\/\s*(\d+) draft tokens \(restore checkpoint\)/g)) {
+    checkpointRollbacks.push({ accepted: Number(match[1]), drafted: Number(match[2]) })
+  }
+  return { statistics, checkpointRollbacks }
+}
+
+module.exports = { sha256, inspectSlotFile, assertFullRead, assertInference, memorySampler, processMemory, speculativeTrace }
