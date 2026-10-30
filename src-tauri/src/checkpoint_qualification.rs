@@ -15,11 +15,16 @@ use std::{
 };
 
 const SCHEMA: u32 = 2;
-static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ACTIVE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub(crate) fn cancel() {
+pub(crate) fn cancel(id: &str) -> bool {
+    let active = ACTIVE.lock().unwrap();
+    if active.as_deref() != Some(id) {
+        return false;
+    }
     CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+    true
 }
 
 pub(crate) fn candidate(config: &InstanceConfig, caps: &EngineCapabilities) -> bool {
@@ -44,6 +49,7 @@ pub(crate) fn candidate(config: &InstanceConfig, caps: &EngineCapabilities) -> b
         })
     };
     cfg!(windows)
+        && !crate::checkpoint::has_native_argument_overrides()
         && caps.context_checkpoint_persistence
         && crate::commands::engine_capabilities::hardware_scope(config)
         && matches!(config.parallel, 1 | 2 | 4)
@@ -90,6 +96,7 @@ pub(crate) fn candidate(config: &InstanceConfig, caps: &EngineCapabilities) -> b
         .iter()
         .all(|key| emits(key))
         && (config.parallel == 1 || emits("cache_idle_slots"))
+        && (kinds.is_empty() || emits("spec_type"))
         && (!kinds.iter().any(|kind| kind.starts_with("draft-"))
             || [
                 "draft_model_path",
@@ -219,10 +226,20 @@ fn hardware_identity() -> Result<String, String> {
         return Err("GPU/driver identity is unavailable".into());
     }
     let environment = std::env::vars()
+        .map(|(key, value)| (key.to_ascii_uppercase(), value))
         .filter(|(key, _)| {
-            ["GGML_", "HIP_", "ROCR_", "CUDA_", "LLAMA_ARG_"]
-                .iter()
-                .any(|prefix| key.starts_with(prefix))
+            [
+                "GGML_",
+                "HIP_",
+                "HIPBLASLT_",
+                "ROCR_",
+                "ROCBLAS_",
+                "TENSILE_",
+                "CUDA_",
+                "LLAMA_ARG_",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut digest = Sha256::new();
@@ -231,18 +248,22 @@ fn hardware_identity() -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
-pub(crate) struct Lease;
-pub(crate) fn reserve() -> Result<Lease, String> {
-    use std::sync::atomic::Ordering;
-    RUNNING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .map_err(|_| "another checkpoint validation is running")?;
-    CANCEL.store(false, Ordering::SeqCst);
-    Ok(Lease)
+pub(crate) struct Lease(String);
+pub(crate) fn reserve(id: &str) -> Result<Lease, String> {
+    let mut active = ACTIVE.lock().unwrap();
+    if active.is_some() {
+        return Err("another checkpoint validation is running".into());
+    }
+    *active = Some(id.to_owned());
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(Lease(id.to_owned()))
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let mut active = ACTIVE.lock().unwrap();
+        if active.as_deref() == Some(&self.0) {
+            *active = None;
+        }
     }
 }
 
@@ -316,9 +337,80 @@ impl Drop for EngineProcess {
     }
 }
 
+// A free-port reservation has to be released before llama-server binds it.
+// Check the OS listener owner before every HTTP request, so another local
+// service cannot receive slot mutations if it wins that interval or reuses it.
+fn owns_listener(port: u16, expected_pid: u32) -> bool {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::{
+            Foundation::ERROR_INSUFFICIENT_BUFFER, NetworkManagement::IpHelper::*,
+            Networking::WinSock::AF_INET,
+        };
+        let mut size = 0_u32;
+        let mut buffer: Vec<u32> = Vec::new();
+        for _ in 0..3 {
+            let status = GetExtendedTcpTable(
+                if buffer.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    buffer.as_mut_ptr().cast()
+                },
+                &mut size,
+                0,
+                AF_INET as u32,
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            );
+            if status == ERROR_INSUFFICIENT_BUFFER {
+                if !(4..=1024 * 1024).contains(&size) {
+                    return false;
+                }
+                buffer.resize(size.div_ceil(4) as usize, 0);
+                continue;
+            }
+            if status != 0 || size < 4 || size as usize > buffer.len() * 4 {
+                return false;
+            }
+            let count = buffer[0] as usize;
+            let row_size = std::mem::size_of::<MIB_TCPROW_OWNER_PID>();
+            if count
+                .checked_mul(row_size)
+                .and_then(|n| n.checked_add(4))
+                .map_or(true, |end| end > size as usize)
+            {
+                return false;
+            }
+            for index in 0..count {
+                let row = std::ptr::read_unaligned(
+                    buffer
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(4 + index * row_size)
+                        .cast::<MIB_TCPROW_OWNER_PID>(),
+                );
+                if row.dwLocalAddr.to_ne_bytes() == [127, 0, 0, 1]
+                    && u16::from_be(row.dwLocalPort as u16) == port
+                {
+                    return row.dwOwningPid == expected_pid;
+                }
+            }
+            return false;
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (port, expected_pid);
+        false
+    }
+}
+
 struct Probe {
     client: reqwest::blocking::Client,
     base: String,
+    port: u16,
+    owner_pid: std::cell::Cell<u32>,
     key: String,
     deadline: Instant,
 }
@@ -334,6 +426,9 @@ impl Probe {
     }
     fn request(&self, endpoint: &str, body: Option<Value>) -> Result<Value, String> {
         self.check()?;
+        if !owns_listener(self.port, self.owner_pid.get()) {
+            return Err("validation port is not owned by this test process".into());
+        }
         let url = format!("{}{endpoint}", self.base);
         let request = if let Some(body) = body {
             self.client.post(url).json(&body)
@@ -363,6 +458,7 @@ impl Probe {
         slots: i32,
         context: u32,
     ) -> Result<Value, String> {
+        self.owner_pid.set(process.child.id());
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             self.check()?;
@@ -416,7 +512,37 @@ impl Probe {
         if let Some(grammar) = grammar {
             body["grammar"] = json!(grammar);
         }
-        let result = self.request("/completion", Some(body))?;
+        Self::inference_evidence(self.request("/completion", Some(body))?)
+    }
+    fn number_answer(
+        &self,
+        id: i32,
+        prompt: &str,
+        cache: bool,
+        expected: i32,
+    ) -> Result<Value, String> {
+        // The grammar permits every three-digit answer; it does not force the
+        // expected answer. End at the answer rather than forcing a model to
+        // continue beyond its natural response and comparing unrelated prose.
+        let result = Self::inference_evidence(self.request(
+            "/completion",
+            Some(json!({
+                "id_slot":id,"prompt":prompt,"n_predict":8,"temperature":0,"seed":42,
+                "cache_prompt":cache,"return_tokens":true,"ignore_eos":false,
+                "grammar":"root ::= [0-9] [0-9] [0-9]"
+            })),
+        )?)?;
+        if !cache && result["timings"]["cache_n"].as_u64() != Some(0) {
+            return Err("cold control unexpectedly reused cached tokens".into());
+        }
+        if result["content"].as_str().map(str::trim) != Some(expected.to_string().as_str()) {
+            return Err(format!(
+                "slot {id} numeric control did not retrieve the final record's code {expected}"
+            ));
+        }
+        Ok(result)
+    }
+    fn inference_evidence(result: Value) -> Result<Value, String> {
         if result["content"].as_str().map_or(true, |s| s.is_empty())
             || result["tokens"]
                 .as_array()
@@ -447,6 +573,12 @@ impl Probe {
     }
 }
 
+fn draft_acceptance(output: &Value) -> Option<f64> {
+    let proposed = output["timings"]["draft_n"].as_u64()?;
+    let accepted = output["timings"]["draft_n_accepted"].as_u64()?;
+    (proposed > 0 && accepted <= proposed).then(|| accepted as f64 / proposed as f64)
+}
+
 fn same_tokens(expected: &Value, actual: &Value) -> Result<(), String> {
     if expected["tokens"] != actual["tokens"] || expected["content"] != actual["content"] {
         return Err("restored generation differs from the live reference".into());
@@ -454,12 +586,52 @@ fn same_tokens(expected: &Value, actual: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn same_output(expected: &Value, actual: &Value) -> Result<(), String> {
+// Proposal batches can differ at a rejection/end boundary while producing
+// identical target tokens. Permit at most one configured draft batch of count
+// drift and no more than five percentage points of acceptance-rate loss.
+fn same_output(expected: &Value, actual: &Value, batch: u32) -> Result<(), String> {
     same_tokens(expected, actual)?;
-    for field in ["draft_n", "draft_n_accepted"] {
-        if expected["timings"][field] != actual["timings"][field] {
-            return Err(format!("restored speculative counter differs: {field}"));
-        }
+    let counts = |value: &Value| {
+        [
+            value["timings"]["draft_n"].as_u64(),
+            value["timings"]["draft_n_accepted"].as_u64(),
+        ]
+    };
+    let before = counts(expected);
+    let after = counts(actual);
+    if [expected, actual].iter().all(|value| {
+        ["draft_n", "draft_n_accepted"]
+            .iter()
+            .all(|key| value["timings"][key].is_null())
+    }) {
+        return Ok(());
+    }
+    let ([Some(proposed), Some(accepted)], [Some(restored_proposed), Some(restored_accepted)]) =
+        (before, after)
+    else {
+        return Err("restored speculative counters are missing or invalid".into());
+    };
+    if accepted > proposed || restored_accepted > restored_proposed {
+        return Err("restored speculative counters are inconsistent".into());
+    }
+    if proposed == 0 || restored_proposed == 0 {
+        return if before == after {
+            Ok(())
+        } else {
+            Err("restored speculation stopped proposing tokens".into())
+        };
+    }
+    if accepted > 0 && restored_accepted == 0 {
+        return Err("restored speculation stopped accepting tokens".into());
+    }
+    if proposed.abs_diff(restored_proposed) > u64::from(batch.max(1))
+        || accepted.abs_diff(restored_accepted) > u64::from(batch.max(1))
+        || restored_accepted as f64 / restored_proposed as f64 + 0.05
+            < accepted as f64 / proposed as f64
+    {
+        return Err(
+            "restored draft efficiency differs beyond one batch or five percentage points".into(),
+        );
     }
     Ok(())
 }
@@ -597,6 +769,8 @@ pub(crate) fn run(
     fs2::FileExt::try_lock_exclusive(&lock)
         .map_err(|_| "another manager process is validating this data directory")?;
     let receipt_file = receipt_path(&store, &fingerprint)?;
+    let blocked_file = receipt_file.with_extension("blocked.json");
+    let previously_blocked = blocked_file.exists();
 
     crate::persistence::atomic_write(
         &receipt_file.with_extension("blocked.json"),
@@ -623,14 +797,26 @@ pub(crate) fn run(
             json!({"schema":SCHEMA,"error":error}).to_string(),
         );
     }
-    if outcome.is_ok()
-        || outcome
-            .as_ref()
-            .is_err_and(|error| error == "checkpoint validation cancelled")
-    {
-        fs::remove_file(receipt_file.with_extension("blocked.json")).map_err(|e| e.to_string())?;
-    }
+    finish_attempt_marker(&blocked_file, previously_blocked, &outcome)?;
     outcome
+}
+
+fn finish_attempt_marker(
+    path: &Path,
+    previously_blocked: bool,
+    outcome: &Result<Receipt, String>,
+) -> Result<(), String> {
+    // Cancelling a later attempt must not revive a receipt already revoked by
+    // an earlier failed validation. Only a successful test can clear that block.
+    if outcome.is_ok()
+        || (!previously_blocked
+            && outcome
+                .as_ref()
+                .is_err_and(|error| error == "checkpoint validation cancelled"))
+    {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn run_pair(
@@ -642,6 +828,11 @@ fn run_pair(
     root: &Path,
     require_checkpoints: bool,
 ) -> Result<Receipt, String> {
+    if !fingerprint.backend.eq_ignore_ascii_case("ROCm")
+        && !fingerprint.backend.eq_ignore_ascii_case("HIP")
+    {
+        return Err("local qualification requires a Windows/ROCm engine".into());
+    }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let key = uuid::Uuid::new_v4().to_string();
@@ -674,6 +865,8 @@ fn run_pair(
             .build()
             .map_err(|e| e.to_string())?,
         base: format!("http://127.0.0.1:{port}"),
+        port,
+        owner_pid: std::cell::Cell::new(0),
         key,
         deadline: Instant::now() + Duration::from_secs(1200),
     };
@@ -748,8 +941,8 @@ fn run_pair(
                 )
             })
             .collect::<String>();
-        let revised = format!("{revised_prefix}Slot {id}. Use the last record. Repeat that answer separated by spaces. Answer: {revised_marker} {revised_marker} {revised_marker} ");
-        let reference = probe.completion(id, &revised, 64, false)?;
+        let revised = format!("{revised_prefix}Slot {id}. What is the code in the LAST record? Return only the three digits. Answer:");
+        let reference = probe.number_answer(id, &revised, false, revised_marker)?;
         rewrites.push((revised, reference));
         let warm = probe.completion(id, &prompt, 24, false)?;
         let continuation = format!(
@@ -789,15 +982,18 @@ fn run_pair(
         )
         .map_err(|e| e.to_string())?;
         let live = probe.completion(id, &continuation, 64, true)?;
-        if !live["content"]
-            .as_str()
-            .is_some_and(|text| text.contains(secret))
-        {
+        if !live["content"].as_str().is_some_and(|text| {
+            text.contains(secret)
+                && ["cobalt", "amber", "violet", "silver"]
+                    .iter()
+                    .filter(|other| **other != secret)
+                    .all(|other| !text.contains(other))
+        }) {
             return Err(
                 "the uncached/live reference did not retrieve its slot-specific secret".into(),
             );
         }
-        if crate::speculative::checkpoint_uses_draft_state(&config.spec_type)
+        if !crate::speculative::parse_speculative_types(&config.spec_type).is_empty()
             && (live["timings"]["draft_n"].as_u64().unwrap_or(0) == 0
                 || live["timings"]["draft_n_accepted"].as_u64().unwrap_or(0) == 0)
         {
@@ -808,7 +1004,8 @@ fn run_pair(
     if let Some((expected, following)) = reference {
         probe.completion(0, rollback_prompt, 128, false)?;
         let rollback = probe.generate(0, rollback_prompt, 128, false, Some(&rollback_grammar))?;
-        same_tokens(&expected, &rollback)?;
+        same_tokens(&expected, &rollback)
+            .map_err(|error| format!("mixed rejection rollback: {error}"))?;
         let next = probe.completion(
             0,
             &format!(
@@ -820,7 +1017,8 @@ fn run_pair(
             128,
             true,
         )?;
-        same_tokens(&following, &next)?;
+        same_tokens(&following, &next)
+            .map_err(|error| format!("mixed rollback continuation: {error}"))?;
         let proposed = rollback["timings"]["draft_n"].as_u64().unwrap_or(0);
         let accepted = rollback["timings"]["draft_n_accepted"]
             .as_u64()
@@ -858,7 +1056,14 @@ fn run_pair(
         cases.iter().zip(&restores)
     {
         let generated = probe.completion(*id, continuation, 64, true)?;
-        same_output(live, &generated)?;
+        fs::write(
+            root.join(format!("restore-{id}.json")),
+            serde_json::to_vec_pretty(&json!({"expected":live,"actual":generated}))
+                .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        same_output(live, &generated, original.draft_tokens)
+            .map_err(|error| format!("slot {id} fresh restore: {error}"))?;
         let reused = generated["timings"]["cache_n"].as_u64().unwrap_or(0);
         if reused
             < save["n_saved"]
@@ -879,11 +1084,10 @@ fn run_pair(
             return Err("restore modified an immutable saved cache".into());
         }
         let (revised, cold_reference) = &rewrites[*id as usize];
-        let rewrite = probe.completion(*id, revised, 64, true)?;
-        same_tokens(cold_reference, &rewrite)?;
-        let recomputed = probe.completion(*id, revised, 64, false)?;
-        same_tokens(cold_reference, &recomputed)?;
-        slots.push(json!({"rewrite":rewrite,"rewrite_reference":cold_reference,"recomputed":recomputed,"id":id,"passed":true,"save":save,"restore":restored,"live":live,"generated":generated,"file_sha256":digest}));
+        let expected = [397, 443, 499, 557][*id as usize];
+        let rewrite = probe.number_answer(*id, revised, true, expected)?;
+        let recomputed = probe.number_answer(*id, revised, false, expected)?;
+        slots.push(json!({"draft_acceptance_before":draft_acceptance(live),"draft_acceptance_after":draft_acceptance(&generated),"counter_tolerance_tokens":original.draft_tokens,"acceptance_drop_tolerance":0.05,"rewrite":rewrite,"rewrite_reference":cold_reference,"recomputed":recomputed,"id":id,"passed":true,"save":save,"restore":restored,"live":live,"generated":generated,"file_sha256":digest}));
     }
     second.stop()?;
     processes.push(json!({"pid":second.child.id(),"role":"restored","exited":true}));
@@ -905,17 +1109,27 @@ fn run_pair(
     );
     failed.stop()?;
     processes.push(json!({"pid":failed.child.id(),"role":"failed_restore","exited":true}));
-    fs::write(
-        root.join("failed-restore-response.json"),
-        serde_json::to_vec_pretty(&failed_restore).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
     let corrupt_bytes = fs::metadata(&corrupt).map_err(|e| e.to_string())?.len();
-    if failed_restore.as_ref().is_ok_and(|response| {
-        response["n_read"].as_u64() == Some(corrupt_bytes)
-            && response["n_restored"] == last.4["n_saved"]
-    }) {
-        return Err("truncated state passed the manager full-read/token-count guard".into());
+    let corrupt_digest = store.content_sha256(&corrupt).map_err(|e| e.to_string())?;
+    if corrupt_bytes == last.2 || corrupt_digest == last.3 {
+        return Err("truncation fixture did not change the saved payload".into());
+    }
+    let claimed_complete = failed_restore.as_ref().is_ok_and(|response| {
+        crate::checkpoint::restore_counts_match_manifest(
+            response["n_read"].as_u64().unwrap_or(0),
+            response["n_restored"].as_u64().unwrap_or(0),
+            last.2,
+            last.4["n_saved"].as_u64().unwrap_or(0),
+        )
+    });
+    fs::write(root.join("failed-restore-response.json"), serde_json::to_vec_pretty(&json!({
+        "response":failed_restore,"trusted_bytes":last.2,"truncated_bytes":corrupt_bytes,
+        "trusted_sha256":last.3,"truncated_sha256":corrupt_digest,"preflight_rejected":true,"full_read_guard_rejected":!claimed_complete
+    })).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if claimed_complete {
+        return Err(
+            "truncated state claimed the original manifest's complete byte/token counts".into(),
+        );
     }
     let mut clean = EngineProcess::spawn(&argv, root, "clean-recovery")?;
     probe.ready(&mut clean, config.parallel, config.ctx_size)?;
@@ -940,7 +1154,11 @@ fn run_pair(
         }
     }
     for (id, _, _, _, _, continuation, live) in &cases {
-        same_output(live, &probe.completion(*id, continuation, 64, true)?)?;
+        same_output(
+            live,
+            &probe.completion(*id, continuation, 64, true)?,
+            original.draft_tokens,
+        )?;
     }
     clean.stop()?;
     processes.push(json!({"pid":clean.child.id(),"role":"clean_recovery","exited":true}));
@@ -1030,6 +1248,101 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn cancellation_during_preparation_survives_until_the_worker_and_releases_the_lease() {
+        let lease = reserve("first").unwrap();
+        assert!(!cancel("unrelated"));
+        assert!(!CANCEL.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(cancel("first"));
+        assert!(
+            reserve("second").is_err(),
+            "a second request cannot reset cancellation"
+        );
+        let root =
+            std::env::temp_dir().join(format!("checkpoint-cancel-test-{}", uuid::Uuid::new_v4()));
+        let config = config();
+        let identity = fingerprint(&config);
+        assert_eq!(
+            run(
+                CheckpointStore::from_root(&root),
+                config,
+                "unused.exe".into(),
+                identity,
+                true,
+                lease
+            )
+            .unwrap_err(),
+            "checkpoint validation cancelled"
+        );
+        assert!(
+            !root.exists(),
+            "an early cancellation must not create data or start an engine"
+        );
+        let next = reserve("second").unwrap();
+        assert!(
+            !cancel("first"),
+            "a stale cancellation cannot stop the next validation"
+        );
+        assert!(!CANCEL.load(std::sync::atomic::Ordering::SeqCst));
+        drop(next);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn listener_ownership_rejects_a_different_process_and_a_released_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(owns_listener(port, std::process::id()));
+        assert!(!owns_listener(port, std::process::id().wrapping_add(1)));
+        drop(listener);
+        assert!(!owns_listener(port, std::process::id()));
+    }
+
+    #[test]
+    fn cancellation_cannot_revive_a_previously_failed_qualification() {
+        let root =
+            std::env::temp_dir().join(format!("checkpoint-block-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let blocked = root.join("previous-failure.blocked.json");
+        let pending = root.join("fresh-attempt.blocked.json");
+        fs::write(&blocked, b"failed").unwrap();
+        fs::write(&pending, b"pending").unwrap();
+        let cancelled = Err("checkpoint validation cancelled".to_string());
+        finish_attempt_marker(&blocked, true, &cancelled).unwrap();
+        finish_attempt_marker(&pending, false, &cancelled).unwrap();
+        assert_eq!(fs::read(&blocked).unwrap(), b"failed");
+        assert!(!pending.exists());
+        fs::remove_file(blocked).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn small_draft_boundary_drift_is_allowed_but_output_changes_and_material_regressions_fail() {
+        let output = |proposed, accepted| json!({"content":"violet", "tokens":[12], "timings":{"draft_n":proposed,"draft_n_accepted":accepted}});
+        let before = output(58, 52);
+        assert!(same_output(&before, &output(57, 52), 3).is_ok());
+        assert!(same_output(&before, &output(62, 52), 3).is_err());
+        assert!(same_output(&before, &output(58, 49), 3).is_err());
+        assert!(same_output(&before, &output(0, 0), 3).is_err());
+        assert!(same_output(&before, &output(50, 51), 3).is_err());
+        let malformed = json!({"content":"violet", "tokens":[12], "timings":{"draft_n":"invalid","draft_n_accepted":"invalid"}});
+        assert!(same_output(&malformed, &malformed, 3).is_err());
+        let mut changed = output(58, 52);
+        changed["tokens"] = json!([99]);
+        assert!(same_output(&before, &changed, 3).is_err());
+    }
+
+    #[test]
+    fn inference_receipts_keep_tokens_and_timings_without_echoing_long_prompts() {
+        let result = Probe::inference_evidence(json!({"content":"cobalt", "tokens":[12,34],
+            "timings":{"cache_n":8000,"draft_n":2,"draft_n_accepted":2},
+            "prompt":"large private prompt".repeat(100_000),"generation_settings":{"unneeded":true}})).unwrap();
+        assert_eq!(result["tokens"], json!([12, 34]));
+        assert_eq!(result["timings"]["cache_n"], 8000);
+        assert!(result.get("prompt").is_none() && result.get("generation_settings").is_none());
+        assert!(serde_json::to_vec(&result).unwrap().len() < 1024);
     }
 
     #[test]

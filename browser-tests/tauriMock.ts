@@ -23,6 +23,7 @@ import type {
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
 let localCheckpointValidated = false
+let pendingCheckpointValidation: { id: string; reject: (error: Error) => void } | null = null
 const LAYOUT_STRESS = new URLSearchParams(window.location.search).get('layout') === 'stress'
 const LAYOUT_LONG_NAME = `Qwen${'LongCustomName'.repeat(12)}`
 const IS_DOCS_SCENARIO = BROWSER_SCENARIO === 'docs-screenshots'
@@ -1106,13 +1107,19 @@ mockIPC((command, payload) => {
       return {}
     case 'get_checkpoint_status': return null
     case 'validate_checkpoint_locally': {
+      if (BROWSER_SCENARIO === 'checkpoint-local-validation-cancel') return new Promise((_resolve, reject) => { pendingCheckpointValidation = { id: String(args.validationId), reject } })
       return new Promise((resolve, reject) => setTimeout(() => {
         if (BROWSER_SCENARIO === 'checkpoint-local-validation-failure') { reject(new Error('Restored inference differs')); return }
         localCheckpointValidated = true
         resolve({ old_process_exited: true })
       }, 300))
     }
-    case 'cancel_checkpoint_validation': return {}
+    case 'cancel_checkpoint_validation': {
+      if (!pendingCheckpointValidation || pendingCheckpointValidation.id !== args.validationId) throw new Error('No matching validation')
+      pendingCheckpointValidation.reject(new Error('checkpoint validation cancelled'))
+      pendingCheckpointValidation = null
+      return {}
+    }
     case 'get_checkpoint_eligibility': {
       const config = args.config as InstanceConfig
       if (BROWSER_SCENARIO?.startsWith('checkpoint-local-validation')) {

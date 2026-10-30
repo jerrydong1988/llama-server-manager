@@ -16,27 +16,31 @@ export function CheckpointValidation({ config, engineExe, eligibility, labels, o
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState('')
   const mounted = useRef(true)
+  const validationId = useRef<string | null>(null)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   useEffect(() => { setMessage('') }, [config, engineExe])
 
   const validate = async () => {
+    validationId.current = crypto.randomUUID()
     setRunning(true)
     setMessage(labels.validationRunning)
     try {
-      await invokeApp('validate_checkpoint_locally', { config, engineExe })
+      await invokeApp('validate_checkpoint_locally', { config, engineExe, validationId: validationId.current })
       if (mounted.current) { setMessage(labels.validationPassed) }
     } catch (error) {
       if (mounted.current) setMessage(`${labels.validationFailed}: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
+      validationId.current = null
       if (mounted.current) { setRunning(false); onValidated() }
     }
   }
   const cancel = async () => {
+    const id = validationId.current
+    setMessage(labels.validationCancelling)
     try {
-      await invokeApp('cancel_checkpoint_validation')
-      if (mounted.current) setMessage(labels.validationCancelling)
+      await invokeApp('cancel_checkpoint_validation', { validationId: id })
     } catch (error) {
-      if (mounted.current) setMessage(`${labels.validationFailed}: ${error instanceof Error ? error.message : String(error)}`)
+      if (mounted.current && validationId.current === id) setMessage(`${labels.validationFailed}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   const qualification = eligibility?.qualification

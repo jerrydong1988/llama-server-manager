@@ -2336,22 +2336,37 @@ async fn assess_checkpoint_eligibility(
         .is_ok();
     let model_artifacts_complete = main_model_artifacts_complete && draft_model_artifacts_complete;
     let model_identities = if let Some(fingerprint) = final_fingerprint {
-        fingerprint.draft_model_sha256.as_ref().map(|draft|
-            (fingerprint.model_sha256.clone(), draft.clone()))
-    } else if engine_capabilities.is_some_and(|caps|
-        crate::commands::engine_capabilities::needs_checkpoint_model_identity(config, caps)) {
+        fingerprint
+            .draft_model_sha256
+            .as_ref()
+            .map(|draft| (fingerprint.model_sha256.clone(), draft.clone()))
+    } else if engine_capabilities.is_some_and(|caps| {
+        crate::commands::engine_capabilities::needs_checkpoint_model_identity(config, caps)
+    }) {
         let store = state.checkpoint_coordinator.store().clone();
         let model = std::path::PathBuf::from(&config.model_path);
         let draft = std::path::PathBuf::from(&config.draft_model_path);
         tokio::task::spawn_blocking(move || {
-            Some((store.model_artifact_sha256(&model).ok()?, store.model_artifact_sha256(&draft).ok()?))
-        }).await.ok().flatten()
-    } else { None };
-    let model_digests = model_identities.as_ref().map(|(model, draft)| (model.as_str(), draft.as_str()));
-    let reviewed_swa = engine_capabilities.is_some_and(|caps|
-        crate::commands::engine_capabilities::reviewed_windowed_swa(config, caps, model_digests));
-    let reviewed_multi = engine_capabilities.is_some_and(|caps|
-        crate::commands::engine_capabilities::reviewed_multi_slot(config, caps, model_digests));
+            Some((
+                store.model_artifact_sha256(&model).ok()?,
+                store.model_artifact_sha256(&draft).ok()?,
+            ))
+        })
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    let model_digests = model_identities
+        .as_ref()
+        .map(|(model, draft)| (model.as_str(), draft.as_str()));
+    let reviewed_swa = engine_capabilities.is_some_and(|caps| {
+        crate::commands::engine_capabilities::reviewed_windowed_swa(config, caps, model_digests)
+    });
+    let reviewed_multi = engine_capabilities.is_some_and(|caps| {
+        crate::commands::engine_capabilities::reviewed_multi_slot(config, caps, model_digests)
+    });
     let engine_checkpoint_capabilities = engine_capabilities
         .map(|capabilities| {
             EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
@@ -2361,7 +2376,13 @@ async fn assess_checkpoint_eligibility(
         })
         .unwrap_or_default();
     let checkpoint_types = engine_capabilities
-        .map(|caps| crate::commands::engine_capabilities::checkpoint_types_with_models(config, caps, model_digests))
+        .map(|caps| {
+            crate::commands::engine_capabilities::checkpoint_types_with_models(
+                config,
+                caps,
+                model_digests,
+            )
+        })
         .unwrap_or_default();
     let mut reviewed = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
         config,
@@ -2373,69 +2394,228 @@ async fn assess_checkpoint_eligibility(
         model_artifacts_complete,
         model_has_swa,
     });
-    reviewed.qualification = Some(if reviewed.eligible { "reviewed" } else { "unsupported" }.into());
-    let Some(caps) = engine_capabilities.filter(|caps| crate::checkpoint_qualification::candidate(config, caps)) else { return reviewed; };
+    reviewed.qualification = Some(
+        if reviewed.eligible {
+            "reviewed"
+        } else {
+            "unsupported"
+        }
+        .into(),
+    );
+    let is_rocm = state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.exe),
+                std::path::Path::new(engine_exe),
+            )
+        })
+        .is_some_and(|engine| {
+            engine.backend.eq_ignore_ascii_case("ROCm")
+                || engine.backend.eq_ignore_ascii_case("HIP")
+        });
+    let Some(caps) = engine_capabilities
+        .filter(|caps| is_rocm && crate::checkpoint_qualification::candidate(config, caps))
+    else {
+        return reviewed;
+    };
     // Unknown ROCm bundles require the complete external kernel/data layout;
     // an executable hash plus a successful help probe is not a runtime identity.
-    if caps.persistence_profile.is_none() && crate::model_artifacts::resolve_engine_auxiliary_artifacts(std::path::Path::new(engine_exe)).is_none() {
-        if reviewed.eligible { return reviewed; }
-        let mut incomplete = CheckpointEligibility::ineligible(CheckpointReasonCode::FingerprintUnavailable);
-        incomplete.qualification = Some("unsupported".into()); return incomplete;
+    if caps.persistence_profile.is_none()
+        && crate::model_artifacts::resolve_engine_auxiliary_artifacts(std::path::Path::new(
+            engine_exe,
+        ))
+        .is_none()
+    {
+        if reviewed.eligible {
+            return reviewed;
+        }
+        let mut incomplete =
+            CheckpointEligibility::ineligible(CheckpointReasonCode::FingerprintUnavailable);
+        incomplete.qualification = Some("unsupported".into());
+        return incomplete;
     }
     let mut local = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
-        config, workload, managed_local_engine: true,
-        engine_capabilities: engine_checkpoint_capabilities.with_reviewed_swa_checkpoint_reuse(true).with_reviewed_multi_slot(true),
+        config,
+        workload,
+        managed_local_engine: true,
+        engine_capabilities: engine_checkpoint_capabilities
+            .with_reviewed_swa_checkpoint_reuse(true)
+            .with_reviewed_multi_slot(true),
         engine_speculative_types: &caps.speculative_types,
-        model_architecture: model_architecture.as_deref(), model_artifacts_complete, model_has_swa,
+        model_architecture: model_architecture.as_deref(),
+        model_artifacts_complete,
+        model_has_swa,
     });
-    if !local.eligible { local.qualification = Some("unsupported".into()); return if reviewed.eligible { reviewed } else { local }; }
+    if !local.eligible {
+        local.qualification = Some("unsupported".into());
+        return if reviewed.eligible { reviewed } else { local };
+    }
     reviewed.can_validate = true;
-    if reviewed.eligible { return reviewed; }
+    if reviewed.eligible {
+        return reviewed;
+    }
     let fingerprint = if config.kv_checkpoint.allow_local_validation {
-        match final_fingerprint { Some(fingerprint) => Some(fingerprint.clone()), None => checkpoint_admission_fingerprint(state, config, engine_exe).await.ok() }
-    } else { None };
+        match final_fingerprint {
+            Some(fingerprint) => Some(fingerprint.clone()),
+            None => checkpoint_admission_fingerprint(state, config, engine_exe)
+                .await
+                .ok(),
+        }
+    } else {
+        None
+    };
     let qualified = if let Some(fingerprint) = fingerprint {
         let store = state.checkpoint_coordinator.store().clone();
         let slots = config.parallel as u32;
-        tokio::task::spawn_blocking(move || crate::checkpoint_qualification::qualified(&store, &fingerprint, slots)).await.unwrap_or(false)
-    } else { false };
-    if qualified {
-        local.qualification = Some("local_validated".into()); local.can_validate = true; local
+        tokio::task::spawn_blocking(move || {
+            crate::checkpoint_qualification::qualified(&store, &fingerprint, slots)
+        })
+        .await
+        .unwrap_or(false)
     } else {
-        let mut required = CheckpointEligibility::ineligible(CheckpointReasonCode::LocalValidationRequired);
-        required.qualification = Some("needs_validation".into()); required.can_validate = true; required.slot_count = config.parallel as u32; required
+        false
+    };
+    if qualified {
+        local.qualification = Some("local_validated".into());
+        local.can_validate = true;
+        local
+    } else {
+        let mut required =
+            CheckpointEligibility::ineligible(CheckpointReasonCode::LocalValidationRequired);
+        required.qualification = Some("needs_validation".into());
+        required.can_validate = true;
+        required.slot_count = config.parallel as u32;
+        required
     }
 }
 
-async fn checkpoint_admission_fingerprint(state: &AppState, config: &InstanceConfig, engine_exe: &str) -> Result<CheckpointFingerprint, String> {
-    let (version, backend) = state.engines.lock().unwrap().iter()
-        .find(|engine| paths_equal(std::path::Path::new(&engine.exe), std::path::Path::new(engine_exe)))
-        .map(|engine| (engine.version.clone(), engine.backend.clone())).ok_or("selected engine is not registered")?;
-    let store = state.checkpoint_coordinator.store().clone(); let config = config.clone(); let engine = engine_exe.to_string();
-    tokio::task::spawn_blocking(move || store.build_fingerprint(&config, std::path::Path::new(&config.model_path), std::path::Path::new(&engine), &version, &backend)
-        .map_err(|error| error.to_string())).await.map_err(|error| error.to_string())?
+async fn checkpoint_admission_fingerprint(
+    state: &AppState,
+    config: &InstanceConfig,
+    engine_exe: &str,
+) -> Result<CheckpointFingerprint, String> {
+    let (version, backend) = state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.exe),
+                std::path::Path::new(engine_exe),
+            )
+        })
+        .map(|engine| (engine.version.clone(), engine.backend.clone()))
+        .ok_or("selected engine is not registered")?;
+    let store = state.checkpoint_coordinator.store().clone();
+    let config = config.clone();
+    let engine = engine_exe.to_string();
+    tokio::task::spawn_blocking(move || {
+        store
+            .build_fingerprint(
+                &config,
+                std::path::Path::new(&config.model_path),
+                std::path::Path::new(&engine),
+                &version,
+                &backend,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub async fn validate_checkpoint_locally(config: InstanceConfig, engine_exe: String, state: tauri::State<'_, AppState>) -> AppResult<serde_json::Value> {
-    if !config.kv_checkpoint.allow_local_validation { return Err(AppError::new("LOCAL_VALIDATION_DISABLED", "Enable local checkpoint validation first", false)); }
-    let lease = crate::checkpoint_qualification::reserve().map_err(|error| AppError::new("CHECKPOINT_VALIDATION_BUSY", error, true))?;
+pub async fn validate_checkpoint_locally(
+    config: InstanceConfig,
+    engine_exe: String,
+    validation_id: String,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    if !config.kv_checkpoint.allow_local_validation {
+        return Err(AppError::new(
+            "LOCAL_VALIDATION_DISABLED",
+            "Enable local checkpoint validation first",
+            false,
+        ));
+    }
+    if validation_id.len() > 80 || validation_id.is_empty() {
+        return Err(AppError::new(
+            "INVALID_VALIDATION_ID",
+            "A bounded validation identifier is required",
+            false,
+        ));
+    }
+    let lease = crate::checkpoint_qualification::reserve(&validation_id)
+        .map_err(|error| AppError::new("CHECKPOINT_VALIDATION_BUSY", error, true))?;
     let (config, _, _) = prepare_launch_checked(config, &engine_exe)?;
-    let eligibility = get_checkpoint_eligibility(config.clone(), engine_exe.clone(), state.clone()).await?;
-    if !eligibility.can_validate { return Err(AppError::new("CHECKPOINT_VALIDATION_UNSUPPORTED", format!("Unsupported configuration: {:?}", eligibility.reasons), false)); }
-    let fingerprint = checkpoint_admission_fingerprint(state.inner(), &config, &engine_exe).await
+    let eligibility =
+        get_checkpoint_eligibility(config.clone(), engine_exe.clone(), state.clone()).await?;
+    if !eligibility.can_validate {
+        return Err(AppError::new(
+            "CHECKPOINT_VALIDATION_UNSUPPORTED",
+            format!("Unsupported configuration: {:?}", eligibility.reasons),
+            false,
+        ));
+    }
+    let fingerprint = checkpoint_admission_fingerprint(state.inner(), &config, &engine_exe)
+        .await
         .map_err(|error| AppError::new("CHECKPOINT_FINGERPRINT", error, false))?;
     let store = state.checkpoint_coordinator.store().clone();
-    let require_checkpoints = state.models.lock().unwrap().iter().find(|model| paths_equal(std::path::Path::new(&model.path), std::path::Path::new(&config.model_path)))
-        .is_some_and(|model| model.architecture.as_deref() == Some("qwen35") || (model.capabilities.has_swa == Some(true) && !config.swa_full));
-    let receipt = tokio::task::spawn_blocking(move || crate::checkpoint_qualification::run(store, config, engine_exe, fingerprint, require_checkpoints, lease)).await
-        .map_err(|error| AppError::new("CHECKPOINT_VALIDATION_FAILED", error.to_string(), false))?
-        .map_err(|error| AppError::new(if error == "checkpoint validation cancelled" { "CANCELLED" } else { "CHECKPOINT_VALIDATION_FAILED" }, error, false))?;
-    serde_json::to_value(receipt).map_err(|error| AppError::new("CHECKPOINT_VALIDATION_FAILED", error.to_string(), false))
+    let require_checkpoints = state
+        .models
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|model| {
+            paths_equal(
+                std::path::Path::new(&model.path),
+                std::path::Path::new(&config.model_path),
+            )
+        })
+        .is_some_and(|model| {
+            model.architecture.as_deref() == Some("qwen35")
+                || (model.capabilities.has_swa == Some(true) && !config.swa_full)
+        });
+    let receipt = tokio::task::spawn_blocking(move || {
+        crate::checkpoint_qualification::run(
+            store,
+            config,
+            engine_exe,
+            fingerprint,
+            require_checkpoints,
+            lease,
+        )
+    })
+    .await
+    .map_err(|error| AppError::new("CHECKPOINT_VALIDATION_FAILED", error.to_string(), false))?
+    .map_err(|error| {
+        AppError::new(
+            if error == "checkpoint validation cancelled" {
+                "CANCELLED"
+            } else {
+                "CHECKPOINT_VALIDATION_FAILED"
+            },
+            error,
+            false,
+        )
+    })?;
+    serde_json::to_value(receipt)
+        .map_err(|error| AppError::new("CHECKPOINT_VALIDATION_FAILED", error.to_string(), false))
 }
 
 #[tauri::command]
-pub fn cancel_checkpoint_validation() { crate::checkpoint_qualification::cancel(); }
+pub fn cancel_checkpoint_validation(validation_id: String) -> AppResult<()> {
+    if crate::checkpoint_qualification::cancel(&validation_id) {
+        Ok(())
+    } else {
+        Err(AppError::new("VALIDATION_NOT_RUNNING", "This validation is preparing or has already finished; query its status before retrying cancellation", true))
+    }
+}
 
 async fn prepare_checkpoint_launch_plan(
     state: &AppState,

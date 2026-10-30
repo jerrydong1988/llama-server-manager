@@ -748,3 +748,18 @@ test('failed local checkpoint validation leaves the combination unqualified', as
   await expect(panel.getByRole('status')).toContainText('隔离验证未通过')
   await expect(panel.getByText('兼容候选，尚需本机验证', { exact: true })).toBeVisible()
 })
+
+
+test('cancelling a local checkpoint test targets its own attempt and keeps it unqualified', async ({ page }) => {
+  await openConfiguration(page, 'checkpoint-local-validation-cancel')
+  const panel = page.locator('#config-checkpoint')
+  await panel.getByRole('checkbox', { name: '允许本机验证的组合', exact: true }).check()
+  await panel.getByRole('button', { name: '运行隔离验证', exact: true }).click()
+  await panel.getByRole('button', { name: '取消验证', exact: true }).click()
+  await expect(panel.getByRole('status')).toContainText('checkpoint validation cancelled')
+  await expect(panel.getByText('兼容候选，尚需本机验证', { exact: true })).toBeVisible()
+  const calls = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'validate_checkpoint_locally' || call.command === 'cancel_checkpoint_validation'))
+  expect(calls).toHaveLength(2)
+  expect((calls[0].payload as { validationId: string }).validationId).toBeTruthy()
+  expect((calls[1].payload as { validationId: string }).validationId).toBe((calls[0].payload as { validationId: string }).validationId)
+})

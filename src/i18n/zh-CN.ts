@@ -574,7 +574,7 @@
 
   checkpoint: {
     allowLocalValidation: '允许本机验证的组合',
-    localValidationTip: '当前面向 Windows/ROCm。范围外的构建、模型和配置可先做隔离验证。测试会额外加载模型并占用内存，可能持续数分钟；通过后仅授权本机的这组配置，仍属实验性。模型、运行文件、GPU 驱动或关键参数变化后需重新验证。',
+    localValidationTip: '当前面向 Windows/ROCm。范围外的构建、模型和配置可先做隔离验证。测试会额外加载模型并占用内存与磁盘，可能持续数分钟；通过后仅授权本机的这组配置，仍属实验性。模型、运行文件、GPU 驱动或关键参数变化后需重新验证。',
     validateLocally: '运行隔离验证',
     validationRunning: '正在进行隔离推理验证…',
     validationPassed: '隔离验证已通过并保存记录，已刷新当前配置的资格。此结果不代表所有工作负载均已验证。',
@@ -650,6 +650,7 @@
       hybrid_recurrent_unsupported: '此混合或循环架构与引擎组合尚未通过跨进程复用验证', context_checkpoints_required: '需要启用上下文检查点（ctx-checkpoints 大于 0）', sliding_window_requires_full_cache: '滑动窗口模型必须启用 SWA 完整缓存，才能生成可跨进程复用的检查点', model_architecture_unknown: '模型架构未知',
       sharded_model_unsupported: '旧版不支持分片模型', model_artifacts_incomplete: '模型文件集合缺失或分片不完整，无法生成完整内容指纹', conflicting_slot_save_path: '用户指定的 slot 保存目录与管理器所有权冲突',
       fingerprint_unavailable: '完整兼容性指纹尚不可用', fingerprint_mismatch: '已保存 generation 属于不同模型、引擎或运行配置',
+      native_environment_unsupported: '引擎存在未纳管的 LLAMA_ARG_* 环境参数。请移除这些环境覆盖，并在实例中配置对应参数后再使用持久化。',
       local_validation_required: '需开启本机验证并完成隔离恢复推理，当前仍会冷启动。',
       no_checkpoint: '没有可用的已保存 generation', auto_save_disabled: '自动保存已关闭', auto_restore_disabled: '自动恢复已关闭',
       below_token_threshold: '提示状态低于配置的 token 阈值', longer_checkpoint_retained: '已保留较长的已提交检查点', busy_timeout: 'slot 未在安全超时内变为空闲',

@@ -58,12 +58,18 @@ written, and existing engines are not stopped or switched.
    including legitimate empty blobs.
 3. Fully exit the saving process. Start a fresh process, restore **all** slots
    before testing any of them, and require complete byte/token consumption.
-4. Compare generated text/tokens and draft counters to the live reference. The
+4. Require identical generated text/tokens. Record both draft counters and
+   acceptance rates; allow at most one configured draft batch of counter drift
+   and at most five percentage points of acceptance-rate loss. This accommodates
+   proposal-boundary variation without accepting a material regression. The
    request must retrieve its slot's secret and reuse the saved prefix, allowing
    one token of boundary reevaluation. Startup and HTTP 200 do not count as this
    evidence.
-5. Rewrite the long prefix and compare with its cold reference and a full
-   recomputation. Mixed strategies also exercise a deliberately rejected draft
+5. Rewrite the long prefix and retrieve its final record using a three-digit
+   grammar that allows all 1,000 answers. Require the correct answer in the cold
+   reference, cache-enabled rewrite and verified full recomputation; this avoids treating
+   arbitrary long-continuation differences as restoration failures. Mixed
+   strategies also exercise a deliberately rejected draft
    continuation and compare its output and subsequent unconstrained generation
    with a separate no-draft process.
 6. Restore a deliberately truncated private copy. Apply the manager's full-read
@@ -72,6 +78,9 @@ written, and existing engines are not stopped or switched.
 7. Recheck runtime/model fingerprints and the Windows machine/GPU-driver and
    relevant environment identity before atomically publishing the receipt.
 
+The Windows TCP listener owner is checked before each HTTP request; requests
+are rejected when the listener belongs to another local process. Cancellation
+is scoped to its validation ID, including stale requests from a previous attempt.
 All test processes are owned by the validator. Windows jobs reclaim them when
 the owning process exits. Native requests and the campaign have time limits;
 one data directory cannot run two concurrent qualifications.
@@ -80,7 +89,7 @@ Successful test payloads are removed after the child processes exit; logs,
 format records and compact inference evidence remain available. Failed attempts
 retain their evidence and cannot create a new qualification. Revalidation blocks
 the prior local receipt until success; cancellation preserves a previously
-completed receipt. Neither action modifies existing committed generations.
+completed, unblocked receipt and cannot revive one blocked by an earlier failure. Neither action modifies existing committed generations.
 
 ## Identity and storage
 
@@ -88,10 +97,14 @@ completed receipt. Neither action modifies existing committed generations.
   state-affecting parameters and topology. The local-validation switch itself
   does not change this identity.
 - Explicit emission/inheritance of state-affecting arguments is included.
-  Equivalent field aliases normalize together; logging, monitoring and network
-  controls do not invalidate cached model state merely by becoming explicit.
+  Equivalent field aliases normalize together. Within the same emission policy,
+  making logging, monitoring or network controls explicit does not invalidate
+  cached model state. Switching between legacy and selective emission still does.
 - Native `LLAMA_ARG_*` environment defaults are bound by a digest, without
-  persisting their raw values. Legacy configurations without these defaults or
+  persisting raw values, but admission rejects these unmanaged overrides. A
+  hashed environment path does not hash the model/adapter file it could load.
+  Configure those parameters in the instance instead. Windows keys are compared
+  without case sensitivity. Legacy configurations without these defaults or
   explicit parameter intent retain their existing fingerprint representation.
 - Newly admitted ROCm bundles include the executable/libraries plus `rocblas`,
   `hipblaslt` and `.kpack` assets. Existing reviewed legacy identities remain

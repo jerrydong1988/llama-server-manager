@@ -21,7 +21,7 @@ const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path
 const cases = JSON.parse(args.cases || '[{"slots":1,"context":4096,"kv":"f16"},{"slots":2,"context":8192,"kv":"f16"},{"slots":4,"context":16384,"kv":"f16"},{"slots":1,"context":8192,"kv":"q8_0"}]')
 const report = { started: new Date().toISOString(), scope: 'Windows/ROCm experimental local checkpoint admission', events: [], manager_sha256: sha256(path.join(args.bin, 'llama-server-manager.exe')) }
 const record = (name, details = {}) => {
-  report.events.push({ name, ...details, at: new Date().toISOString() })
+  report.events.push({ ...details, name, at: new Date().toISOString() })
   fs.writeFileSync(path.join(args.root, 'report.json'), JSON.stringify(report, null, 2))
   console.log(name)
 }
@@ -92,6 +92,31 @@ async function main() {
     await update(id, { kv_checkpoint: { allow_local_validation: true } })
     assert.equal((await client.call('checkpoints.eligibility', { id })).eligible, true)
     record('changed-tuple-and-disabled-policy-rejected', { shape })
+    if (index === 0) {
+      const receiptFile = path.join(data, 'kv-checkpoints', '.qualifications', `${receipt.fingerprint.digest}.json`)
+      const receiptBefore = sha256(receiptFile)
+      const task = await client.call('checkpoints.validate', { id })
+      const startedBy = Date.now() + 60000
+      while (!owned().some(p => norm(p.ExecutablePath) === norm(args.engine))) {
+        const status = await client.call('tasks.get', { id: task.task_id })
+        assert.ok(['queued', 'running'].includes(status.status), JSON.stringify(status))
+        assert.ok(Date.now() < startedBy, 'revalidation must start an owned process before cancellation')
+        await sleep(500)
+      }
+      await client.call('tasks.cancel', { id: task.task_id })
+      const cancelledBy = Date.now() + 200000
+      for (;;) {
+        const status = await client.call('tasks.get', { id: task.task_id })
+        if (status.status === 'cancelled') break
+        assert.equal(status.status, 'running', JSON.stringify(status))
+        assert.ok(Date.now() < cancelledBy, 'cancellation must finish after bounded process cleanup')
+        await sleep(500)
+      }
+      assert.equal(sha256(receiptFile), receiptBefore)
+      assert.equal((await client.call('checkpoints.eligibility', { id })).eligible, true)
+      assert.equal(owned().filter(p => norm(p.ExecutablePath) === norm(args.engine)).length, 0)
+      record('cancellation-preserves-receipt-and-reclaims-engine', { shape, task_id: task.task_id })
+    }
   }
   report.passed = true
 }
@@ -99,10 +124,10 @@ main().catch(error => { report.passed = false; report.error = error.stack; proce
   await sampler?.stop()
   try { await client.mutate('service.stop') } catch (error) { report.stop_error = error.message }
   await sleep(1500)
-  for (const process of owned()) {
+  for (const ownedProcess of owned()) {
     report.passed = false; process.exitCode = 1
-    report.forced_cleanup = [...(report.forced_cleanup || []), process.ProcessId]
-    cp.execFileSync('taskkill.exe', ['/PID', String(process.ProcessId), '/T', '/F'], { windowsHide: true })
+    report.forced_cleanup = [...(report.forced_cleanup || []), ownedProcess.ProcessId]
+    cp.execFileSync('taskkill.exe', ['/PID', String(ownedProcess.ProcessId), '/T', '/F'], { windowsHide: true })
   }
   report.processes_after_cleanup = owned()
   assert.equal(report.processes_after_cleanup.length, 0)

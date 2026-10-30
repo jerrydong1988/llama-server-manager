@@ -224,7 +224,10 @@ impl Host {
                 }
             }
             let result = match preparation {
-                Ok((prepared, _guard)) => operations::dispatch(&host.app, &request.operation, &prepared).await,
+                Ok((mut prepared, _guard)) => {
+                    if request.operation == "checkpoints.validate" { prepared["_validation_id"] = json!(task_copy); }
+                    operations::dispatch(&host.app, &request.operation, &prepared).await
+                },
                 Err(error) => Err(error),
             }
                 .map(|mut value| {
@@ -301,7 +304,9 @@ impl Host {
         let mut tasks = self.tasks.lock().unwrap();
         let index = tasks.iter().position(|task| task.id == id).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))?;
         if tasks[index].status == "running" && tasks[index].operation == "checkpoints.validate" {
-            crate::checkpoint_qualification::cancel();
+            if !crate::checkpoint_qualification::cancel(id) {
+                return Err(Failure::new("VALIDATION_NOT_RUNNING", "validation is preparing or has already finished; query tasks.get and retry cancellation if still running"));
+            }
             return Ok(json!({"id":id,"status":"cancellation_requested"}));
         }
         if tasks[index].status == "running" {

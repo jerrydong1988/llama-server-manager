@@ -574,7 +574,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
 
   checkpoint: {
     allowLocalValidation: 'Allow locally validated combinations',
-    localValidationTip: 'Currently available for Windows/ROCm. Validate additional builds, models and configurations in isolation. The test loads another model copy, uses additional memory and may take several minutes. A pass admits only this configuration on this machine, experimentally. Changes to models, runtime files, GPU drivers or relevant settings require validation again.',
+    localValidationTip: 'Currently available for Windows/ROCm. Validate additional builds, models and configurations in isolation. The test loads another model copy, uses additional memory and disk space and may take several minutes. A pass admits only this configuration on this machine, experimentally. Changes to models, runtime files, GPU drivers or relevant settings require validation again.',
     validateLocally: 'Run isolated validation',
     validationRunning: 'Running isolated inference validation…',
     validationPassed: 'Validation passed and its record was saved. Current eligibility was refreshed. This does not certify every workload.',
@@ -650,6 +650,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
       hybrid_recurrent_unsupported: 'This hybrid or recurrent architecture and engine combination has not passed cross-process reuse validation', context_checkpoints_required: 'Enable context checkpoints (ctx-checkpoints greater than zero)', sliding_window_requires_full_cache: 'Sliding-window models require SWA Full Cache for a reusable cross-process checkpoint', model_architecture_unknown: 'Model architecture is unknown',
       sharded_model_unsupported: 'Sharded models were unsupported by the previous checkpoint format', model_artifacts_incomplete: 'The model file set is missing or incomplete, so a complete content fingerprint cannot be built', conflicting_slot_save_path: 'A user-defined slot save path conflicts with manager ownership',
       fingerprint_unavailable: 'The full compatibility fingerprint is not available', fingerprint_mismatch: 'The saved generation belongs to a different model, engine, or runtime configuration',
+      native_environment_unsupported: 'Engine LLAMA_ARG_* environment overrides are unmanaged. Remove them and configure these settings in the instance before using persistence.',
       local_validation_required: 'Enable local validation and pass isolated restored inference; this launch will otherwise cold-start.',
       no_checkpoint: 'No saved generation is available', auto_save_disabled: 'Automatic save is disabled', auto_restore_disabled: 'Automatic restore is disabled',
       below_token_threshold: 'The prompt state is below the configured token threshold', longer_checkpoint_retained: 'The longer committed checkpoint was retained', busy_timeout: 'The slot did not become idle before the safety timeout',

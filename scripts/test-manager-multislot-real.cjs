@@ -38,7 +38,7 @@ if (args.fingerprints) {
     fs.mkdirSync(path.join(data, 'kv-checkpoints'), { recursive: true });
     fs.writeFileSync(path.join(data, 'kv-checkpoints', 'fingerprints-v1.json'), bytes);
 }
-const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 600000 });
+const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: localValidation ? 1500000 : 600000 });
 let sampler;
 const report = { started: new Date().toISOString(), engine: args.engine, scope: 'manager multi-slot automatic persistence', specType, parallel, context, fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] };
 const sha = file => {

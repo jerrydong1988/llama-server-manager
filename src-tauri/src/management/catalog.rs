@@ -123,7 +123,7 @@ pub fn operations() -> Vec<Operation> {
         ("service.stop","Stop the management host and its managed workloads","admin",""),
         ("tasks.list","List recent management tasks","read",""),
         ("tasks.get","Get completion, result or failure of a management task","read","id:string"),
-        ("tasks.cancel","Cancel a queued task, including network preparation; running operations use resource stop/pause","write","id:string"),
+        ("tasks.cancel","Cancel queued work or running checkpoint validation; other running operations use resource stop/pause","write","id:string"),
         ("tasks.delete","Delete one finished task record and its idempotency key; queued/running tasks are protected. Returns deletion counts immediately, without creating a task.","delete","id:string"),
         ("tasks.clear","Clear finished task history and its idempotency keys, optionally filtered by terminal statuses. Active tasks are retained. Returns deletion counts immediately, without creating a task.","delete","statuses?:strings"),
         ("paths.list","List explicitly authorized directories","read",""),

@@ -121,6 +121,7 @@ pub enum CheckpointReasonCode {
     CustomEndpointUnsupported,
     EngineCapabilityMissing,
     LocalValidationRequired,
+    NativeEnvironmentUnsupported,
     SpeculativeDecodingUnsupported,
     LoraUnsupported,
     MultimodalUnsupported,
@@ -488,6 +489,9 @@ pub fn evaluate_checkpoint_eligibility(
         push_reason(&mut reasons, CheckpointReasonCode::ManagedLocalRequired);
     }
     let custom_argument_blockers = checkpoint_custom_argument_blockers(config);
+    if has_native_argument_overrides() {
+        push_reason(&mut reasons, CheckpointReasonCode::NativeEnvironmentUnsupported);
+    }
     if !custom_argument_blockers.is_empty() {
         push_reason(
             &mut reasons,
@@ -599,8 +603,8 @@ pub fn evaluate_checkpoint_eligibility(
         None | Some("") => {
             push_reason(&mut reasons, CheckpointReasonCode::ModelArchitectureUnknown)
         }
-        // qwen35 is the one hybrid architecture with a verified local
-        // cross-process target + DFlash round trip. Other hybrids remain cold.
+        // qwen35 has the reviewed hybrid checkpoint-serialization contract.
+        // Other hybrid architectures remain cold until separately reviewed.
         Some("qwen35") if context.engine_capabilities.context_checkpoint_persistence => {}
         Some(architecture) if is_known_hybrid_or_recurrent(architecture) => push_reason(
             &mut reasons,
@@ -1224,11 +1228,20 @@ struct CanonicalFingerprintV3<'a> {
     reasoning_budget_message: &'a str,
 }
 
-// Native defaults can be supplied through LLAMA_ARG_* without appearing in
-// argv. Bind them without storing credentials or other raw environment values.
+// Bind native defaults without storing their raw values. Environment-supplied
+// model/adapter paths are not artifact-hashed, so admission also rejects these
+// unmanaged defaults instead of pretending a hash of the path hashes its file.
+fn native_argument_defaults(environment: impl Iterator<Item = (String, String)>) -> std::collections::BTreeMap<String, String> {
+    environment.map(|(key, value)| (if cfg!(windows) { key.to_ascii_uppercase() } else { key }, value))
+        .filter(|(key, _)| key.starts_with("LLAMA_ARG_")).collect()
+}
+
+pub(crate) fn has_native_argument_overrides() -> bool {
+    !native_argument_defaults(std::env::vars()).is_empty()
+}
+
 fn environment_defaults_sha256() -> Option<String> {
-    let environment = std::env::vars().filter(|(key, _)| key.starts_with("LLAMA_ARG_"))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let environment = native_argument_defaults(std::env::vars());
     (!environment.is_empty()).then(|| sha256_bytes(&serde_json::to_vec(&environment).expect("string map serialization")))
 }
 
@@ -2732,6 +2745,11 @@ pub struct SlotRestoreResult {
     pub n_read: u64,
 }
 
+/// Compare with trusted save/manifest metadata, never a damaged file's new size.
+pub(crate) fn restore_counts_match_manifest(observed_bytes: u64, observed_tokens: u64, saved_bytes: u64, saved_tokens: u64) -> bool {
+    saved_bytes > 0 && observed_bytes == saved_bytes && observed_tokens == saved_tokens
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotEraseResult {
     pub id_slot: u32,
@@ -3881,8 +3899,7 @@ impl CheckpointCoordinator {
                 let restored = backend.restore_slot(slot.id, filename)?;
                 if restored.id_slot != slot.id
                     || restored.filename != filename
-                    || restored.n_restored != slot.prompt_tokens
-                    || restored.n_read != slot.bytes
+                    || !restore_counts_match_manifest(restored.n_read, restored.n_restored, slot.bytes, slot.prompt_tokens)
                 {
                     return Err(CheckpointStoreError::new(
                         CheckpointReasonCode::RestoreResponseInvalid,
@@ -4968,6 +4985,26 @@ mod tests {
         assert!(!result.eligible);
         assert_eq!(result.reason_code, CheckpointReasonCode::Disabled);
         assert_eq!(result.reasons, vec![CheckpointReasonCode::Disabled]);
+    }
+
+    #[test]
+    fn restore_count_guard_uses_the_original_manifest_not_the_truncated_length() {
+        assert!(restore_counts_match_manifest(4096, 128, 4096, 128));
+        assert!(!restore_counts_match_manifest(4064, 128, 4096, 128));
+        assert!(!restore_counts_match_manifest(4096, 127, 4096, 128));
+        assert!(!restore_counts_match_manifest(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn native_argument_defaults_follow_platform_key_case_and_exclude_backend_environment() {
+        let values = native_argument_defaults([
+            ("LLAMA_ARG_MODEL_DRAFT".into(), "first.gguf".into()),
+            ("llama_arg_lora".into(), "adapter.gguf".into()),
+            ("GGML_CUDA_NO_PINNED".into(), "1".into()),
+        ].into_iter());
+        assert_eq!(values.get("LLAMA_ARG_MODEL_DRAFT").map(String::as_str), Some("first.gguf"));
+        assert_eq!(values.contains_key("LLAMA_ARG_LORA"), cfg!(windows));
+        assert!(!values.contains_key("GGML_CUDA_NO_PINNED"));
     }
 
     #[test]
