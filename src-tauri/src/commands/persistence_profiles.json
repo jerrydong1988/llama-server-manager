@@ -101,5 +101,39 @@
       }
     ],
     "evidence": "docs/B11913_CHECKPOINT_ACCEPTANCE.md"
+  },
+  {
+    "id": "windows-rocm-b12000-rocm103-sckp1-sdft1",
+    "managed_lookup_cache": true,
+    "base_artifact_sha256": "2ff974ba6d955ea6f3453d85e09c020e143fea2583102ae053b10f4c8ea9dd34",
+    "artifact_sha256": "0b6d1705b4b0daf2a5f768d1e7e5bb450c0bcd65a01709502fe7553ba9c09e56",
+    "launcher_sha256": "71188bbb8f78e0a53c78c642b0295abdf80e9e6c7cfdaae1ed372c05b26cdd0a",
+    "draft_types": [
+      "draft-simple",
+      "draft-mtp",
+      "draft-dflash"
+    ],
+    "max_context": 4096,
+    "model_scopes": [
+      {
+        "model_sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
+        "draft_sha256": "50d9ce5a6da381bbcfb31061cf73df94a90e6faf8efeddee379a9cb8f1501c6e",
+        "contexts": [
+          16384
+        ],
+        "cache_types": [
+          "f16"
+        ],
+        "parallel": [
+          4
+        ],
+        "evidence": "docs/B12000_CHECKPOINT_ACCEPTANCE.md",
+        "spec_types": [
+          "draft-mtp",
+          "ngram-mod,draft-mtp"
+        ]
+      }
+    ],
+    "evidence": "docs/B12000_CHECKPOINT_ACCEPTANCE.md"
   }
 ]

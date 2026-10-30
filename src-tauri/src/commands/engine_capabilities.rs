@@ -16,9 +16,12 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 6;
+pub(crate) const PERSISTENCE_REVISION: u8 = 7;
 fn single_slot_scope() -> Vec<i32> {
     vec![1]
+}
+fn single_mtp_strategy() -> Vec<String> {
+    vec!["draft-mtp".to_string()]
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +32,8 @@ struct ModelPersistenceScope {
     cache_types: Vec<String>,
     #[serde(default = "single_slot_scope")]
     parallel: Vec<i32>,
+    #[serde(default = "single_mtp_strategy")]
+    spec_types: Vec<String>,
     #[allow(dead_code)]
     evidence: String,
 }
@@ -74,7 +79,10 @@ impl ModelPersistenceScope {
             ]
             .iter()
             .all(|(value, key)| value.is_empty() || emits(&[*key]));
-        config.spec_type == "draft-mtp"
+        self.spec_types.iter().any(|strategy| {
+            crate::speculative::normalize_speculative_types(strategy)
+                == crate::speculative::normalize_speculative_types(&config.spec_type)
+        })
             && config.draft_tokens == 3
             && self.parallel.contains(&config.parallel)
             && (config.parallel == 1 || config.ctx_size == 4096 * config.parallel as u32)
@@ -190,6 +198,9 @@ pub(crate) fn reviewed_windowed_swa(
         && hardware_scope(config)
         && caps.checkpoint_draft_types.iter().any(|k| k == "draft-mtp")
         && caps.speculative_types.iter().any(|k| k == "draft-mtp")
+        && crate::speculative::parse_speculative_types(&config.spec_type)
+            .iter()
+            .all(|kind| caps.speculative_types.contains(kind))
         && profiles()
             .iter()
             .filter(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref())
@@ -221,6 +232,14 @@ pub(crate) fn checkpoint_types_with_models(
     caps: &EngineCapabilities,
     models: Option<(&str, &str)>,
 ) -> Vec<String> {
+    // Independent algorithm support does not qualify their combined rollback
+    // and restore behavior. Mixed draft pipelines need an exact model scope.
+    if crate::speculative::uses_draft_context(&config.spec_type)
+        && crate::speculative::parse_speculative_types(&config.spec_type).len() > 1
+        && !reviewed_windowed_swa(config, caps, models)
+    {
+        return Vec::new();
+    }
     let profile = profiles()
         .iter()
         .find(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref());
@@ -1368,6 +1387,52 @@ mod tests {
             assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
             config.ctx_size = 4096; caps.persistence_profile = None;
             assert_eq!(checkpoint_types(&config, &caps), vec!["ngram-cache"]);
+        }
+    }
+
+    #[test]
+    fn individual_draft_support_does_not_qualify_a_mixed_pipeline() {
+        let caps = EngineCapabilities {
+            persistence_profile: Some("windows-rocm-b11913-rocm103-sckp1-sdft1".into()),
+            persistence_revision: PERSISTENCE_REVISION,
+            checkpoint_draft_types: vec!["draft-mtp".into()],
+            speculative_types: vec!["ngram-mod".into(), "draft-mtp".into()],
+            ..Default::default()
+        };
+        let mut config = crate::models::InstanceConfig {
+            spec_type: "draft-mtp".into(), ctx_size: 4096, ctx_size_auto: false,
+            gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99,
+            flash_attn: "on".into(), fit_mode: "off".into(), ..Default::default()
+        };
+        assert!(checkpoint_types(&config, &caps).contains(&"draft-mtp".to_string()));
+        for combination in ["ngram-mod,draft-mtp", " draft-mtp,ngram-mod,ngram-mod "] {
+            config.spec_type = combination.into();
+            assert!(checkpoint_types(&config, &caps).is_empty());
+        }
+        config.spec_type = "ngram-mod".into();
+        assert!(checkpoint_types(&config, &caps).contains(&"ngram-mod".to_string()));
+    }
+
+    #[test]
+    fn model_strategy_scope_matches_combinations_without_widening_them() {
+        let mut scope: ModelPersistenceScope = serde_json::from_value(serde_json::json!({
+            "model_sha256": "target", "draft_sha256": "draft", "contexts": [16384],
+            "cache_types": ["f16"], "parallel": [4], "evidence": "fixture"
+        })).unwrap();
+        let mut config = crate::models::InstanceConfig {
+            spec_type: "draft-mtp".into(), draft_tokens: 3, parallel: 4,
+            ctx_size: 16384, ctx_checkpoints: 2, kv_unified: true,
+            ..Default::default()
+        };
+        assert!(scope.matches_config(&config));
+        config.spec_type = "ngram-mod,draft-mtp".into();
+        assert!(!scope.matches_config(&config));
+        scope.spec_types.push(config.spec_type.clone());
+        config.spec_type = " draft-mtp,ngram-mod,ngram-mod ".into();
+        assert!(scope.matches_config(&config));
+        for unreviewed in ["ngram-cache,draft-mtp", "ngram-mod,draft-dflash", "ngram-mod", "none"] {
+            config.spec_type = unreviewed.into();
+            assert!(!scope.matches_config(&config));
         }
     }
 

@@ -347,6 +347,7 @@ async function main() {
     record('windows-graceful-stop-publishes-private-candidate', { started, stopped, gpu, timings: generated.timings, results: results() })
     const oldPointer = latest(), oldManifest = sha(oldPointer)
     const oldGeneration = JSON.parse(fs.readFileSync(oldPointer))
+    assert.ok(oldGeneration.bytes > 0, 'an empty n-gram file cannot prove old-cache data protection')
     assert.match(oldGeneration.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
     const oldPayload = path.join(path.dirname(oldPointer), `${oldGeneration.id}.bin`)
     const verifyOldPayload = () => {
@@ -450,5 +451,7 @@ main().catch(e => { report.error = e.stack; process.exitCode = 1; console.error(
     try { cp.execFileSync('taskkill.exe', ['/PID', String(process.ProcessId), '/T', '/F'], { windowsHide: true }) }
     catch (e) { if (ownedProcesses().some(p => p.ProcessId === process.ProcessId)) report.cleanup_service_error = e.message }
   }
+  report.processes_after_cleanup = ownedProcesses()
+  if (report.processes_after_cleanup.length) { report.passed = false; global.process.exitCode = 1 }
   report.finished = new Date().toISOString(); record('finished')
 })
