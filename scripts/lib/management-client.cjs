@@ -7,10 +7,12 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 function managementClient({ cli, app, data, timeout = 240000 }) {
   const prefix = ['--app', app, '--data-dir', data]
   async function call(op, args = {}, { mutate = false, allowFailure = false } = {}) {
+    const started = Date.now()
+    const requestTimeout = mutate ? timeout + 5000 : (op === 'service.start' ? 120000 : 90000)
     const response = await new Promise((resolve, reject) => {
       cp.execFile(cli, [...prefix, ...op.split('.'), '--args', JSON.stringify(args), ...(mutate ? ['--wait', '--timeout', String(Math.ceil(timeout / 1000))] : [])],
-        { windowsHide: true, timeout: timeout + 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
-          try { resolve(JSON.parse(stdout || stderr)) } catch { reject(new Error(`${op}: ${error?.message || stderr || stdout}`)) }
+        { windowsHide: true, timeout: requestTimeout, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+          try { resolve(JSON.parse(stdout || stderr)) } catch { reject(new Error(`${op}: invalid or absent CLI response; elapsed=${Date.now() - started}ms code=${error?.code ?? 'none'} signal=${error?.signal ?? 'none'} killed=${error?.killed ?? false} stdout_bytes=${Buffer.byteLength(stdout || '')} stderr_bytes=${Buffer.byteLength(stderr || '')}; ${error?.message || stderr || stdout}`)) }
         })
     })
     if (!allowFailure) assert.equal(response.ok, true, `${op}: ${JSON.stringify(response)}`)

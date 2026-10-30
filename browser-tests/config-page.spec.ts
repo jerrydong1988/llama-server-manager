@@ -390,7 +390,7 @@ for (const fail of [false, true]) {
 test('checkpoint requirements are explicit and repaired only after confirmation', async ({ page }) => {
   await openConfiguration(page, 'checkpoint-requirements')
 
-  await expect(page.getByText('当前构建、模型或配置尚未验证多 slot，请使用 1 个 slot')).toBeVisible()
+  await expect(page.getByText('当前多 slot 组合尚不受支持；Windows/ROCm 可对 2 或 4 个 slot 运行本机验证')).toBeVisible()
   await expect(page.getByText('必须启用 prompt cache')).toBeVisible()
   await expect(page.getByText(/Harness 元数据请求之后保留已恢复前缀/)).toBeVisible()
   await expect(page.getByText(/滑动窗口模型必须启用 SWA 完整缓存/)).toBeVisible()
@@ -724,4 +724,42 @@ test('an empty managed alias becomes a visible safe API identifier', async ({ pa
   const aliasIndex = generated?.command.indexOf('-a') ?? -1
   expect(aliasIndex).toBeGreaterThanOrEqual(0)
   expect(generated?.command[aliasIndex + 1]).toBe('Browser Parameter Regression')
+})
+
+
+test('local checkpoint admission requires an explicit isolated test, not only an opt-in', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 })
+  await openConfiguration(page, 'checkpoint-local-validation')
+  const panel = page.locator('#config-checkpoint')
+  await panel.getByRole('checkbox', { name: '允许本机验证的组合', exact: true }).check()
+  await expect(panel.getByText('兼容候选，尚需本机验证', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'validate_checkpoint_locally').length)).toBe(0)
+  await panel.getByRole('button', { name: '运行隔离验证', exact: true }).click()
+  await expect(panel.getByText('本机自检通过（实验性）', { exact: true })).toBeVisible()
+  await expect(panel.getByText('可使用受管检查点', { exact: true })).toBeVisible()
+  await panel.screenshot({ path: 'test-results/checkpoint-local-validation-zh-1024.png' })
+})
+
+test('failed local checkpoint validation leaves the combination unqualified', async ({ page }) => {
+  await openConfiguration(page, 'checkpoint-local-validation-failure')
+  const panel = page.locator('#config-checkpoint')
+  await panel.getByRole('checkbox', { name: '允许本机验证的组合', exact: true }).check()
+  await panel.getByRole('button', { name: '运行隔离验证', exact: true }).click()
+  await expect(panel.getByRole('status')).toContainText('隔离验证未通过')
+  await expect(panel.getByText('兼容候选，尚需本机验证', { exact: true })).toBeVisible()
+})
+
+
+test('cancelling a local checkpoint test targets its own attempt and keeps it unqualified', async ({ page }) => {
+  await openConfiguration(page, 'checkpoint-local-validation-cancel')
+  const panel = page.locator('#config-checkpoint')
+  await panel.getByRole('checkbox', { name: '允许本机验证的组合', exact: true }).check()
+  await panel.getByRole('button', { name: '运行隔离验证', exact: true }).click()
+  await panel.getByRole('button', { name: '取消验证', exact: true }).click()
+  await expect(panel.getByRole('status')).toContainText('checkpoint validation cancelled')
+  await expect(panel.getByText('兼容候选，尚需本机验证', { exact: true })).toBeVisible()
+  const calls = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'validate_checkpoint_locally' || call.command === 'cancel_checkpoint_validation'))
+  expect(calls).toHaveLength(2)
+  expect((calls[0].payload as { validationId: string }).validationId).toBeTruthy()
+  expect((calls[1].payload as { validationId: string }).validationId).toBe((calls[0].payload as { validationId: string }).validationId)
 })

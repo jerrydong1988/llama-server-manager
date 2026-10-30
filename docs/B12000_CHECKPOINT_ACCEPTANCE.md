@@ -185,3 +185,12 @@ mixed acceptance with `scripts/test-checkpoint-native-real.cjs --mode mtp-ngram
 --parallel 4 --predict 128`; supply absolute engine/model/draft/manager paths,
 a new `--root`, and a free loopback port. `GGML_CUDA_NO_PINNED=1` is confined to
 the test process tree. The campaign never uses the default manager data root.
+
+
+## Subsequent experimental admission
+
+The reviewed scope above is unchanged. Additional configurations can now earn
+machine-local experimental admission through the
+[local qualification policy](CHECKPOINT_ADMISSION_POLICY.md); see its separate
+[Windows/ROCm acceptance record](CHECKPOINT_ADMISSION_ACCEPTANCE.md). Those tests
+do not retrospectively expand this embedded reviewed profile.

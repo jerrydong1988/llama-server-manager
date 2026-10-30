@@ -302,6 +302,12 @@ pub(super) async fn dispatch(
             instance(&state, &id)?;
             value(checkpoint::clear_checkpoint(id, state, app.clone()).await?)
         }
+        "checkpoints.validate" => {
+            operations::ensure_inventory(app).await?;
+            let config = instance(&state, &id)?;
+            let selected = engine(&state, &config.engine_id)?;
+            value(server::validate_checkpoint_locally(config, selected.exe, args["_validation_id"].as_str().unwrap_or("").to_owned(), state).await?)
+        }
         "checkpoints.eligibility" => {
             operations::ensure_inventory(app).await?;
             let config = instance(&state, &id)?;

@@ -16,7 +16,7 @@ const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 7;
+pub(crate) const PERSISTENCE_REVISION: u8 = 8;
 fn single_slot_scope() -> Vec<i32> {
     vec![1]
 }
@@ -129,6 +129,10 @@ fn profiles() -> &'static [PersistenceProfile] {
 
 // Newly reviewed bundles may require HIP's external kernel/data trees in
 // addition to adjacent DLLs. Existing reviewed identities remain unchanged.
+pub(crate) fn legacy_runtime_identity(base_artifacts: &str) -> bool {
+    profiles().iter().any(|p| p.base_artifact_sha256.is_none() && p.artifact_sha256 == base_artifacts)
+}
+
 pub(crate) fn requires_auxiliary_runtime(base_artifacts: &str) -> bool {
     profiles().iter().any(|p| p.base_artifact_sha256.as_deref() == Some(base_artifacts))
 }
@@ -158,7 +162,7 @@ fn checkpoint_types(config: &crate::models::InstanceConfig, caps: &EngineCapabil
     checkpoint_types_with_models(config, caps, None)
 }
 
-fn hardware_scope(config: &crate::models::InstanceConfig) -> bool {
+pub(crate) fn hardware_scope(config: &crate::models::InstanceConfig) -> bool {
     !config.ctx_size_auto
         && config.gpu_layers >= 99
         && !config.gpu_layers_auto

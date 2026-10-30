@@ -8,7 +8,7 @@ pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
-pub const KV_CHECKPOINT_CAPABILITY: &str = "kv_checkpoint_v3_console_cache";
+pub const KV_CHECKPOINT_CAPABILITY: &str = "kv_checkpoint_v4_local_qualification";
 pub const ROUTER_USAGE_CAPABILITY: &str = "router_usage_v6";
 pub const ROUTER_LISTENER_CAPABILITY: &str = "router_listener_no_inherit_v2_authorized_replay";
 

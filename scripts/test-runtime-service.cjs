@@ -457,7 +457,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('background_detach_v1')
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
-      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v3_console_cache')
+      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v4_local_qualification')
       || !status.reply.payload?.capabilities?.includes('router_usage_v6')
       || !status.reply.payload?.capabilities?.includes('router_listener_no_inherit_v2_authorized_replay')
       || typeof status.reply.payload?.checkpoints !== 'object') {

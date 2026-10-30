@@ -362,6 +362,8 @@ pub struct KvCheckpointConfig {
     /// Zero disables idle saves. Nonzero values are seconds of observed quiet.
     pub idle_save_seconds: u32,
     pub preserve_longer: bool,
+    /// Local qualification is opt-in and never changes the saved-cache identity.
+    pub allow_local_validation: bool,
 }
 
 impl KvCheckpointConfig {
@@ -397,6 +399,7 @@ impl Default for KvCheckpointConfig {
             minimum_prompt_tokens: 256,
             idle_save_seconds: 0,
             preserve_longer: false,
+            allow_local_validation: false,
         }
     }
 }
