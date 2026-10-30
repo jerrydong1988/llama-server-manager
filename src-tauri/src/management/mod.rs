@@ -234,6 +234,8 @@ impl Host {
                 .map_err(safe_error);
             let status = if result.is_ok() {
                 "succeeded"
+            } else if request.operation == "checkpoints.validate" && result.as_ref().is_err_and(|error| error.code == "CANCELLED") {
+                "cancelled"
             } else {
                 "failed"
             };
@@ -298,6 +300,10 @@ impl Host {
     fn cancel_task(&self, id: &str) -> Result<Value, Failure> {
         let mut tasks = self.tasks.lock().unwrap();
         let index = tasks.iter().position(|task| task.id == id).ok_or_else(|| Failure::new("NOT_FOUND", "task not found"))?;
+        if tasks[index].status == "running" && tasks[index].operation == "checkpoints.validate" {
+            crate::checkpoint_qualification::cancel();
+            return Ok(json!({"id":id,"status":"cancellation_requested"}));
+        }
         if tasks[index].status == "running" {
             return Err(Failure::new("TASK_RUNNING", "operation has started; use the resource stop/pause command and query tasks.get"));
         }

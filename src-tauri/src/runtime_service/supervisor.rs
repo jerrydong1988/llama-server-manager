@@ -197,6 +197,10 @@ fn prepare_runtime_checkpoint_launch(
     if !valid_path {
         return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::ConflictingSlotSavePath);
     }
+    if checkpoint.eligibility.qualification.as_deref() == Some("local_validated")
+        && (!spec.config.kv_checkpoint.allow_local_validation || !crate::checkpoint_qualification::qualified(coordinator.store(), &fingerprint, spec.config.parallel as u32)) {
+        return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::LocalValidationRequired);
+    }
     (checkpoint.eligibility, Some(fingerprint))
 }
 
@@ -2184,6 +2188,7 @@ mod tests {
         spec.checkpoint = Some(RuntimeCheckpointLaunchSpec {
             eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
             eligibility: CheckpointEligibility {
+                qualification: None, can_validate: false,
                 eligible: true,
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),
@@ -2342,6 +2347,7 @@ mod tests {
         RuntimeCheckpointLaunchSpec {
             eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
             eligibility: CheckpointEligibility {
+                qualification: None, can_validate: false,
                 eligible: true,
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),

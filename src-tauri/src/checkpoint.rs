@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 // v0.8.0 adds LFM3 to the hybrid denylist; persisted approvals must be reassessed.
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 6;
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 7;
 const MAX_CHECKPOINT_SLOTS: u32 = 4;
 fn one_slot() -> u32 {
     1
@@ -120,6 +120,7 @@ pub enum CheckpointReasonCode {
     LoopbackHttpRequired,
     CustomEndpointUnsupported,
     EngineCapabilityMissing,
+    LocalValidationRequired,
     SpeculativeDecodingUnsupported,
     LoraUnsupported,
     MultimodalUnsupported,
@@ -278,6 +279,10 @@ impl EngineCheckpointCapabilities {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointEligibility {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification: Option<String>,
+    #[serde(default)]
+    pub can_validate: bool,
     pub eligible: bool,
     pub reason_code: CheckpointReasonCode,
     pub reasons: Vec<CheckpointReasonCode>,
@@ -298,6 +303,8 @@ impl CheckpointEligibility {
     ) -> Self {
         let reason_code = reasons.first().copied().unwrap_or_default();
         Self {
+            qualification: None,
+            can_validate: false,
             eligible: reasons.is_empty(),
             reason_code,
             reasons,
@@ -1138,6 +1145,10 @@ pub struct FingerprintMaterials {
 #[serde(rename_all = "camelCase")]
 struct CanonicalFingerprintV3<'a> {
     fingerprint_schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameter_overrides: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_defaults_sha256: Option<String>,
     manifest_schema_version: u32,
     state_format: &'static str,
     model_sha256: &'a str,
@@ -1213,6 +1224,14 @@ struct CanonicalFingerprintV3<'a> {
     reasoning_budget_message: &'a str,
 }
 
+// Native defaults can be supplied through LLAMA_ARG_* without appearing in
+// argv. Bind them without storing credentials or other raw environment values.
+fn environment_defaults_sha256() -> Option<String> {
+    let environment = std::env::vars().filter(|(key, _)| key.starts_with("LLAMA_ARG_"))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    (!environment.is_empty()).then(|| sha256_bytes(&serde_json::to_vec(&environment).expect("string map serialization")))
+}
+
 fn canonical_fingerprint_bytes(
     config: &InstanceConfig,
     materials: &FingerprintMaterials,
@@ -1238,8 +1257,11 @@ fn canonical_fingerprint_bytes(
             "checkpoint fingerprint material is unavailable",
         ));
     }
-    let canonical = CanonicalFingerprintV3 {
-        fingerprint_schema_version: CHECKPOINT_FINGERPRINT_SCHEMA_VERSION,
+    let environment_defaults_sha256 = environment_defaults_sha256();
+    let mut canonical = CanonicalFingerprintV3 {
+        fingerprint_schema_version: if config.explicit_overrides.is_some() || environment_defaults_sha256.is_some() { 4 } else { CHECKPOINT_FINGERPRINT_SCHEMA_VERSION },
+        parameter_overrides: None,
+        environment_defaults_sha256,
         manifest_schema_version: CHECKPOINT_MANIFEST_SCHEMA_VERSION,
         state_format: STATE_FORMAT,
         model_sha256: &materials.model_sha256,
@@ -1314,6 +1336,24 @@ fn canonical_fingerprint_bytes(
         reasoning_budget: config.reasoning_budget.trim(),
         reasoning_budget_message: &config.reasoning_budget_message,
     };
+    if let Some(overrides) = &config.explicit_overrides {
+        let values = serde_json::to_value(&canonical).map_err(|_| CheckpointStoreError::manifest("fingerprint serialization failed"))?;
+        let fields = values.as_object().ok_or_else(|| CheckpointStoreError::manifest("fingerprint fields unavailable"))?;
+        let mut active = overrides.iter().filter_map(|field| {
+            let key = match field.as_str() {
+                "ctx_size_auto" => "ctx_size", "gpu_layers_auto" => "gpu_layers",
+                "kv_unified_mode" => "kv_unified", "chat_template_file" => "chat_template_file_sha256",
+                key => key,
+            };
+            let mut camel = String::new(); let mut uppercase = false;
+            for character in key.chars() {
+                if character == '_' { uppercase = true; }
+                else { camel.push(if uppercase { character.to_ascii_uppercase() } else { character }); uppercase = false; }
+            }
+            fields.contains_key(&camel).then(|| key.to_string())
+        }).collect::<Vec<_>>();
+        active.sort(); active.dedup(); canonical.parameter_overrides = Some(active);
+    }
     serde_json::to_vec(&canonical).map_err(|_| {
         CheckpointStoreError::new(
             CheckpointReasonCode::FingerprintUnavailable,
@@ -1571,6 +1611,26 @@ impl CheckpointStore {
         &self.root
     }
 
+    // Dotted names cannot be valid instance IDs. Qualification records and test
+    // payloads must never collide with an instance's generation/clear namespace.
+    pub(crate) fn qualification_root(&self) -> PathBuf {
+        self.root.join(".qualifications")
+    }
+
+    pub(crate) fn prepare_qualification_storage(&self) -> StoreResult<()> {
+        self.ensure_root()?;
+        ensure_private_directory(&self.qualification_root())
+    }
+
+    pub(crate) fn prepare_qualification_run(&self) -> StoreResult<PathBuf> {
+        self.ensure_root()?;
+        let parent = self.root.join(".qualification-runs");
+        ensure_private_directory(&parent)?;
+        let run = parent.join(uuid::Uuid::new_v4().to_string());
+        ensure_private_directory(&run)?;
+        Ok(run)
+    }
+
     fn ensure_root(&self) -> StoreResult<()> {
         let mut ready = self
             .root_ready
@@ -1813,7 +1873,6 @@ impl CheckpointStore {
         if artifacts.len() == 1 {
             return self.content_sha256(&artifacts[0]);
         }
-
         let mut canonical = Vec::with_capacity(32 + artifacts.len() * 72);
         canonical.extend_from_slice(b"llama-model-artifact-set-v1\0");
         canonical.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
@@ -1831,26 +1890,30 @@ impl CheckpointStore {
                 "engine runtime artifact set is unavailable",
             )
         })?;
-        if artifacts.len() == 1 {
-            return self.content_sha256(&artifacts[0]);
-        }
-
-        let mut canonical = Vec::with_capacity(40 + artifacts.len() * 112);
-        canonical.extend_from_slice(b"llama-engine-artifact-set-v1\0");
-        canonical.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
-        let digests = self.content_sha256_many(&artifacts)?;
-        for (artifact, digest) in artifacts.iter().zip(digests) {
-            let name = artifact
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_ascii_lowercase();
-            canonical.extend_from_slice(&(name.len() as u32).to_le_bytes());
-            canonical.extend_from_slice(name.as_bytes());
-            canonical.extend_from_slice(digest.as_bytes());
-        }
-        let base = sha256_bytes(&canonical);
-        if crate::commands::engine_capabilities::requires_auxiliary_runtime(&base) {
+        let base = if artifacts.len() == 1 {
+            self.content_sha256(&artifacts[0])?
+        } else {
+            let mut canonical = Vec::with_capacity(40 + artifacts.len() * 112);
+            canonical.extend_from_slice(b"llama-engine-artifact-set-v1\0");
+            canonical.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
+            let digests = self.content_sha256_many(&artifacts)?;
+            for (artifact, digest) in artifacts.iter().zip(digests) {
+                let name = artifact
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_ascii_lowercase();
+                canonical.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                canonical.extend_from_slice(name.as_bytes());
+                canonical.extend_from_slice(digest.as_bytes());
+            }
+            sha256_bytes(&canonical)
+        };
+        if crate::commands::engine_capabilities::requires_auxiliary_runtime(&base)
+            || (!crate::commands::engine_capabilities::legacy_runtime_identity(&base)
+                && engine_path.parent().is_some_and(|dir| dir.join("rocblas").exists()
+                    || dir.join("hipblaslt").exists()
+                    || dir.parent().is_some_and(|parent| parent.join(".kpack").exists()))) {
             self.engine_auxiliary_sha256(engine_path, &base)
         } else {
             Ok(base)

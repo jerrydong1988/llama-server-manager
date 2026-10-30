@@ -6,6 +6,7 @@ import { useAppStore, type CheckpointEligibility, type InstanceConfig, type KvCh
 import { invokeApp as invoke } from '../../lib/ipc'
 import { Badge, Button, InsetSurface, SectionHeader, Surface, TextInput } from '../ui'
 import { Toggle } from './shared'
+import { CheckpointValidation } from './CheckpointValidation'
 
 const REQUIRED_SETTING_REASONS = new Set([
   'parallel_must_be_one',
@@ -40,6 +41,7 @@ export function CheckpointPanel({
 }) {
   const [eligibility, setEligibility] = useState<CheckpointEligibility | null>(null)
   const [loading, setLoading] = useState(false)
+  const [validationRevision, setValidationRevision] = useState(0)
   const mountedRef = useRef(true)
   const policy = config.kv_checkpoint
   const reasons = eligibility?.reasons ?? []
@@ -89,7 +91,7 @@ export function CheckpointPanel({
       disposed = true
       clearTimeout(timer)
     }
-  }, [config, engineExe, policy.enabled])
+  }, [config, engineExe, policy.enabled, validationRevision])
 
   const applyRequirements = async () => {
     if (!await confirm(labels.applyRequirementsConfirm, { title: labels.configTitle, kind: 'warning' })) return
@@ -168,6 +170,10 @@ export function CheckpointPanel({
           onChange={value => update('preserve_longer', value)} title={labels.preserveLongerTip}
           disabled={!policy.enabled} />
       </div>
+
+      <CheckpointValidation config={config} engineExe={engineExe ?? ''} eligibility={eligibility} labels={labels}
+        onChange={value => update('allow_local_validation', value)}
+        onValidated={() => setValidationRevision(value => value + 1)} />
 
       {policy.enabled && (
         <InsetSurface className="mt-5 p-4">

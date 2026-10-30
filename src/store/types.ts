@@ -102,6 +102,7 @@ export interface KvCheckpointConfig {
   minimum_prompt_tokens: number
   idle_save_seconds: number
   preserve_longer: boolean
+  allow_local_validation?: boolean
 }
 
 export type CheckpointPhase =
@@ -138,6 +139,8 @@ export interface CheckpointStatus {
 }
 
 export interface CheckpointEligibility {
+  qualification?: 'reviewed' | 'local_validated' | 'needs_validation' | 'unsupported'
+  can_validate?: boolean
   slot_count?: number
   eligible: boolean
   reason_code: string

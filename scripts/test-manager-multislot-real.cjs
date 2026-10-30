@@ -14,7 +14,9 @@ for (const key of ['bin', 'root', 'engine', 'model', 'mtp'])
     assert.ok(path.isAbsolute(args[key] || ''), `--${key} must be absolute`);
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp'])
     args[key] = path.resolve(args[key]);
-const parallel = Number(args.parallel || 4), context = 4096 * parallel, kv = 'f16';
+const parallel = Number(args.parallel || 4), context = Number(args['context-budget'] || 4096) * parallel, kv = args.kv || 'f16';
+const localValidation = args['local-validation'] === 'true';
+assert.ok(['f16', 'q8_0'].includes(kv));
 const specType = args['spec-type'] || 'draft-mtp';
 assert.ok(['draft-mtp', 'ngram-mod,draft-mtp'].includes(specType));
 assert.ok([2, 4].includes(parallel));
@@ -232,7 +234,8 @@ async function main() {
         gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99, draft_tokens: 3, flash_attn: 'on', fit_mode: 'off',
         warmup: false, parallel, cache_prompt: true, cache_idle_slots: false, cache_ram: 256, ctx_checkpoints: 2,
         slots_enabled: true, metrics: true, props: true, verbose: true, mmproj_auto: false, spec_type: specType,
-        kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true, idle_save_seconds: 0, preserve_longer: true, storage_limit_gib: 32, minimum_prompt_tokens: 16 } });
+        kv_checkpoint: { enabled: true, allow_local_validation: localValidation, auto_save: true, auto_restore: true, idle_save_seconds: 0, preserve_longer: true, storage_limit_gib: 32, minimum_prompt_tokens: 16 } });
+    if (localValidation) record('local-qualification-receipt', await client.mutate('checkpoints.validate', { id }));
     const eligible = await client.call('checkpoints.eligibility', { id });
     assert.equal(eligible.eligible, true, JSON.stringify(eligible));
     assert.equal(eligible.slot_count, parallel);

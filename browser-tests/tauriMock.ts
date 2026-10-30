@@ -22,6 +22,7 @@ import type {
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
+let localCheckpointValidated = false
 const LAYOUT_STRESS = new URLSearchParams(window.location.search).get('layout') === 'stress'
 const LAYOUT_LONG_NAME = `Qwen${'LongCustomName'.repeat(12)}`
 const IS_DOCS_SCENARIO = BROWSER_SCENARIO === 'docs-screenshots'
@@ -364,6 +365,9 @@ if (BROWSER_SCENARIO === 'checkpoint-requirements') {
       enabled: true,
     },
   })
+}
+if (BROWSER_SCENARIO?.startsWith('checkpoint-local-validation')) {
+  state.instances[INSTANCE_ID].kv_checkpoint.enabled = true
 }
 if (BROWSER_SCENARIO === 'checkpoint-multi-slot') {
   Object.assign(state.instances[INSTANCE_ID], {
@@ -1101,8 +1105,21 @@ mockIPC((command, payload) => {
       }
       return {}
     case 'get_checkpoint_status': return null
+    case 'validate_checkpoint_locally': {
+      return new Promise((resolve, reject) => setTimeout(() => {
+        if (BROWSER_SCENARIO === 'checkpoint-local-validation-failure') { reject(new Error('Restored inference differs')); return }
+        localCheckpointValidated = true
+        resolve({ old_process_exited: true })
+      }, 300))
+    }
+    case 'cancel_checkpoint_validation': return {}
     case 'get_checkpoint_eligibility': {
       const config = args.config as InstanceConfig
+      if (BROWSER_SCENARIO?.startsWith('checkpoint-local-validation')) {
+        const eligible = localCheckpointValidated && config.kv_checkpoint.allow_local_validation === true
+        return { eligible, can_validate: true, qualification: eligible ? 'local_validated' : 'needs_validation',
+          reason_code: eligible ? 'none' : 'local_validation_required', reasons: eligible ? [] : ['local_validation_required'] }
+      }
       const reasons: string[] = []
       const reviewedMulti = BROWSER_SCENARIO === 'checkpoint-multi-slot' && config.parallel === 4
       if (config.parallel !== 1 && !reviewedMulti) reasons.push('parallel_must_be_one')

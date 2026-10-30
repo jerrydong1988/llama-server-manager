@@ -182,6 +182,7 @@ pub fn operations() -> Vec<Operation> {
         ("checkpoints.list","List checkpoint states; absence does not mean a saved checkpoint exists","read",""),
         ("checkpoints.status","Read one instance checkpoint state","read","id:string"),
         ("checkpoints.eligibility","Assess checkpoint support for the configured instance and engine","read","id:string"),
+        ("checkpoints.validate","Run isolated local checkpoint inference qualification without changing an instance","write","id:string"),
         ("checkpoints.clear","Clear a stopped instance checkpoint through the owning runtime","delete","id:string"),
         ("presets.list","List built-in configuration templates shared with the GUI","read",""),
         ("presets.preview","Preview template differences and validated launch command without saving","read","id:string preset:string"),
