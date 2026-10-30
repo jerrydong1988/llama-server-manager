@@ -455,6 +455,7 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 - Origin 填浏览器地址栏中的“协议 + 主机 + 端口”，不含路径，例如 `http://localhost:3000`；多个值用逗号分隔并精确匹配。
 - 路由依据实际 `/health` 探测和熔断状态选择目标，网络错误、`5xx` 或 `429` 会推动后续请求切换到健康层级。
 - 未开启独立后台运行时，实例与路由仍由隔离的运行时进程托管，但主程序退出后会自动停止；仅关闭窗口则仍可继续在托盘运行。
+- CLI/MCP 连接不会自动启动或重启桌面宿主。MCP 初始化和工具枚举可离线完成；实际管理操作需先打开应用或显式执行 `lsm service start`。该命令启动的管理服务不显示窗口和托盘，`lsm service show --wait` 才恢复桌面界面。主动退出后，MCP 重连或工具调用不会再次唤醒宿主。
 - 开启“独立后台运行时”后，退出管理界面不会中断已托管实例或统一端点，并会注册当前用户登录后的自动恢复。Windows 使用当前用户启动项，macOS 使用用户 LaunchAgent，Linux 优先使用 systemd 用户服务并在不可用时回退到 XDG Autostart；第一阶段不安装需要管理员权限的系统级服务。
 - 退出应用时会明确提供“退出界面并保持后台运行”与“停止实例、路由并退出”两种选择；运行时升级会保留运行意图，受控重启实例后恢复路由、日志和监控监督链。
 - 登录恢复使用当前图形用户会话的标准环境，不会保存临时 Shell 环境变量；依赖自定义环境变量的引擎应改用稳定的系统/用户环境设置。
@@ -468,6 +469,7 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 - Enter only the browser address bar's scheme, host, and port, such as `http://localhost:3000`. Separate multiple exact origins with commas and omit paths.
 - Active `/health` probes and circuit state drive selection; network errors, `5xx`, and `429` move subsequent traffic to a healthy tier.
 - Without the independent runtime option, an isolated runtime still supervises instances and routing while the app is open, but stops them after the main process exits; closing only the window keeps the tray session alive.
+- CLI/MCP connections never automatically start or restart the desktop host. MCP initialization and tool discovery work offline; management operations require opening the app or explicitly running `lsm service start`. That service creates neither a window nor a tray icon; `lsm service show --wait` restores the desktop interface. After an explicit exit, MCP reconnects and tool calls do not wake the host.
 - Enabling the independent background runtime preserves managed instances and the unified endpoint after the management UI exits and registers per-user login recovery. Windows uses the current-user startup entry, macOS a user LaunchAgent, and Linux a systemd user service with XDG Autostart fallback. Phase one does not install an administrator-managed system service.
 - Exit confirmation distinguishes keeping the runtime from stopping instances and routing. Runtime upgrades retain desired state and restore each instance under a fresh logging and monitoring supervisor.
 - Login recovery uses the standard graphical user-session environment and does not capture temporary shell variables. Engines that depend on custom variables should use stable system or user environment settings.

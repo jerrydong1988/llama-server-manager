@@ -250,7 +250,7 @@ pub async fn dispatch(app: &tauri::AppHandle, name: &str, args: &Value) -> Resul
     let id = text(args, "id");
     match name {
         "service.status" => Ok(
-            json!({"version":env!("CARGO_PKG_VERSION"),"protocol":super::wire::VERSION,"pid":std::process::id(),"data_directory":crate::utils::get_data_dir(),"revision":revision(&state),"runtime":crate::runtime_service::runtime_status().await.ok(),"desktop_session_required":cfg!(target_os="linux")}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"protocol":super::wire::VERSION,"pid":std::process::id(),"data_directory":crate::utils::get_data_dir(),"revision":revision(&state),"runtime":crate::runtime_service::runtime_status().await.ok(),"desktop_session_required":cfg!(target_os="linux"),"desktop":{"window_created":app.get_webview_window("main").is_some(),"tray_created":app.tray_by_id(crate::DESKTOP_TRAY_ID).is_some()}}),
         ),
         "service.show" => {
             crate::restore_main_window(app).map_err(|error| Failure::new("UI", error))?;

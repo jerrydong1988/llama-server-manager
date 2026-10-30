@@ -19,6 +19,7 @@ const engineDir = path.join(data, 'fixture-engine')
 const modelDir = path.join(data, 'models')
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 let hostPid
+let lifecycleMcp
 let checks = 0
 
 function execute(file, args, options = {}) {
@@ -81,6 +82,23 @@ async function rawRequest(envelope) {
 }
 
 async function run() {
+  // A new MCP session can discover tools without a host, executable launch,
+  // credentials, runtime, or configuration writes (including write-enabled sessions).
+  lifecycleMcp = await managementClient({ cli, app: executable, data }).mcp()
+  async function assertDisconnected(client) {
+    assert.deepEqual((await client.request('ping')).result, {})
+    assert.ok((await client.request('tools/list')).result.tools.length > 20)
+    for (const operation of ['service.status', 'runtime.clear_error']) {
+      const result = await client.tool(operation, {}, true)
+      assert.equal(result.result.isError, true)
+      assert.equal(result.result.structuredContent.error.code, 'MANAGEMENT_CONNECTION_FAILED')
+      assert.match(result.result.structuredContent.error.message, /explicitly run lsm service start/)
+    }
+    checks += 4
+  }
+  await assertDisconnected(lifecycleMcp)
+  assert.deepEqual(fs.readdirSync(data), [], 'MCP bootstrap and unavailable calls must not initialize host state')
+
   fs.mkdirSync(engineDir); fs.mkdirSync(modelDir)
   const engine = path.join(engineDir, `llama-server${extension}`)
   const compiled = await execute('rustc', ['--edition=2021', path.join(__dirname, 'fixtures', 'management-engine.rs'), '-o', engine])
@@ -116,6 +134,8 @@ async function run() {
   const started = await call('service.start')
   hostPid = started.data.pid
   assert.equal(started.data.protocol, 1)
+  assert.deepEqual(started.data.desktop, { window_created: false, tray_created: false })
+  assert.equal((await lifecycleMcp.tool('service.status')).pid, hostPid, 'existing MCP connection must attach after explicit start')
   const journalBackup = journal + '.test-backup'
   fs.renameSync(journal, journalBackup); fs.mkdirSync(journal)
   try {
@@ -499,6 +519,10 @@ async function run() {
 
   await mutate('service.stop', {})
   await wait(3000)
+  await assertDisconnected(lifecycleMcp)
+  const reconnectedMcp = await managementClient({ cli, app: executable, data }).mcp()
+  try { await assertDisconnected(reconnectedMcp) } finally { await reconnectedMcp.close() }
+  assert.equal((await call('service.status', {}, [], false)).ok, false, 'MCP reconnect and tools must not resurrect a stopped host')
   // A crash can leave queued/running records on disk. Recovery must preserve
   // terminal history, mark unfinished work interrupted, and advance its timestamp.
   const journalPath = path.join(data, 'management', 'tasks.json')
@@ -520,6 +544,9 @@ async function run() {
   const restarted = await call('service.start', {}, ['--data-dir', data.replaceAll('\\', '/')])
   assert.notEqual(restarted.data.pid, hostPid)
   hostPid = restarted.data.pid
+  assert.deepEqual(restarted.data.desktop, { window_created: false, tray_created: false })
+  assert.equal((await lifecycleMcp.tool('service.status')).pid, hostPid, 'same MCP connection must recover after explicit restart')
+  await lifecycleMcp.close(); lifecycleMcp = undefined
   assert.equal((await call('tasks.get', { id: queuedRename.data.task_id }, [], false)).error.code, 'NOT_FOUND', 'deleted history must not reappear after restart')
   for (const status of ['queued', 'running']) {
     const task = (await call('tasks.get', { id: `journal-${status}` })).data
@@ -574,10 +601,16 @@ async function run() {
     assert.equal(fs.readFileSync(path.join(data, 'configs', 'instances.json'), 'utf8'), configBytes)
     checks += 9
   } finally { await writeOnlyMcp.close(); await cleanupMcp.close() }
+  // Explicit desktop promotion remains available, and repeated show is idempotent.
+  for (let i = 0; i < 2; i++) {
+    await mutate('service.show', {})
+    assert.deepEqual((await call('service.status')).data.desktop, { window_created: true, tray_created: true })
+  }
   console.log(`Management integration passed (${checks} CLI/IPC/MCP checks; synthetic inference fixture).`)
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1 }).finally(async () => {
+  if (lifecycleMcp) await lifecycleMcp.close()
   try { await mutate('service.stop', {}, [], false); await wait(3000) } catch { /* fallback below */ }
   if (hostPid) { try { process.kill(hostPid) } catch { /* already exited */ } }
   if (process.env.LSM_KEEP_TEST_DATA === '1') console.log(`Retained test data: ${data}`)
