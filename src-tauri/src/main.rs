@@ -411,6 +411,60 @@ fn tray_icon_image() -> Result<tauri::image::Image<'static>, tauri::Error> {
     tauri::image::Image::from_bytes(TRAY_ICON_BYTES)
 }
 
+const DESKTOP_TRAY_ID: &str = "desktop";
+
+fn ensure_desktop_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
+    if app.tray_by_id(DESKTOP_TRAY_ID).is_some() { return Ok(()); }
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+
+    let show = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&show).item(&quit).build()?;
+
+    let tray_builder = TrayIconBuilder::with_id(DESKTOP_TRAY_ID)
+        .icon(tray_icon_image()?)
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            match event.id().as_ref() {
+                "show" => {
+                    let _ = restore_main_window(app);
+                }
+                "quit" => {
+                    let (workloads_active, runtime_service_enabled) =
+                        proxy_quit_inputs(app);
+                    match decide_proxy_quit(workloads_active, runtime_service_enabled) {
+                        ProxyQuitDecision::ExitNow => finalize_app_exit(app, false),
+                        ProxyQuitDecision::ExitUiKeepRuntime => {
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = prepare_background_exit(&app, false).await
+                                {
+                                    report_background_detach_failure(&app, &error);
+                                }
+                            });
+                        }
+                        ProxyQuitDecision::RequestConfirmation => {
+                            request_proxy_exit_confirmation(app, runtime_service_enabled)
+                        }
+                    }
+                }
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                let app = tray.app_handle();
+                let _ = restore_main_window(app);
+            }
+        });
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true);
+    tray_builder.build(app)?;
+    Ok(())
+}
+
 fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
     if app.get_webview_window("main").is_some() { return Ok(()); }
     let config_dir = crate::utils::get_data_dir().join("configs");
@@ -426,6 +480,7 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
 }
 
 fn restore_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_tray(app).map_err(|error| error.to_string())?;
     ensure_main_window(app).map_err(|error| error.to_string())?;
     let window = app.get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?;
@@ -540,53 +595,7 @@ fn main() {
                     eprintln!("Telemetry retention cleanup failed: {}", error);
                 }
             });
-            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-            use tauri::menu::{MenuBuilder, MenuItemBuilder};
-
-            let show = MenuItemBuilder::with_id("show", "显示窗口").build(app.handle())?;
-            let quit = MenuItemBuilder::with_id("quit", "退出").build(app.handle())?;
-            let menu = MenuBuilder::new(app.handle())
-                .item(&show).item(&quit).build()?;
-
-            let tray_builder = TrayIconBuilder::new()
-                .icon(tray_icon_image()?)
-                .menu(&menu)
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            let _ = restore_main_window(app);
-                        }
-                        "quit" => {
-                            let (workloads_active, runtime_service_enabled) =
-                                proxy_quit_inputs(app);
-                            match decide_proxy_quit(workloads_active, runtime_service_enabled) {
-                                ProxyQuitDecision::ExitNow => finalize_app_exit(app, false),
-                                ProxyQuitDecision::ExitUiKeepRuntime => {
-                                    let app = app.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        if let Err(error) = prepare_background_exit(&app, false).await
-                                        {
-                                            report_background_detach_failure(&app, &error);
-                                        }
-                                    });
-                                }
-                                ProxyQuitDecision::RequestConfirmation => {
-                                    request_proxy_exit_confirmation(app, runtime_service_enabled)
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                        let app = tray.app_handle();
-                        let _ = restore_main_window(app);
-                    }
-                });
-            #[cfg(target_os = "macos")]
-            let tray_builder = tray_builder.icon_as_template(true);
-            tray_builder.build(app.handle())?;
+            if !crate::management::hidden_start() { ensure_desktop_tray(app.handle())?; }
             timings.push(("setup-tray-done".into(), now()));
 
             // Read config early for host initialization and storage maintenance.

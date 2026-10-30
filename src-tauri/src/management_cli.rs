@@ -251,7 +251,7 @@ async fn mcp_call(options: &Options, message: Value) -> Option<Value> {
                 } else {
                     "2025-11-25"
                 };
-            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"llama-server-manager","version":env!("CARGO_PKG_VERSION")},"instructions":"Most mutations return durable task_id values. Query tasks_get until completion. tasks_cancel, tasks_delete and tasks_clear return results immediately. Deleting task history also removes its idempotency keys; retrying the original operation can execute it again. Refresh revision before configuration changes. Readiness is distinct from process startup. Do not retry an interrupted task without inspecting resource state."})
+            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"llama-server-manager","version":env!("CARGO_PKG_VERSION")},"instructions":"Connect-only: this MCP process never starts or restarts the management host. If unavailable, ask the user to open the desktop app or explicitly run lsm service start with the same --app and --data-dir. Most mutations return durable task_id values. Query tasks_get until completion. tasks_cancel, tasks_delete and tasks_clear return results immediately. Deleting task history also removes its idempotency keys; retrying the original operation can execute it again. Refresh revision before configuration changes. Readiness is distinct from process startup. Do not retry an interrupted task without inspecting resource state."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -287,7 +287,14 @@ async fn mcp_call(options: &Options, message: Value) -> Option<Value> {
                 Ok(response) => {
                     json!({"content":[{"type":"text","text":serde_json::to_string(&response).unwrap()}],"structuredContent":response,"isError":!response.ok})
                 }
-                Err(error) => json!({"content":[{"type":"text","text":error}],"isError":true}),
+                Err(error) => {
+                    let failure = json!({"ok":false,"error":{
+                        "code":"MANAGEMENT_CONNECTION_FAILED",
+                        "message":format!("Management request failed; no host was started or restarted. Open the desktop app or explicitly run lsm service start with the same --app and --data-dir. Details: {error}"),
+                        "retryable":false
+                    }});
+                    json!({"content":[{"type":"text","text":failure.to_string()}],"structuredContent":failure,"isError":true})
+                }
             }
         }
         _ => return Some(mcp_error(id, -32601, "method not found")),
@@ -296,7 +303,8 @@ async fn mcp_call(options: &Options, message: Value) -> Option<Value> {
 }
 
 async fn mcp(options: &Options) -> Result<(), String> {
-    start(options).await?;
+    // Connecting a harness must not undo an explicit desktop/service exit.
+    // Discovery is local; tools attach to a host started by the user and never spawn one.
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let stdout = std::io::stdout();
@@ -329,7 +337,7 @@ async fn mcp(options: &Options) -> Result<(), String> {
 
 async fn run(options: Options) -> Result<bool, String> {
     if options.words.is_empty() || options.words[0] == "help" {
-        println!("lsm <group> <operation> [--args JSON|@file] [--wait] [--json]\nlsm service start [--app PATH] [--data-dir PATH]\nlsm schema [group.operation]\nlsm mcp [--allow-write] [--allow-delete] [--allow-cluster]\nGlobal options: --app PATH --data-dir PATH --timeout SECONDS --idempotency-key KEY\nAll operation output is JSON. Schema lists exact fields. Most mutations return task_id; tasks cancel/delete/clear return immediate results.\nMCP defaults to read-only. Directory authorization is local CLI only.");
+        println!("lsm <group> <operation> [--args JSON|@file] [--wait] [--json]\nlsm service start [--app PATH] [--data-dir PATH]\nlsm schema [group.operation]\nlsm mcp [--allow-write] [--allow-delete] [--allow-cluster]\nGlobal options: --app PATH --data-dir PATH --timeout SECONDS --idempotency-key KEY\nAll operation output is JSON. Schema lists exact fields. Most mutations return task_id; tasks cancel/delete/clear return immediate results.\nMCP defaults to read-only and only connects to an already running host. Open the desktop app or explicitly run lsm service start first; MCP never starts or restarts it. Directory authorization is local CLI only.");
         return Ok(true);
     }
     if options.words[0] == "schema" {

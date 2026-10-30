@@ -22,7 +22,7 @@ $AgentData = 'C:\LSM-Agent-Test'
 .\lsm.exe schema instances.create
 ```
 
-`service start` 先启动隐藏宿主，`service show` 打开对应的界面。始终传入同一个 `--data-dir`，
+`service start` 显式启动管理宿主，不创建桌面窗口或托盘图标；`service show` 打开对应的界面并创建托盘，重复调用不会重复创建。直接打开桌面应用也可以恢复界面和托盘。始终传入同一个 `--data-dir`，
 这样 CLI 与这个窗口操作同一份配置。省略它会使用应用默认数据目录，不适合第一轮隔离验证。
 不要同时让不同版本写同一个目录。关闭窗口只是隐藏；退出 MCP/CLI 不会停止已提交任务。
 `service stop --wait` 明确停止宿主及其托管工作负载；不是“仅关闭窗口”。
@@ -98,6 +98,10 @@ Invoke-Lsm instances.logs @{ id='agent-test'; lines=100 }
 支持 stdio JSON-RPC，协议版本为 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25`。
 未实现可选 MCP Tasks 扩展，使用普通 `tasks_get` 工具查询异步管理任务。
 以下是通用 MCP 配置示例，外层配置位置取决于 Harness：
+
+MCP 采用仅连接模式：启动、`initialize`、`ping`、`tools/list` 都不会启动管理宿主，也不会创建配置、凭据或运行时。实际工具调用只连接已运行的宿主；未运行或连接失败时返回 `MANAGEMENT_CONNECTION_FAILED`，不会自动启动或重启。先由用户打开桌面应用，或在本机显式执行 `lsm service start`（保持相同的 `--app` 和 `--data-dir`）。已有 MCP 会话随后即可继续调用，不必重连。
+
+从托盘退出、调用 `service stop` 或交接退出桌面宿主后，MCP 重连、状态查询和工具调用都不会把它再次唤起；恢复需要用户显式启动。用户主动开启的独立后台运行时继续按既有交接策略管理工作负载，与桌面/托盘生命周期分开。
 
 ```json
 {
