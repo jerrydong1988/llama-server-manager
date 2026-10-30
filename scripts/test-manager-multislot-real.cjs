@@ -1,13 +1,13 @@
 // Opt-in Windows/ROCm integration campaign. Never uses the default manager root.
 // --bin DIR --root NEW_DIR --engine EXE --model GGUF --mtp GGUF
-// --profile PROFILE_ID [--parallel 4] [--port PORT]
+// --profile PROFILE_ID [--parallel 4] [--port PORT] [--spec-type ngram-mod,draft-mtp]
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const assert = require('node:assert/strict');
 const { managementClient, sleep } = require('./lib/management-client.cjs');
-const { inspectSlotFile, assertInference, memorySampler, processMemory } = require('./lib/checkpoint-evidence.cjs');
+const { inspectSlotFile, assertInference, memorySampler, processMemory, speculativeTrace } = require('./lib/checkpoint-evidence.cjs');
 const args = Object.fromEntries(Array.from({ length: (process.argv.length - 2) / 2 }, (_, i) => [process.argv[2 + 2 * i].slice(2), process.argv[3 + 2 * i]]));
 assert.equal(process.platform, 'win32');
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp'])
@@ -15,6 +15,8 @@ for (const key of ['bin', 'root', 'engine', 'model', 'mtp'])
 for (const key of ['bin', 'root', 'engine', 'model', 'mtp'])
     args[key] = path.resolve(args[key]);
 const parallel = Number(args.parallel || 4), context = 4096 * parallel, kv = 'f16';
+const specType = args['spec-type'] || 'draft-mtp';
+assert.ok(['draft-mtp', 'ngram-mod,draft-mtp'].includes(specType));
 assert.ok([2, 4].includes(parallel));
 for (const key of ['engine', 'model', 'mtp'])
     assert.ok(fs.statSync(args[key]).isFile(), `missing ${key}`);
@@ -36,7 +38,7 @@ if (args.fingerprints) {
 }
 const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 600000 });
 let sampler;
-const report = { started: new Date().toISOString(), engine: args.engine, scope: 'manager multi-slot automatic persistence', parallel, context, fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] };
+const report = { started: new Date().toISOString(), engine: args.engine, scope: 'manager multi-slot automatic persistence', specType, parallel, context, fingerprint_cache_seed: args.fingerprints || null, events: [], owned_pids: [] };
 const sha = file => {
     const hash = crypto.createHash('sha256'), buffer = Buffer.alloc(1024 * 1024);
     const fd = fs.openSync(file, 'r');
@@ -144,6 +146,8 @@ async function stop() {
     if (running) {
         assert.ok(!ownedProcesses().some(p => p.ProcessId === running.pid), 'old engine PID must exit before a new process is launched');
         report.stop_verifications = [...(report.stop_verifications || []), { pid: running.pid, exited: true, checked_at: new Date().toISOString() }];
+        const log = path.join(data, 'configs', 'logs', `${id}.log`);
+        if (fs.existsSync(log)) record('native-speculation-trace', { pid: running.pid, trace: speculativeTrace(fs.readFileSync(log, 'utf8')) });
     }
     return result;
 }
@@ -227,7 +231,7 @@ async function main() {
         cache_type_k: kv, cache_type_v: kv, cache_type_draft_k: kv, cache_type_draft_v: kv, kv_unified: true, kv_unified_mode: 'on',
         gpu_layers: 99, gpu_layers_auto: false, draft_gpu_layers: 99, draft_tokens: 3, flash_attn: 'on', fit_mode: 'off',
         warmup: false, parallel, cache_prompt: true, cache_idle_slots: false, cache_ram: 256, ctx_checkpoints: 2,
-        slots_enabled: true, metrics: true, props: true, verbose: true, mmproj_auto: false, spec_type: 'draft-mtp',
+        slots_enabled: true, metrics: true, props: true, verbose: true, mmproj_auto: false, spec_type: specType,
         kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true, idle_save_seconds: 0, preserve_longer: true, storage_limit_gib: 32, minimum_prompt_tokens: 16 } });
     const eligible = await client.call('checkpoints.eligibility', { id });
     assert.equal(eligible.eligible, true, JSON.stringify(eligible));
@@ -392,8 +396,9 @@ async function main() {
     await verifyAll([{ slot: last, continuation: sparseContinuation, live: sparseLive }], sparse, 'fresh-process-sparse-generation');
     await stop();
     // Exact topology and model/config qualifications must fail closed.
-    for (const patch of [{ cache_idle_slots: true }, { parallel: 3 }, { ctx_size: context + 1024 }, { draft_model_path: args.model }, { cache_type_draft_k: 'q8_0' }, { ctx_checkpoints: 0 }]) {
-        await update({ parallel, ctx_size: context, draft_model_path: args.mtp, cache_type_draft_k: kv, ctx_checkpoints: 2, cache_idle_slots: false, ...patch });
+    for (const patch of [{ cache_idle_slots: true }, { parallel: 3 }, { ctx_size: context + 1024 }, { draft_model_path: args.model }, { cache_type_draft_k: 'q8_0' }, { ctx_checkpoints: 0 },
+        { spec_type: 'ngram-cache,draft-mtp' }, { spec_type: 'ngram-mod,draft-dflash' }, { custom_args: ['--spec-ngram-mod-n-max 32'] }]) {
+        await update({ parallel, ctx_size: context, draft_model_path: args.mtp, cache_type_draft_k: kv, ctx_checkpoints: 2, cache_idle_slots: false, spec_type: specType, custom_args: [], ...patch });
         const e = await client.call('checkpoints.eligibility', { id });
         assert.equal(e.eligible, false);
         record('unqualified-shape-rejected', { patch, eligibility: e });

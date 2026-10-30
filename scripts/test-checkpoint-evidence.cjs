@@ -1,13 +1,25 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
-const { inspectSlotFile, assertFullRead, assertInference } = require('./lib/checkpoint-evidence.cjs')
+const { inspectSlotFile, assertFullRead, assertInference, speculativeTrace } = require('./lib/checkpoint-evidence.cjs')
 const u32 = n => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b }
 const u64 = n => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b }
 const blob = b => Buffer.concat([u64(b.length), b])
 const context = Buffer.from('target KV/recurrent')
 const draft = Buffer.from('draft KV/recurrent')
 const spec = Buffer.from('nonempty speculative state')
+test('mixed-mode evidence separates cumulative counters from checkpoint rollback', () => {
+  const trace = speculativeTrace([
+    'statistics ngram-mod: #gen tokens = 64, #acc tokens = 2, #mean acc len = 3.0',
+    'accepted  2/64 draft tokens (restore checkpoint)',
+    'accepted 3/3 draft tokens',
+    'statistics draft-mtp: #gen tokens = 9, #acc tokens = 7, #mean acc len = 2.0',
+    'statistics ngram-mod: #gen tokens = 128, #acc tokens = 65, #mean acc len = 4.0',
+  ].join('\n'))
+  assert.deepEqual(trace.statistics, { 'ngram-mod': { generated: 128, accepted: 65 }, 'draft-mtp': { generated: 9, accepted: 7 } })
+  assert.deepEqual(trace.checkpointRollbacks, [{ accepted: 2, drafted: 64 }])
+  assert.deepEqual(speculativeTrace('HTTP 200; health ok'), { statistics: {}, checkpointRollbacks: [] })
+})
 function fixture(target = context, speculative = spec) {
   return Buffer.concat([u32(0x67677371), u32(4), u32(2), u32(1), u32(2), target,
     Buffer.from('SCKP'), u32(1), u32(1), u64(2), u32(0), u32(1), blob(context), blob(draft), blob(spec),
@@ -57,4 +69,15 @@ test('requires true generation, matching output, draft counters and cache reuse'
     { ...good, timings: { ...good.timings, draft_n_accepted: 0 } }]) {
     assert.throws(() => assertInference(good, bad, { draft: true, reuse: true }))
   }
+})
+
+test('ngram learning may change same-process counts but never relaxes fresh restore by default', () => {
+  const cold = { tokens: [3, 9, 1], content: '391', timings: { draft_n: 119, draft_n_accepted: 119 } }
+  const warm = { ...cold, timings: { draft_n: 125, draft_n_accepted: 125 } }
+  assert.throws(() => assertInference(cold, warm, { draft: true }))
+  assertInference(cold, warm, { draft: true, draftCounts: 'rate' })
+  assert.throws(() => assertInference(cold, { ...warm, timings: { draft_n: 125, draft_n_accepted: 124 } },
+    { draft: true, draftCounts: 'rate' }), /acceptance rate/)
+  assert.throws(() => assertInference(cold, { ...warm, timings: { draft_n: 125, draft_n_accepted: 126 } },
+    { draft: true, draftCounts: 'rate' }), /invalid draft counters/)
 })
