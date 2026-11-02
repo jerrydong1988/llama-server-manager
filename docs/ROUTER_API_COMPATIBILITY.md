@@ -31,8 +31,9 @@ Chat Completions 与 Responses 会保持工具调用、结构化输出、usage �
 账本记为 `forwarded=false`、`outcome=rejected`、`failure.stage=validation`，
 拒绝计数只增加一次。合法并行结果可乱序，工具失败/取消结果也允许回传，
 不校验历史工具是否仍在当前声明中，不解析参数或工具结果正文。
-本规则只用于 Chat 生成：计数端点可计算尚未完成的工具历史，Responses/
-Messages 按各自原生协议处理，旧式 function_call/function 流程保持不变。
+本规则只用于 Chat 生成：计数端点不做本地配对拦截，是否接受未完成历史
+由原生引擎决定；Responses/Messages 按各自原生协议处理，
+旧式 function_call/function 流程保持不变。
 
 ### Anthropic 格式
 
