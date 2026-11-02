@@ -11,6 +11,8 @@ import type { Instance } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
 import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/CommandFeedbackModal'
+import { configForEngine } from '../gufo'
+import { gufoCopy } from '../i18n/gufoCopy'
 import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engineResolution'
 import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
@@ -38,7 +40,7 @@ const InstanceManager = () => {
   const setActiveTab = useAppStore(s => s.setActiveTab)
   const moveInstance = useAppStore(s => s.moveInstance)
   const renameInstance = useAppStore(s => s.renameInstance)
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const labels = t.instanceWorkspace
   const { portStatus, setPortStatus, schedulePortCheck } = usePortAvailability(labels)
 
@@ -95,6 +97,7 @@ const InstanceManager = () => {
   const healthText = (inst: Instance) => {
     if (inst.status === 'stopped') return labels.offline
     if (inst.status === 'error') return t.instance.error
+    if (inst.config.engine_kind === 'gufo' && inst.status === 'running' && inst.healthCheck === 'pending') return gufoCopy(lang).loading
     if (inst.healthCheck === 'ok') return labels.healthy
     if (inst.healthCheck === 'fail') return t.downloadPage.failed
     return labels.pending
@@ -156,6 +159,8 @@ const InstanceManager = () => {
     config.port = newInst.port
     config.host = '127.0.0.1'
     config.engine_id = newInst.engineId || defaultEngineId || ''
+    const selectedEngine = engines.find(engine => pathsEqual(engine.id, config.engine_id))
+    if (selectedEngine) config = configForEngine(config, selectedEngine)
     const normalized = normalizeInstanceConfig(config, model, { context: 'create' })
 
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
@@ -859,7 +864,7 @@ const InstanceManager = () => {
                       const idx = state.instances.findIndex(i => i.id === enginePickerForId)
                       if (idx < 0) { setEnginePickerForId(''); return }
                       const next = [...state.instances]
-                      next[idx] = { ...next[idx], config: { ...next[idx].config, engine_id: engine.id } }
+                      next[idx] = { ...next[idx], config: configForEngine(next[idx].config, engine) }
                       useAppStore.setState({ instances: next })
                       void useAppStore.getState().saveConfig().catch(() => {})
                       setEnginePickerForId('')

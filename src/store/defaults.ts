@@ -2,6 +2,9 @@ import type { InstanceConfig } from './types'
 
 export function defaultInstanceConfig(): InstanceConfig {
   return {
+    engine_kind: 'llama_cpp', gufo: { model_family: 'qwen38_flash_next', speculative: 'off', mtp_model: '', dflash_model: '',
+      draft_tokens: 7, sessions: 1, think: 'on', reasoning_effort: 'auto', preserve_thinking: true,
+      cache_ram_mode: 'auto', cache_ram_gib: 4, cache_disk: false, cache_disk_gib: 10, startup_timeout_seconds: 600 },
     launch_mode: 'managed', manual_command: '', explicit_overrides: [],
     id: '', name: '', engine_id: '', model_path: '', alias: '',
     lora_path: '', mmproj_path: '', lora_init_without_apply: false, lora_scaled: '',

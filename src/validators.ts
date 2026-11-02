@@ -291,6 +291,7 @@ export function validateConfig(
   engine: EngineInfo | null | undefined,
   projector?: ModelInfo | null,
 ): Warning[] {
+  if (config.engine_kind === 'gufo') return [] // The Gufo form uses the shared Rust launch validator.
   const warnings: Warning[] = []
   const defaults = defaultInstanceConfig()
   const flags = customFlags(config)

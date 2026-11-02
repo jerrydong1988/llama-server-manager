@@ -205,6 +205,7 @@ export function normalizeInstanceConfig(
   model?: ModelInfo | null,
   options: NormalizeInstanceConfigOptions = {},
 ) {
+  if (config.engine_kind === 'gufo') return { config: { ...config }, workload: 'inference' as const, vectorMode: false, changes: [] as VectorCleanupChange[] }
   const publicConfig = ensureManagedPublicModelAlias(config)
   const workload = detectModelWorkload(model, publicConfig.model_path, publicConfig)
   if (workload === 'inference') {

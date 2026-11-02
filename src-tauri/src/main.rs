@@ -9,6 +9,7 @@ mod commands;
 mod dependency_regressions;
 mod error;
 mod engine_process;
+mod gufo;
 mod lookup_cache_store;
 mod external_artifacts;
 mod model_artifacts;

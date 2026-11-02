@@ -959,6 +959,8 @@ fn resolved_target_for_id(
     let stored_config = instances.get(id)?;
     let running_info = running.get(id)?;
     let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
+    // Gufo API forwarding is admitted only after the phase-two contract suite.
+    if crate::gufo::is_gufo(config) { return None; }
     if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
         return None;
     }

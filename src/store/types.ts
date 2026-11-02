@@ -56,7 +56,15 @@ export interface ModelDeletionResult {
   removedBytes: number
 }
 
+export type EngineKind = 'llama_cpp' | 'gufo'
+export interface GufoConfig {
+  model_family: string; speculative: string; mtp_model: string; dflash_model: string;
+  draft_tokens: number; sessions: number; think: string; reasoning_effort: string; preserve_thinking: boolean;
+  cache_ram_mode: string; cache_ram_gib: number; cache_disk: boolean; cache_disk_gib: number; startup_timeout_seconds: number;
+}
+
 export interface EngineInfo {
+  kind?: EngineKind
   id: string
   name: string
   dir: string
@@ -149,6 +157,7 @@ export interface CheckpointEligibility {
 }
 
 export interface InstanceConfig {
+  engine_kind: EngineKind; gufo: GufoConfig;
   // Launch policy. null explicit_overrides identifies a legacy config that has
   // not yet been migrated to intent-based command generation.
   launch_mode: 'managed' | 'manual'; manual_command: string;

@@ -36,7 +36,14 @@ import { applyCheckpointRequirements } from './ConfigPage/checkpointRequirements
 import { useConfigDraft } from './ConfigPage/useConfigDraft'
 import { useGuideTourStore } from './guide/guideTourStore'
 
+import { GufoConfigPage } from './ConfigPage/GufoConfigPage'
+
 const ConfigPage = () => {
+  const instance = useAppStore(state => state.instances.find(item => item.id === state.activeConfigInstanceId))
+  return instance?.config.engine_kind === 'gufo' ? <GufoConfigPage key={instance.id} instance={instance} /> : <LlamaConfigPage />
+}
+
+const LlamaConfigPage = () => {
   const instances = useAppStore(state => state.instances)
   const activeConfigInstanceId = useAppStore(state => state.activeConfigInstanceId)
   const updateInstance = useAppStore(state => state.updateInstance)

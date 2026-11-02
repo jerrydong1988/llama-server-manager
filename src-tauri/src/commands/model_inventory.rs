@@ -152,6 +152,7 @@ impl InventoryEngineRecord {
 
     pub fn to_engine_info(&self) -> EngineInfo {
         EngineInfo {
+            kind: crate::gufo::EngineKind::for_executable(&self.exe),
             id: self.id.clone(),
             name: self.name.clone(),
             dir: self.dir.clone(),
