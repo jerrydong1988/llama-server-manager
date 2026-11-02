@@ -198,14 +198,15 @@ async fn audit_defaults_offline_routes_and_protocol_errors_remain_distinct() {
             let response = request.send().await.unwrap();
             assert_eq!(response.status().as_u16(), status);
             assert_eq!(response.headers()["content-type"], "application/json");
-            assert!(response.headers().contains_key(if anthropic {
+            let anthropic_error = anthropic && path == "/not-an-api";
+            assert!(response.headers().contains_key(if anthropic_error {
                 "request-id"
             } else {
                 "x-request-id"
             }));
             let body: serde_json::Value = response.json().await.unwrap();
             assert_eq!(body["error"]["code"], code);
-            if anthropic {
+            if anthropic_error {
                 assert_eq!(body["type"], "error");
             }
         }

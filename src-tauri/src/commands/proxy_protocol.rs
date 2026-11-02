@@ -36,7 +36,12 @@ impl ProxyApiFormat {
 
 pub(crate) fn request_format(path: &str, has_anthropic_version: bool) -> ProxyApiFormat {
     let path_format = ProxyApiFormat::from_path(path);
-    if path_format.is_anthropic() || has_anthropic_version {
+    // Inference endpoints have a fixed native protocol. A client-wide optional
+    // header must not turn Chat/Responses errors or request IDs into Anthropic.
+    // Shared discovery and fallback endpoints may still select by this header.
+    if path_format.is_anthropic()
+        || (has_anthropic_version && super::usage_protocol::UsageProtocol::from_path(path).is_none())
+    {
         ProxyApiFormat::Anthropic
     } else {
         ProxyApiFormat::OpenAi
@@ -496,6 +501,22 @@ pub(crate) fn response_request_id(body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_endpoint_protocol_takes_precedence_over_optional_headers() {
+        for path in ["/v1/chat/completions", "/v1/chat/completions/input_tokens",
+            "/v1/responses", "/v1/responses/input_tokens", "/v1/completions",
+            "/v1/embeddings", "/rerank"] {
+            assert_eq!(request_format(path, true), ProxyApiFormat::OpenAi);
+            assert_eq!(request_format(path, false), ProxyApiFormat::OpenAi);
+        }
+        for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+            assert_eq!(request_format(path, false), ProxyApiFormat::Anthropic);
+            assert_eq!(request_format(path, true), ProxyApiFormat::Anthropic);
+        }
+        assert_eq!(request_format("/v1/models", true), ProxyApiFormat::Anthropic);
+        assert_eq!(request_format("/v1/models", false), ProxyApiFormat::OpenAi);
+    }
 
     #[test]
     fn anthropic_errors_use_the_documented_envelope() {
