@@ -123,6 +123,17 @@ pub(crate) fn quota_error_response(
     message: &str,
     param: Option<&str>,
 ) -> Response {
+    coded_error_response(format, status, "quota", code, message, param)
+}
+
+pub(crate) fn coded_error_response(
+    format: ProxyApiFormat,
+    status: StatusCode,
+    stage: &str,
+    code: &str,
+    message: &str,
+    param: Option<&str>,
+) -> Response {
     let request_id = proxy_request_id();
     let value = if format.is_anthropic() {
         let mut value = anthropic_error_value(status, message, &request_id);
@@ -135,7 +146,7 @@ pub(crate) fn quota_error_response(
     let mut response = (status, Json(value)).into_response();
     response
         .extensions_mut()
-        .insert(UsageFailure::new("quota", code));
+        .insert(UsageFailure::new(stage, code));
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(
             if format.is_anthropic() {

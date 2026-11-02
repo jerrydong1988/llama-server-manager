@@ -80,6 +80,12 @@ pub(crate) struct RoutingCandidate {
     pub max_concurrent_requests: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetAdmissionError {
+    Capacity,
+    Unavailable,
+}
+
 #[derive(Debug)]
 struct RateBucket {
     tokens: f64,
@@ -210,12 +216,8 @@ impl RouterRuntime {
                 self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
                 Some(GlobalRequestPermit { permit })
             }
-            None => {
-                self.metrics
-                    .rejected_requests
-                    .fetch_add(1, Ordering::Relaxed);
-                None
-            }
+            // HTTP rejection accounting is centralized at the response boundary.
+            None => None,
         }
     }
 
@@ -289,9 +291,6 @@ impl RouterRuntime {
                 retry_after_secs: 0,
             };
         }
-        self.metrics
-            .rejected_requests
-            .fetch_add(1, Ordering::Relaxed);
         RateLimitDecision {
             allowed: false,
             limit,
@@ -306,8 +305,18 @@ impl RouterRuntime {
         strategy: &str,
         routing_key: &str,
     ) -> Option<RoutingCandidate> {
-        let now = now_ms();
         let targets = self.targets.lock().unwrap();
+        self.select_target_locked(&targets, candidates, strategy, routing_key)
+    }
+
+    fn select_target_locked(
+        &self,
+        targets: &HashMap<String, TargetRuntime>,
+        candidates: &[RoutingCandidate],
+        strategy: &str,
+        routing_key: &str,
+    ) -> Option<RoutingCandidate> {
+        let now = now_ms();
         let mut eligible = candidates
             .iter()
             .filter(|candidate| {
@@ -374,6 +383,41 @@ impl RouterRuntime {
         }
     }
 
+    // Selection, health checks and reservation share one lock. A competing request
+    // cannot turn the same overload condition into a different HTTP status.
+    pub(crate) fn select_and_acquire_target(
+        self: &Arc<Self>,
+        candidates: &[RoutingCandidate],
+        strategy: &str,
+        routing_key: &str,
+    ) -> Result<(RoutingCandidate, TargetRequestPermit), TargetAdmissionError> {
+        let mut targets = self.targets.lock().unwrap();
+        let selected = self.select_target_locked(&targets, candidates, strategy, routing_key);
+        let Some(selected) = selected else {
+            let now = now_ms();
+            let has_ready_target = candidates.iter().any(|candidate| {
+                targets.get(&candidate.instance_id).map_or(true, |state| {
+                    state.ready && state.circuit_open_until_ms <= now
+                })
+            });
+            return Err(if has_ready_target {
+                TargetAdmissionError::Capacity
+            } else {
+                TargetAdmissionError::Unavailable
+            });
+        };
+        targets
+            .entry(selected.instance_id.clone())
+            .or_default()
+            .active_requests += 1;
+        let permit = TargetRequestPermit {
+            runtime: self.clone(),
+            instance_id: selected.instance_id.clone(),
+        };
+        Ok((selected, permit))
+    }
+
+    #[cfg(test)]
     pub(crate) fn acquire_target(
         self: &Arc<Self>,
         candidate: &RoutingCandidate,
@@ -559,10 +603,12 @@ impl RouterRuntime {
         output.push_str("# HELP lsm_router_requests_total Total accepted router requests.\n");
         output.push_str("# TYPE lsm_router_requests_total counter\n");
         output.push_str(&format!("lsm_router_requests_total {total}\n"));
+        output.push_str("# HELP lsm_router_requests_completed_total Forwarded request lifecycles ended, including errors and cancellations; not a success counter.\n");
         output.push_str("# TYPE lsm_router_requests_completed_total counter\n");
         output.push_str(&format!(
             "lsm_router_requests_completed_total {completed}\n"
         ));
+        output.push_str("# HELP lsm_router_requests_rejected_total Local error responses for inference and count POST requests before forwarding, including pre-admission rejection.\n");
         output.push_str("# TYPE lsm_router_requests_rejected_total counter\n");
         output.push_str(&format!("lsm_router_requests_rejected_total {rejected}\n"));
         output.push_str("# TYPE lsm_router_upstream_errors_total counter\n");
@@ -620,6 +666,74 @@ impl RouterRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_target_admission_is_atomic_and_reports_capacity_separately() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let target = RoutingCandidate {
+            instance_id: "atomic".into(),
+            priority: 0,
+            weight: 1,
+            max_concurrent_requests: 1,
+        };
+        let start = Arc::new(std::sync::Barrier::new(17));
+        let release = Arc::new(std::sync::Barrier::new(17));
+        let accepted = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                let (runtime, target, start, release, accepted) = (
+                    runtime.clone(),
+                    target.clone(),
+                    start.clone(),
+                    release.clone(),
+                    &accepted,
+                );
+                scope.spawn(move || {
+                    start.wait();
+                    let result =
+                        runtime.select_and_acquire_target(&[target], "priorityFailover", "shared");
+                    match &result {
+                        Ok(_) => {
+                            accepted.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(error) => assert_eq!(*error, TargetAdmissionError::Capacity),
+                    }
+                    release.wait();
+                    drop(result);
+                });
+            }
+            start.wait();
+            release.wait();
+        });
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.target_snapshot("atomic").active_requests, 0);
+        runtime.mark_probe_failure("atomic", "offline".into(), 1, Duration::from_secs(60));
+        assert!(matches!(
+            runtime.select_and_acquire_target(std::slice::from_ref(&target), "priorityFailover", "shared"),
+            Err(TargetAdmissionError::Unavailable)
+        ));
+        runtime.mark_probe_success(
+            "atomic",
+            1.0,
+            Some(TargetCapabilities {
+                total_slots: Some(1),
+                ..Default::default()
+            }),
+        );
+        let standby = RoutingCandidate {
+            instance_id: "standby".into(),
+            priority: 10,
+            ..target.clone()
+        };
+        let (_, held) = runtime
+            .select_and_acquire_target(std::slice::from_ref(&target), "priorityFailover", "shared")
+            .unwrap();
+        let (selected, fallback) = runtime
+            .select_and_acquire_target(&[target, standby], "priorityFailover", "shared")
+            .unwrap();
+        assert_eq!(selected.instance_id, "standby");
+        drop((held, fallback));
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn simultaneous_admissions_use_all_available_capacity() {

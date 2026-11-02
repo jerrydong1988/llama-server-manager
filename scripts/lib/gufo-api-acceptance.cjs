@@ -107,7 +107,7 @@ async function gufoApiAcceptance({ client, mcp, id, model, port, routerPort, roo
   const reader = res.body.getReader(); await reader.read(); await sleep(1000); abort.abort(); await reader.cancel().catch(() => {})
   for (let i = 0; ; i++) {
     const slots = (await send(false, '/slots')).value
-    if (slots.every(slot => !slot.is_processing)) break
+    if (slots.every(slot => !(slot.processing ?? slot.is_processing))) break
     assert.ok(i < 30, 'cancelled request still occupies Gufo'); await sleep(1000)
   }
   await send(true, '/v1/chat/completions', prompt)
@@ -115,6 +115,9 @@ async function gufoApiAcceptance({ client, mcp, id, model, port, routerPort, roo
   assert.ok(metrics && metrics.gen_tokens > 0, JSON.stringify(metrics))
   assert.equal(metrics.decode_calls_total, null); assert.equal(metrics.busy_slots_per_decode, null)
   record('gufo_errors_cancellation_monitoring', { id, metrics })
+
+  await require('./router-audit-acceptance.cjs').routerAuditAcceptance({ routerPort, port, model: publicModel,
+    upstreamModel: model, key, authKey, gufo: true, root, id, record })
 
   const quotaKey = `quota-${id}`
   await client.mutate('routes.update', { revision: (await client.call('routes.get')).revision, patch: { api_keys: [

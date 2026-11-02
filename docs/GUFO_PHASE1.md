@@ -138,3 +138,85 @@ A 262K context allocation is **not** a complete 262K input test. Full-capacity
 prompts, extended unattended runs, GPU-reset recovery and simultaneous residency
 remain outside this qualification. Pending writes cannot be guaranteed after a
 forced kill; controlled shutdown and reuse of completed snapshots were verified.
+
+## Manual testing follow-up — 2026-11-02
+
+Status at initial recording: **recorded, not fixed**. The user subsequently
+authorized autonomous triage and fixes. Final dispositions superseding this
+pending list are in [GUFO_AUDIT_DECISIONS.md](GUFO_AUDIT_DECISIONS.md).
+The original running deployment remains unchanged.
+The observations below concern Manager candidate `779fc0c`, Gufo 0.28.1
+`408a04357827`, and the running Flash-Next/MTP profile (262144 context, one session).
+The earlier acceptance above does not establish target-level queuing or complete
+rejection-metric coverage.
+
+### Pending work
+
+| ID | Classification | Finding and intended scope |
+| --- | --- | --- |
+| GUFO-01 | Confirmed Manager defect | Capacity rejection does not increment `lsm_router_requests_rejected_total`. Audit target-selection and permit-acquisition rejection paths and count each rejected request exactly once. Preserve the documented meaning of `requests_total`: admission to the router, not successful inference. |
+| GUFO-02 | Router design gap | Global/Key admission can queue, but target capacity exhaustion immediately rejects requests. Design bounded waiting for a compatible model/target without increasing engine execution sessions. Include queue limits, deadlines, cancellation, capacity-release wakeups, failover, shutdown and isolation between unrelated models/Keys. Enabling the existing fair queue alone does not add target-level waiting. |
+| GUFO-03 | Error/observability improvement | The target-selection response combines unavailable targets and saturated targets into the same 503 message with `error.code=null`; a permit-acquisition race can instead return 429. Define distinguishable, consistent capacity/unavailability errors, retry guidance and queue/rejection measurements. Review existing client compatibility before changing HTTP status behavior. |
+| GUFO-04 | Documentation and contract coverage | Document valid reasoning controls separately for Chat, Responses and Messages. Cover tiny output budgets, explicit reasoning budgets, unsupported aliases and direct/proxy parity. Decide whether to warn about or reject specific misleading aliases; do not indiscriminately reject all unknown extension fields. |
+
+### Reproduction and acceptance evidence
+
+- **GUFO-01/02:** with a single active streamed request, a second routed request
+  returned 503, `all matching routes are unavailable or at capacity`.
+  `requests_total` changed from 143 to 145 while `requests_rejected_total` stayed
+  at 1. Cancelling the first request released the permit; in-flight returned to 0.
+  The current entry limit is 64, each test route is limited to 1, and entry queue
+  timeout is 1000 ms. The second request passes entry admission before failing
+  target selection. Source: `commands/proxy.rs::proxy_upstream` and
+  `commands/proxy_runtime.rs::{select_target,acquire_target,acquire_request}`.
+- **GUFO-01 acceptance:** a capacity rejection increments the rejected counter
+  exactly once, including the acquisition race; allowed requests do not. Verify
+  HTTP outcomes, Prometheus counters and request-ledger classification together.
+- **GUFO-02 acceptance:** two requests to a one-session target execute serially
+  when capacity becomes available within the configured wait; timeout and queue
+  overflow return explicit errors. Queued cancellation must not reach the engine
+  or leak permits. Exercise streaming, multiple aliases, distinct models/Keys,
+  stopping targets, and legacy llama.cpp behavior. Observed 0.22-second release
+  in Hermes testing is not a guaranteed upper bound or a fixed retry policy.
+- **GUFO-04 evidence:** with the same short Chat prompt and `max_tokens=32`,
+  default thinking returned empty content and `finish_reason=length`; disabling
+  thinking returned `首都` with one completion token. `reasoning_budget_tokens=8`
+  returned the answer with 11 total completion tokens, both direct and proxied.
+  There is no universal rule that 64 output tokens guarantees visible content.
+
+Local, untracked raw evidence is retained in
+`.temp/hermes-api-review/{capacity-metrics,contracts,native-and-budget}.json`.
+Hermes source tests and its writing sweep are under
+`%LOCALAPPDATA%/hermes/cache/scratch/svc_test/`. The compact observations above
+remain in this document even if those local scratch files are later removed.
+
+### Excluded findings and observations to retain
+
+- **Responses `parallel_tool_calls=false`: not a confirmed defect.** Hermes's
+  Responses test supplied no tools. The field describes that request, not the
+  server's global capabilities. Controlled Responses tests returned three
+  function calls with `parallel_tool_calls=true`, and one with `false`.
+- **Reasoning aliases:** `reasoning_effort:none`,
+  `chat_template_kwargs.enable_thinking:false`, and
+  `thinking:{type:"disabled"}` worked in Chat. Top-level `think:false`,
+  `enable_thinking:false`, and `reasoning:{enabled:false}` were ignored by Chat;
+  the behavior also occurred directly against Gufo. Responses accepts
+  `reasoning:{effort:"none"}` and rejects `reasoning:{enabled:false}` with 400.
+  Manager was not stripping the supported controls.
+- **Cache pressure:** logs contain `capture_refused reason=byte_capacity`.
+  This concerns snapshot capacity/reclaimability and does not alone establish
+  process OOM or an inference failure. The running profile uses
+  `cache_ram_mode=auto`; changing only `cache_ram_gib` has no effect. Any fixed
+  limit change needs memory-headroom and cache-reuse validation, not an assumed
+  benefit from a larger value. No cache setting was changed during this review.
+- **Quality evidence:** Hermes's writing sweep counts success as normal finish
+  plus more than ten visible characters; it does not validate requested length
+  or factual quality. The coding 5/5 is one generated program passing five test
+  cases. Low effort's improvement is useful small-sample evidence, not a general
+  guarantee of unchanged reasoning quality.
+- **Concurrency terminology:** engine sessions, router admission and queued
+  requests are distinct. `total_slots` is observed engine metadata, not a knob.
+  A single execution session can still serve queued requests sequentially.
+
+No source code, configuration or deployment was changed in the initial recording.
+The service was left running and ready with no active inference after the probes.

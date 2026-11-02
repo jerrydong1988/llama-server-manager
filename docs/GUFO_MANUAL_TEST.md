@@ -44,6 +44,41 @@ llama.cpp 的槽位检查点操作不适用于 Gufo；Gufo 自行管理其磁盘
 262K 是配置容量，并不表示已经验证完整 262K 输入；本包不承诺两套大模型同时驻留。
 Responses 使用 Gufo 的原生能力边界，不提供云端会话存储或后台任务模拟。
 
+## 本轮 API 修复与保留行为
+
+本包修复本地拒绝计数、路由错误分类、CORS 响应头和 404/405 错误信封。
+详细决定见包内 `AUDIT-DECISIONS.md`。
+
+- 单槽位忙碌时继续立即返回 **503 / route_capacity**，带 `Retry-After: 1`；
+  客户端采用有次数/总时限上限的退避重试。该数值不是槽位一秒内释放的保证。
+- 停机/加载中返回 **503 / route_unavailable**，未知模型返回 **404 / model_not_found**。
+  没有默认目标且缺失 model 返回 **400 / model_required**。
+- `queueTimeoutMs` 只控制全局/Key 准入等待，不增加目标队列或引擎会话。
+- 查 Manager 请求账本用 `x-lsm-request-id`；上游 `x-request-id` 保留用于引擎日志。
+
+Gufo 的小输出预算可能全部用于思考。检查 `finish_reason=length`、
+Responses 的 `status=incomplete`、Messages 的 `stop_reason=max_tokens`，
+不能仅根据 HTTP 200 判断是否完成。短答案可显式使用：
+
+| 协议 | 关闭思考的请求字段 |
+| --- | --- |
+| Chat Completions | `"reasoning_effort":"none"` |
+| Responses | `"reasoning":{"effort":"none"}` |
+| Anthropic Messages | `"thinking":{"type":"disabled"}` |
+
+Chat 还支持 `chat_template_kwargs.enable_thinking=false` 和
+`thinking.type=disabled`；顶层 `think`、`enable_thinking`、
+`reasoning.enabled` 不是该 Gufo Chat 接口的有效替代写法。
+Chat 的显式思考预算 `reasoning_budget_tokens` 应放在顶层；它不保证任意任务都能
+在极短总预算内输出正文。计数与生成必须带相同的思考/工具/图片设置。
+
+`stop=["\n\n"]` 会作用于 Gufo 的原始输出，可能命中思考到正文之间的空行，
+产生 `finish_reason=stop` 的空正文。避免把空行设为通用 stop；对纯短答显式关闭思考。
+Manager 不删除 stop，也不替用户续写或提高预算。
+Chat 流式需要 usage 时传 `stream_options.include_usage=true`。
+Messages 首帧 usage 暂为零，使用末帧累计值并加上缓存输入；
+本地 thinking signature 不具备 Claude 云端签名验证能力。
+
 `BUILD.json` 和 `SHA256SUMS.txt` 记录候选程序及引擎身份。测试包不是正式安装版或自动更新渠道。
 首次初始化后，界面内修改会持久保存；再次运行 Start.cmd 不会重置配置。
 如权重被移动，优先在参数页面更新路径；首次初始化前也可编辑 profiles.json。

@@ -163,6 +163,20 @@ async function main() {
       messages: [{ role: 'user', content: 'Compute 6 times 7. Reply only with the number.' }],
       max_tokens: 64, temperature: 0, reasoning_effort: 'none', chat_template_kwargs: { enable_thinking: false } })
     assert.match(answer.choices[0].message.content, /42/)
+    if (args.extended) {
+      const routerPort = await freePort(); ports.push(routerPort)
+      const key = 'isolated-llama-audit-key'
+      await client.mutate('routes.update', { revision: (await client.call('routes.get')).revision, patch: {
+        host: '127.0.0.1', port: routerPort, strict_model_routing: true, default_instance_id: '',
+        health_check_interval_ms: 1000, recovery_cooldown_ms: 1000,
+        api_keys: [{ id: 'llama-audit', name: 'llama.cpp regression', key, enabled: true }],
+        routes: [{ id: 'llama-audit', enabled: true, model_alias: id, target_instance_id: id, max_concurrent_requests: 1 }],
+      } })
+      await client.mutate('routes.start')
+      await require('./lib/router-audit-acceptance.cjs').routerAuditAcceptance({ routerPort, port, model: id,
+        upstreamModel: id, key, gufo: false, root: args.root, id, record })
+      await client.mutate('routes.stop')
+    }
     await client.mutate('instances.stop', { id })
     assert.equal((await mcp.tool('instances.health', { id })).running, null)
     record('llama_cpp_real_regression', { engine: llama.exe, model: s.model, answer: answer.choices[0].message.content, usage: answer.usage, port })

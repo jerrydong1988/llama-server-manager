@@ -42,6 +42,7 @@ fs.writeFileSync(path.join(output, 'BUILD.json'), JSON.stringify({ package_id: p
   gufo_sha256: hash(source.launcher.executable), manager_sha256: managerHashes }, null, 2))
 fs.copyFileSync('docs/GUFO_MANUAL_TEST.md', path.join(output, 'README.md'))
 fs.copyFileSync('docs/GUFO_PHASE1.md', path.join(output, 'INTEGRATION.md'))
+fs.copyFileSync('docs/GUFO_AUDIT_DECISIONS.md', path.join(output, 'AUDIT-DECISIONS.md'))
 fs.copyFileSync('LICENSE', path.join(output, 'MANAGER-LICENSE.txt'))
 function files(directory) { return fs.readdirSync(directory, { withFileTypes: true }).flatMap(e => e.isDirectory() ? files(path.join(directory,e.name)) : [path.join(directory,e.name)]) }
 fs.writeFileSync(path.join(output, 'SHA256SUMS.txt'), files(output).sort().map(file => `${hash(file)}  ${path.relative(output,file)}`).join('\r\n') + '\r\n')
