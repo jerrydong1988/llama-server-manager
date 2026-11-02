@@ -1,5 +1,33 @@
 import { expect, test } from '@playwright/test'
 
+test('a failed Gufo save does not roll back a newer instance update', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=gufo-delayed-config-save')
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+  await page.getByLabel('启动等待上限（秒）').fill('900')
+  await page.getByRole('button', { name: '校验并保存' }).click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'save_config').length)).toBe(1)
+  await page.evaluate(async () => {
+    const modulePath = '/src/store.ts'
+    const { useAppStore } = await import(/* @vite-ignore */ modulePath)
+    const store = useAppStore.getState()
+    const instance = store.instances.find((item: { id: string }) => item.id === 'browser-test-instance')
+    store.updateInstance(instance.id, { config: { ...instance.config, alias: 'newer-alias' } })
+    window.__TAURI_BROWSER_TEST__.releaseSave(true)
+  })
+  await expect(page.getByRole('alert')).toHaveText('Simulated configuration write failure')
+  expect(await page.evaluate(async () => {
+    const modulePath = '/src/store.ts'
+    const { useAppStore } = await import(/* @vite-ignore */ modulePath)
+    return useAppStore.getState().instances.find((item: { id: string }) => item.id === 'browser-test-instance').config.alias
+  })).toBe('newer-alias')
+  await expect(page.getByLabel('API 模型名称')).toHaveValue('newer-alias')
+  await expect(page.getByLabel('启动等待上限（秒）')).toHaveValue('900')
+})
+
 test('Gufo config exposes supported fields, persists the draft, and separates cache policy', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')

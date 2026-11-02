@@ -7,7 +7,7 @@ export function configForEngine(config: InstanceConfig, engine: EngineInfo): Ins
   if ((config.engine_kind ?? 'llama_cpp') === kind) return { ...config, engine_id: engine.id }
   const next = { ...defaultInstanceConfig(), id: config.id, name: config.name,
     model_path: config.model_path, mmproj_path: config.mmproj_path, alias: config.alias,
-    port: config.port, engine_id: engine.id, engine_kind: kind }
+    port: config.port, api_key: config.api_key, engine_id: engine.id, engine_kind: kind }
   if (kind === 'gufo') {
     next.ctx_size = 32768
     next.parallel = 1

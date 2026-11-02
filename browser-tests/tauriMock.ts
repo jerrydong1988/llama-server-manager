@@ -266,7 +266,7 @@ const instanceConfig: InstanceConfig = {
   explicit_overrides: ['temp', 'top_k', 'kv_unified', 'kv_unified_mode', 'models_autoload', 'image_min_tokens'],
 }
 
-if (BROWSER_SCENARIO === 'gufo') {
+if (BROWSER_SCENARIO === 'gufo' || BROWSER_SCENARIO === 'gufo-delayed-config-save') {
   engine.kind = 'gufo'
   engine.name = 'Gufo'
   engine.exe = 'C:\\browser-test\\engine\\gufo.exe'
@@ -1588,7 +1588,7 @@ mockIPC((command, payload) => {
         syncAutomationProbe()
         return clone(instances)
       }
-      if (BROWSER_SCENARIO === 'delayed-config-save') {
+      if (BROWSER_SCENARIO === 'delayed-config-save' || BROWSER_SCENARIO === 'gufo-delayed-config-save') {
         return new Promise((resolve, reject) => {
           releasePendingSave = fail => {
             releasePendingSave = null

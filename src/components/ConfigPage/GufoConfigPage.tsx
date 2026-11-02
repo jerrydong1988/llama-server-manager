@@ -73,8 +73,12 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
       if (!current || current.status === 'running' || current.config !== previous) throw new Error(copy.running)
       draft.setSaveStage('persisting')
       store.updateInstance(instance.id, { config: local })
-      try { await store.saveConfig() } catch (cause) {
-        if (previous) store.updateInstance(instance.id, { config: previous })
+      const pendingSave = store.saveConfig()
+      const submitted = useAppStore.getState().instances.find(item => item.id === instance.id)?.config
+      try { await pendingSave } catch (cause) {
+        const latest = useAppStore.getState().instances.find(item => item.id === instance.id)?.config
+        if (previous && latest === submitted) store.updateInstance(instance.id, { config: previous })
+        else if (previous && latest) draft.setBaseline(latest, previous)
         throw cause
       }
       const persisted = useAppStore.getState().instances.find(item => item.id === instance.id)?.config ?? local

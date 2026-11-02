@@ -44,6 +44,7 @@ pub(crate) struct TargetHealthSnapshot {
 
 #[derive(Debug, Clone)]
 struct TargetRuntime {
+    identity: Arc<()>,
     ready: bool,
     consecutive_failures: u32,
     circuit_open_until_ms: u64,
@@ -58,6 +59,7 @@ struct TargetRuntime {
 impl Default for TargetRuntime {
     fn default() -> Self {
         Self {
+            identity: Arc::new(()),
             // A running process is provisionally eligible until the first active probe.
             ready: true,
             consecutive_failures: 0,
@@ -161,13 +163,17 @@ impl Drop for InFlightBodyPermit {
 pub(crate) struct TargetRequestPermit {
     runtime: Arc<RouterRuntime>,
     instance_id: String,
+    target_identity: Arc<()>,
 }
 
 impl Drop for TargetRequestPermit {
     fn drop(&mut self) {
         if let Ok(mut targets) = self.runtime.targets.lock() {
             if let Some(target) = targets.get_mut(&self.instance_id) {
-                target.active_requests = target.active_requests.saturating_sub(1);
+                // A stopped target may have been evicted and recreated under the same ID.
+                if Arc::ptr_eq(&target.identity, &self.target_identity) {
+                    target.active_requests = target.active_requests.saturating_sub(1);
+                }
             }
         }
     }
@@ -406,13 +412,14 @@ impl RouterRuntime {
                 TargetAdmissionError::Unavailable
             });
         };
-        targets
+        let target = targets
             .entry(selected.instance_id.clone())
-            .or_default()
-            .active_requests += 1;
+            .or_default();
+        target.active_requests += 1;
         let permit = TargetRequestPermit {
             runtime: self.clone(),
             instance_id: selected.instance_id.clone(),
+            target_identity: target.identity.clone(),
         };
         Ok((selected, permit))
     }
@@ -441,6 +448,7 @@ impl RouterRuntime {
         Some(TargetRequestPermit {
             runtime: self.clone(),
             instance_id: candidate.instance_id.clone(),
+            target_identity: target.identity.clone(),
         })
     }
 
@@ -666,6 +674,25 @@ impl RouterRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_target_permit_cannot_release_capacity_of_a_recreated_target() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let target = RoutingCandidate {
+            instance_id: "restarted".into(), priority: 0, weight: 1, max_concurrent_requests: 1,
+        };
+        let candidates = std::slice::from_ref(&target);
+        let (_, old) = runtime.select_and_acquire_target(candidates, "priorityFailover", "model").unwrap();
+        runtime.retain_targets(&HashSet::new());
+        runtime.mark_probe_success("restarted", 1.0, None);
+        let (_, current) = runtime.select_and_acquire_target(candidates, "priorityFailover", "model").unwrap();
+        drop(old);
+        assert_eq!(runtime.target_snapshot("restarted").active_requests, 1);
+        assert!(matches!(runtime.select_and_acquire_target(candidates, "priorityFailover", "model"),
+            Err(TargetAdmissionError::Capacity)));
+        drop(current);
+        assert_eq!(runtime.target_snapshot("restarted").active_requests, 0);
+    }
 
     #[test]
     fn concurrent_target_admission_is_atomic_and_reports_capacity_separately() {

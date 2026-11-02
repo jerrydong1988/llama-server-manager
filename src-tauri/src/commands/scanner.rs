@@ -1087,7 +1087,9 @@ fn push_indexed_engine(
 ) {
     let cache_key = canonical_key(if crate::gufo::EngineKind::for_executable(&exe.to_string_lossy()) == crate::gufo::EngineKind::Gufo { exe } else { dir });
     let exe_mtime = file_mtime(exe);
-    seen_inventory_ids.insert(cache_key.clone());
+    if !seen_inventory_ids.insert(cache_key.clone()) {
+        return;
+    }
 
     if let Some(record) = inventory.get(&cache_key) {
         if record.exe_mtime == exe_mtime {
@@ -2323,6 +2325,38 @@ mod incremental_scan_tests {
         let cached = InventoryEngineRecord::from_engine(&gufo, 1, root.to_string_lossy().into_owned());
         assert_eq!(cached.to_engine_info().kind, crate::gufo::EngineKind::Gufo);
         assert_eq!(cached.to_engine_info().id, gufo.id);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mixed_cached_and_scanned_roots_do_not_duplicate_engines() {
+        let root = temp_test_dir("engine-mixed-roots");
+        let nested = root.join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut inventory = HashMap::new();
+        let root_key = canonical_key(&root);
+        let executables = [
+            nested.join(ENGINE_EXE_NAME),
+            nested.join(if cfg!(windows) { "gufo.exe" } else { "gufo" }),
+        ];
+        for exe in &executables {
+            std::fs::write(exe, b"fixture").unwrap();
+            let info = build_engine_info(&nested, exe, "").unwrap();
+            inventory.insert(info.id.clone(), InventoryEngineRecord::from_engine(
+                &info, file_mtime(exe), root_key.clone(),
+            ));
+        }
+        let mut seen = HashSet::new();
+        let mut engines = Vec::new();
+        let mut records = Vec::new();
+        assert_eq!(reuse_cached_engines_for_root(&root_key, &inventory,
+            &mut seen, &mut engines, &mut records), 2);
+        for exe in &executables {
+            push_indexed_engine(&nested, exe, &canonical_key(&nested), &inventory,
+                &mut seen, &mut engines, &mut records);
+        }
+        assert_eq!(engines.len(), 2);
+        assert_eq!(records.len(), 2);
         std::fs::remove_dir_all(root).unwrap();
     }
 
