@@ -1085,9 +1085,11 @@ fn push_indexed_engine(
     engines: &mut Vec<EngineInfo>,
     engine_records: &mut Vec<InventoryEngineRecord>,
 ) {
-    let cache_key = canonical_key(dir);
+    let cache_key = canonical_key(if crate::gufo::EngineKind::for_executable(&exe.to_string_lossy()) == crate::gufo::EngineKind::Gufo { exe } else { dir });
     let exe_mtime = file_mtime(exe);
-    seen_inventory_ids.insert(cache_key.clone());
+    if !seen_inventory_ids.insert(cache_key.clone()) {
+        return;
+    }
 
     if let Some(record) = inventory.get(&cache_key) {
         if record.exe_mtime == exe_mtime {
@@ -1352,7 +1354,7 @@ struct EngineTreeInspection {
 fn inspect_engine_tree(root: &Path, max_depth: usize) -> Result<EngineTreeInspection, String> {
     // The marker guarantees that inventory created by the former two-level algorithm is not
     // reused after upgrading to recursive engine discovery.
-    let mut signature_parts = vec!["engine-tree-signature-v2".to_string()];
+    let mut signature_parts = vec!["engine-tree-signature-v3-gufo".to_string()];
     let mut executables = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0usize)];
     let mut visited = HashSet::new();
@@ -1371,24 +1373,26 @@ fn inspect_engine_tree(root: &Path, max_depth: usize) -> Result<EngineTreeInspec
         }
         signature_parts.push(format!("dir|{identity}"));
 
-        let exe = dir.join(ENGINE_EXE_NAME);
-        if let Ok(metadata) = exe.metadata() {
-            if metadata.is_file() {
-                let canonical_exe = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
-                if path_is_within(&canonical_exe, &canonical_root) {
-                    let modified_ns = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|duration| duration.as_nanos())
-                        .unwrap_or(0);
-                    signature_parts.push(format!(
-                        "exe|{}|{}|{}",
-                        canonical_key(&canonical_exe),
-                        metadata.len(),
-                        modified_ns
-                    ));
-                    executables.push((dir.clone(), exe));
+        for executable_name in [ENGINE_EXE_NAME, if cfg!(windows) { "gufo.exe" } else { "gufo" }] {
+            let exe = dir.join(executable_name);
+            if let Ok(metadata) = exe.metadata() {
+                if metadata.is_file() {
+                    let canonical_exe = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
+                    if path_is_within(&canonical_exe, &canonical_root) {
+                        let modified_ns = metadata
+                            .modified()
+                            .ok()
+                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|duration| duration.as_nanos())
+                            .unwrap_or(0);
+                        signature_parts.push(format!(
+                            "exe|{}|{}|{}",
+                            canonical_key(&canonical_exe),
+                            metadata.len(),
+                            modified_ns
+                        ));
+                        executables.push((dir.clone(), exe));
+                    }
                 }
             }
         }
@@ -1444,13 +1448,16 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
     let version = name.clone();
     let backend = utils::detect_backend(dir);
     // #10: Use the canonical directory path as a stable ID so moved directories do not break references.
-    let id = std::fs::canonicalize(dir)
-        .unwrap_or_else(|_| dir.to_path_buf())
+    let kind = crate::gufo::EngineKind::for_executable(&exe.to_string_lossy());
+    let identity = if kind == crate::gufo::EngineKind::Gufo { exe } else { dir };
+    let id = std::fs::canonicalize(identity)
+        .unwrap_or_else(|_| identity.to_path_buf())
         .to_string_lossy()
         .to_string();
     Some(EngineInfo {
+        kind,
         id,
-        name: format!("{} ({})", name, backend),
+        name: if kind == crate::gufo::EngineKind::Gufo { format!("Gufo — {} ({})", name, backend) } else { format!("{} ({})", name, backend) },
         dir: dir.to_string_lossy().to_string(),
         exe: exe.to_string_lossy().to_string(),
         version,
@@ -1928,7 +1935,7 @@ pub async fn scan_engines(
                 // Cached entries for this unchanged root have already been appended.
             } else {
                 for (dir, exe) in inspection.executables {
-                    let norm = engine_path_identity(&dir);
+                    let norm = engine_path_identity(&exe);
                     if seen.insert(norm) {
                         push_indexed_engine(
                             &dir,
@@ -1966,7 +1973,7 @@ pub async fn scan_engines(
                 continue;
             }
             for (dir, exe) in inspection.executables {
-                let norm = engine_path_identity(&dir);
+                let norm = engine_path_identity(&exe);
                 if seen.insert(norm) {
                     push_indexed_engine(
                         &dir,
@@ -2265,6 +2272,7 @@ mod incremental_scan_tests {
         let fingerprint =
             crate::commands::engine_capabilities::executable_fingerprint(&exe.to_string_lossy());
         let mut current = EngineInfo {
+            kind: Default::default(),
             id: "engine-1".to_string(),
             name: "engine".to_string(),
             dir: dir.to_string_lossy().to_string(),
@@ -2282,6 +2290,7 @@ mod incremental_scan_tests {
             },
         };
         let mut scanned = vec![EngineInfo {
+            kind: Default::default(),
             capabilities: crate::models::EngineCapabilities::default(),
             version: String::new(),
             ..current.clone()
@@ -2296,6 +2305,59 @@ mod incremental_scan_tests {
         assert_eq!(scanned[0].capabilities.status, "unprobed");
         assert!(scanned[0].version.is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gufo_and_llama_in_one_directory_have_distinct_cached_identities() {
+        let root = std::env::temp_dir().join(format!("lsm-gufo-scan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let llama = root.join(ENGINE_EXE_NAME);
+        let gufo = root.join(if cfg!(windows) { "gufo.exe" } else { "gufo" });
+        std::fs::write(&llama, b"fixture").unwrap();
+        std::fs::write(&gufo, b"fixture").unwrap();
+        let inspection = inspect_engine_tree(&root, MAX_ENGINE_SCAN_DEPTH).unwrap();
+        assert_eq!(inspection.executables.len(), 2);
+        let llama = build_engine_info(&root, &llama, "").unwrap();
+        let gufo = build_engine_info(&root, &gufo, "").unwrap();
+        assert_ne!(llama.id, gufo.id);
+        assert_eq!(llama.kind, crate::gufo::EngineKind::LlamaCpp);
+        assert_eq!(gufo.kind, crate::gufo::EngineKind::Gufo);
+        let cached = InventoryEngineRecord::from_engine(&gufo, 1, root.to_string_lossy().into_owned());
+        assert_eq!(cached.to_engine_info().kind, crate::gufo::EngineKind::Gufo);
+        assert_eq!(cached.to_engine_info().id, gufo.id);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mixed_cached_and_scanned_roots_do_not_duplicate_engines() {
+        let root = temp_test_dir("engine-mixed-roots");
+        let nested = root.join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut inventory = HashMap::new();
+        let root_key = canonical_key(&root);
+        let executables = [
+            nested.join(ENGINE_EXE_NAME),
+            nested.join(if cfg!(windows) { "gufo.exe" } else { "gufo" }),
+        ];
+        for exe in &executables {
+            std::fs::write(exe, b"fixture").unwrap();
+            let info = build_engine_info(&nested, exe, "").unwrap();
+            inventory.insert(info.id.clone(), InventoryEngineRecord::from_engine(
+                &info, file_mtime(exe), root_key.clone(),
+            ));
+        }
+        let mut seen = HashSet::new();
+        let mut engines = Vec::new();
+        let mut records = Vec::new();
+        assert_eq!(reuse_cached_engines_for_root(&root_key, &inventory,
+            &mut seen, &mut engines, &mut records), 2);
+        for exe in &executables {
+            push_indexed_engine(&nested, exe, &canonical_key(&nested), &inventory,
+                &mut seen, &mut engines, &mut records);
+        }
+        assert_eq!(engines.len(), 2);
+        assert_eq!(records.len(), 2);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

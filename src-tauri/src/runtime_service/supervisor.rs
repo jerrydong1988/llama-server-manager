@@ -18,10 +18,10 @@ use crate::commands::proxy::{
 use crate::commands::proxy_runtime::RouterRuntime;
 use crate::commands::server::{
     advance_health_state, collect_instance_monitor_sample, effective_api_key,
-    effective_server_scheme, format_command_for_display, probe_instance_readiness,
+    effective_server_scheme, format_command_for_display,
     read_process_identity, running_instance_matches_live_process, spawn_runtime_log_pump,
     telemetry_config_hash, terminate_running_instance, CappedLogWriter, HealthTransition,
-    RuntimePerfTracker, INITIAL_HEALTH_GRACE, MAX_SERVER_LOG_BYTES, RETAINED_SERVER_LOG_BYTES,
+    RuntimePerfTracker, MAX_SERVER_LOG_BYTES, RETAINED_SERVER_LOG_BYTES,
 };
 use crate::models::{ProxyStatus, RunningInstance};
 use crate::vector_policy::ModelWorkload;
@@ -162,6 +162,9 @@ fn prepare_runtime_checkpoint_launch(
     coordinator: &CheckpointCoordinator,
     spec: &mut RuntimeLaunchSpec,
 ) -> (CheckpointEligibility, Option<CheckpointFingerprint>) {
+    if crate::gufo::is_gufo(&spec.config) {
+        return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::EngineCapabilityMissing);
+    }
     let Some(checkpoint) = spec.checkpoint.clone() else {
         return (
             CheckpointEligibility::ineligible(CheckpointReasonCode::Disabled),
@@ -426,6 +429,7 @@ impl RuntimeSupervisor {
                 KV_CHECKPOINT_CAPABILITY.to_string(),
                 ROUTER_USAGE_CAPABILITY.to_string(),
                 ROUTER_LISTENER_CAPABILITY.to_string(),
+                "gufo_engine_v2".to_string(),
             ],
             config_revision,
             background_enabled,
@@ -774,10 +778,10 @@ impl RuntimeSupervisor {
                         break;
                     }
 
-                    let ready = probe_instance_readiness(&client, &endpoint_base, &api_key);
+                    let ready = crate::commands::server::probe_config_readiness(&client, &endpoint_base, &api_key, &config);
                     let health_transition = advance_health_state(
                         ready,
-                        started.elapsed() >= INITIAL_HEALTH_GRACE,
+                        started.elapsed() >= crate::gufo::startup_grace(&config),
                         &mut health_failures,
                         &mut last_health_ready,
                     );
@@ -969,6 +973,12 @@ impl RuntimeSupervisor {
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }
+        if crate::gufo::is_gufo(&spec.config) {
+            if spec.config.id != spec.instance_id { return Err("Gufo instance identity mismatch".into()); }
+            let (_, expected) = crate::gufo::prepare(spec.config.clone(), &spec.command[0]).map_err(|e| e.to_string())?;
+            if expected != spec.command { return Err("Gufo launch spec differs from its validated configuration".into()); }
+            crate::gufo::ensure_port_available(&spec.config).map_err(|e| e.to_string())?;
+        }
         // Persisted launch specs may predate newly supported secret flags.
         crate::security::validate_runtime_executable(&spec.command[0], &spec.executable_sha256)?;
         // A recovered daemon launch must not reuse an old model/draft/template
@@ -1008,7 +1018,8 @@ impl RuntimeSupervisor {
             .working_directory
             .as_deref()
             .filter(|directory| !directory.trim().is_empty());
-        let mut child = match crate::engine_process::spawn(&launch_command, working_directory) {
+        let environment = crate::gufo::environment(&spec.config).map_err(|e| e.to_string())?;
+        let mut child = match crate::engine_process::spawn_with_environment(&launch_command, working_directory, &environment) {
             Ok(child) => child,
             Err(error) => {
                 if checkpoint_eligibility.eligible {

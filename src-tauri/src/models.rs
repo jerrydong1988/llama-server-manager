@@ -331,6 +331,8 @@ impl Default for EngineCapabilities {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineInfo {
+    #[serde(default)]
+    pub kind: crate::gufo::EngineKind,
     pub id: String,
     pub name: String,
     pub dir: String,
@@ -419,6 +421,8 @@ fn serialize_parameter_float<S: serde::Serializer>(value: &f32, serializer: S) -
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstanceConfig {
+    pub engine_kind: crate::gufo::EngineKind,
+    pub gufo: crate::gufo::GufoConfig,
     /// Managed mode builds argv from structured fields. Manual mode launches
     /// the selected executable with the exact argv supplied by the user.
     #[serde(default = "default_launch_mode")]
@@ -959,6 +963,8 @@ impl Default for InstanceConfig {
             id: String::new(),
             name: String::new(),
             engine_id: String::new(),
+            engine_kind: Default::default(),
+            gufo: Default::default(),
             model_path: String::new(),
             alias: String::new(),
             lora_path: String::new(),

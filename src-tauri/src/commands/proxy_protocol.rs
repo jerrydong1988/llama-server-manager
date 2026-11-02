@@ -36,7 +36,12 @@ impl ProxyApiFormat {
 
 pub(crate) fn request_format(path: &str, has_anthropic_version: bool) -> ProxyApiFormat {
     let path_format = ProxyApiFormat::from_path(path);
-    if path_format.is_anthropic() || has_anthropic_version {
+    // Inference endpoints have a fixed native protocol. A client-wide optional
+    // header must not turn Chat/Responses errors or request IDs into Anthropic.
+    // Shared discovery and fallback endpoints may still select by this header.
+    if path_format.is_anthropic()
+        || (has_anthropic_version && super::usage_protocol::UsageProtocol::from_path(path).is_none())
+    {
         ProxyApiFormat::Anthropic
     } else {
         ProxyApiFormat::OpenAi
@@ -123,6 +128,17 @@ pub(crate) fn quota_error_response(
     message: &str,
     param: Option<&str>,
 ) -> Response {
+    coded_error_response(format, status, "quota", code, message, param)
+}
+
+pub(crate) fn coded_error_response(
+    format: ProxyApiFormat,
+    status: StatusCode,
+    stage: &str,
+    code: &str,
+    message: &str,
+    param: Option<&str>,
+) -> Response {
     let request_id = proxy_request_id();
     let value = if format.is_anthropic() {
         let mut value = anthropic_error_value(status, message, &request_id);
@@ -135,7 +151,7 @@ pub(crate) fn quota_error_response(
     let mut response = (status, Json(value)).into_response();
     response
         .extensions_mut()
-        .insert(UsageFailure::new("quota", code));
+        .insert(UsageFailure::new(stage, code));
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(
             if format.is_anthropic() {
@@ -485,6 +501,22 @@ pub(crate) fn response_request_id(body: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_endpoint_protocol_takes_precedence_over_optional_headers() {
+        for path in ["/v1/chat/completions", "/v1/chat/completions/input_tokens",
+            "/v1/responses", "/v1/responses/input_tokens", "/v1/completions",
+            "/v1/embeddings", "/rerank"] {
+            assert_eq!(request_format(path, true), ProxyApiFormat::OpenAi);
+            assert_eq!(request_format(path, false), ProxyApiFormat::OpenAi);
+        }
+        for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+            assert_eq!(request_format(path, false), ProxyApiFormat::Anthropic);
+            assert_eq!(request_format(path, true), ProxyApiFormat::Anthropic);
+        }
+        assert_eq!(request_format("/v1/models", true), ProxyApiFormat::Anthropic);
+        assert_eq!(request_format("/v1/models", false), ProxyApiFormat::OpenAi);
+    }
 
     #[test]
     fn anthropic_errors_use_the_documented_envelope() {

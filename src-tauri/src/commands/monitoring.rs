@@ -784,12 +784,12 @@ mod tests {
             tokens_per_sec: output_tps,
             prompt_tokens: 0,
             gen_tokens: 0,
-            decode_calls_total: 0,
+            decode_calls_total: Some(0),
             max_tokens_observed: 0,
             prompt_tokens_per_sec: input_tps,
             requests_processing: processing,
             requests_deferred: 0,
-            busy_slots_per_decode: 0.0,
+            busy_slots_per_decode: Some(0.0),
         }
     }
 

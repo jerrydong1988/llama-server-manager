@@ -2,6 +2,7 @@ import { defaultInstanceConfig } from './store/defaults'
 import type { InstanceConfig } from './store/types'
 
 const INTENT_METADATA_FIELDS = new Set<keyof InstanceConfig>([
+  'engine_kind', 'gufo',
   'launch_mode',
   'manual_command',
   'explicit_overrides',

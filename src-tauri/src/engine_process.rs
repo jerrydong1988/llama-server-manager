@@ -6,9 +6,13 @@ pub(crate) type Child = std::process::Child;
 pub(crate) use windows::Child;
 
 pub(crate) fn spawn(args: &[String], cwd: Option<&str>) -> std::io::Result<Child> {
+    spawn_with_environment(args, cwd, &[])
+}
+
+pub(crate) fn spawn_with_environment(args: &[String], cwd: Option<&str>, environment: &[(String, String)]) -> std::io::Result<Child> {
     #[cfg(windows)]
     {
-        windows::spawn(args, cwd)
+        windows::spawn(args, cwd, environment)
     }
     #[cfg(not(windows))]
     {
@@ -20,7 +24,7 @@ pub(crate) fn spawn(args: &[String], cwd: Option<&str>) -> std::io::Result<Child
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
-        command.spawn()
+        command.envs(environment.iter().cloned()).spawn()
     }
 }
 
@@ -253,7 +257,7 @@ mod windows {
         path.to_owned()
     }
 
-    pub(super) fn spawn(args: &[String], cwd: Option<&str>) -> io::Result<Child> {
+    pub(super) fn spawn(args: &[String], cwd: Option<&str>, environment: &[(String, String)]) -> io::Result<Child> {
         let program = args
             .first()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty engine command"))?;
@@ -272,6 +276,19 @@ mod windows {
                 .collect::<Vec<_>>()
                 .join(" "),
         ))?;
+        let mut environment_block = Vec::<u16>::new();
+        if !environment.is_empty() {
+            use std::os::windows::ffi::OsStrExt;
+            let mut values: std::collections::BTreeMap<String, std::ffi::OsString> = std::env::vars_os()
+                .map(|(key, value)| (key.to_string_lossy().to_uppercase(), value)).collect();
+            for (key, value) in environment { values.insert(key.to_uppercase(), value.into()); }
+            for (key, value) in values {
+                environment_block.extend(OsStr::new(&format!("{key}=")).encode_wide());
+                environment_block.extend(value.encode_wide());
+                environment_block.push(0);
+            }
+            environment_block.push(0);
+        }
         let directory = cwd.map(|s| wide(OsStr::new(&launch_path(s)))).transpose()?;
         let (stdout, out_write) = pipe()?;
         let (stderr, err_write) = pipe()?;
@@ -327,7 +344,7 @@ mod windows {
                     std::ptr::null(),
                     1,
                     CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                    std::ptr::null(),
+                    if environment_block.is_empty() { std::ptr::null() } else { environment_block.as_ptr().cast() },
                     directory.as_ref().map_or(std::ptr::null(), |d| d.as_ptr()),
                     &startup.StartupInfo,
                     &mut info,
@@ -441,7 +458,7 @@ mod windows {
             let start = || {
                 let command = vec![python.clone(), "-u".into(), "-c".into(),
                     "import signal,time,sys; signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); print('ready'); time.sleep(60)".into()];
-                let mut child = Owned(spawn(&command, None).unwrap());
+                let mut child = Owned(spawn(&command, None, &[]).unwrap());
                 let mut ready = String::new();
                 BufReader::new(child.0.stdout.take().unwrap())
                     .read_line(&mut ready)

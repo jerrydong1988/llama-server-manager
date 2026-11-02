@@ -347,6 +347,10 @@ fn terminate_probe_process_tree(child: &mut std::process::Child) -> Option<Strin
 }
 
 fn run_bounded(executable: &str, argument: &str) -> CommandOutput {
+    run_bounded_args(executable, &[argument])
+}
+
+fn run_bounded_args(executable: &str, arguments: &[&str]) -> CommandOutput {
     let (output_path, mut output_file) = match probe_output_file() {
         Ok(output) => output,
         Err(error) => {
@@ -384,7 +388,7 @@ fn run_bounded(executable: &str, argument: &str) -> CommandOutput {
     };
     let mut command = crate::process_environment::external_command(executable);
     command
-        .arg(argument)
+        .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
@@ -774,17 +778,19 @@ pub(crate) fn capabilities_match_executable(
 fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let fingerprint_before = executable_fingerprint(&engine.exe);
     let version_output = run_bounded(&engine.exe, "--version");
-    let help_output = run_bounded(&engine.exe, "--help");
+    let help_output = if engine.kind == crate::gufo::EngineKind::Gufo {
+        run_bounded_args(&engine.exe, &["serve", "llm", "--help"])
+    } else { run_bounded(&engine.exe, "--help") };
     let supported_flags = extract_supported_flags(&help_output.text);
     let reported_defaults = extract_reported_defaults(&help_output.text);
     let speculative_types = extract_speculative_types(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
-    let artifacts = if cfg!(windows) && status == "detected" {
+    let artifacts = if engine.kind == crate::gufo::EngineKind::LlamaCpp && cfg!(windows) && status == "detected" {
         crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir())
             .engine_artifact_sha256(std::path::Path::new(&engine.exe)).ok()
     } else { None };
     let (context_checkpoint_persistence, persistence_profile, checkpoint_draft_types) =
-        if status == "detected" && help_output.error.is_none() {
+        if engine.kind == crate::gufo::EngineKind::LlamaCpp && status == "detected" && help_output.error.is_none() {
             persistence_evidence(&help_output.text, artifacts.as_deref())
         } else { (false, None, Vec::new()) };
     let fingerprint = executable_fingerprint(&engine.exe);
@@ -796,7 +802,9 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         };
         return engine;
     }
-    let detected_version = extract_engine_version(&version_output.text);
+    let detected_version = if engine.kind == crate::gufo::EngineKind::Gufo {
+        version_output.text.lines().find(|line| line.starts_with("gufo version ")).map(|line| line.chars().take(160).collect())
+    } else { extract_engine_version(&version_output.text) };
     let preserve_existing_version = engine.capabilities.version_status == "detected"
         && engine.capabilities.executable_fingerprint == fingerprint
         && !engine.version.trim().is_empty();

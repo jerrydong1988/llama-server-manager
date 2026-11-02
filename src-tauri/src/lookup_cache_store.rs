@@ -65,11 +65,21 @@ struct Generation {
     bytes: u64,
 }
 
+struct WriterLock(File);
+
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        // flock survives close while a forked child holds the same open file
+        // description. Explicitly end the lease before closing our descriptor.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
 pub(crate) struct Run {
     root: PathBuf,
     work: PathBuf,
     before: Option<String>,
-    _lock: File,
+    _lock: WriterLock,
 }
 
 /// Bounded validation of the legacy four-token n-gram record format.
@@ -152,6 +162,7 @@ impl Run {
             .map_err(|e| e.to_string())?;
         lock.try_lock_exclusive()
             .map_err(|_| "dynamic cache is owned by another running instance")?;
+        let lock = WriterLock(lock);
         let work = root.join(format!("work-{}.bin", uuid::Uuid::new_v4()));
         let cleanup = Candidate {
             path: work.clone(),
@@ -497,6 +508,23 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         fs::remove_file(seed).unwrap();
     }
+    #[test]
+    #[cfg(unix)]
+    fn finished_generation_releases_lock_despite_an_inherited_descriptor() {
+        let root = std::env::temp_dir().join(format!("lookup-test-{}", uuid::Uuid::new_v4()));
+        let run = Run::prepare(root.clone(), &root.join("absent-seed")).unwrap();
+        // dup and fork share the same open file description for flock. A child
+        // between fork and exec must not extend the completed writer's lease.
+        let inherited = run._lock.0.try_clone().unwrap();
+        assert!(Run::prepare(root.clone(), &root.join("absent-seed")).is_err());
+        run.finish(false);
+        let next = Run::prepare(root.clone(), &root.join("absent-seed")).unwrap();
+        drop(inherited);
+        assert!(Run::prepare(root.clone(), &root.join("absent-seed")).is_err());
+        drop(next);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn rejects_truncation_and_huge_counts_before_allocation() {
         let path = std::env::temp_dir().join(format!("lookup-{}", uuid::Uuid::new_v4()));

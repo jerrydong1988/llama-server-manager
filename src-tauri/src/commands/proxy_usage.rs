@@ -223,6 +223,9 @@ impl UsageHandle {
             permit.forwarded();
         }
     }
+    pub fn was_forwarded(&self) -> bool {
+        self.0.lock().unwrap().record.forwarded
+    }
     pub fn quota_identity(&self) -> (String, String) {
         let state = self.0.lock().unwrap();
         (state.record.key_id.clone(), state.record.request_id.clone())

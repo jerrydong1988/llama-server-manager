@@ -1,6 +1,6 @@
 //! Non-cluster adapters. Domain validation and persistence remain shared with Tauri commands.
 use super::{
-    operations::{self, engine, instance, text, value},
+    operations::{self, instance_engine, instance, text, value},
     wire::Failure,
 };
 use crate::{
@@ -167,7 +167,7 @@ async fn preset(app: &tauri::AppHandle, name: &str, args: &Value) -> Result<Valu
         .get(text(args, "preset"))
         .ok_or_else(|| Failure::new("NOT_FOUND", "unknown built-in preset"))?;
     operations::ensure_inventory(app).await?;
-    let selected = engine(&state, &current.engine_id)?;
+    let selected = instance_engine(&state, &current)?;
     if current.launch_mode == "manual" || selected.capabilities.status != "detected" {
         return Err(Failure::new("VALIDATION", "presets require managed mode and fully detected engine capabilities; probe the engine first"));
     }
@@ -305,13 +305,13 @@ pub(super) async fn dispatch(
         "checkpoints.validate" => {
             operations::ensure_inventory(app).await?;
             let config = instance(&state, &id)?;
-            let selected = engine(&state, &config.engine_id)?;
+            let selected = instance_engine(&state, &config)?;
             value(server::validate_checkpoint_locally(config, selected.exe, args["_validation_id"].as_str().unwrap_or("").to_owned(), state).await?)
         }
         "checkpoints.eligibility" => {
             operations::ensure_inventory(app).await?;
             let config = instance(&state, &id)?;
-            let selected = engine(&state, &config.engine_id)?;
+            let selected = instance_engine(&state, &config)?;
             value(server::get_checkpoint_eligibility(config, selected.exe, state).await?)
         }
         "usage.summary" => {

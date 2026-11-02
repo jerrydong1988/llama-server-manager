@@ -1,0 +1,31 @@
+const en = {
+  title: 'Gufo configuration', description: 'Configure a local Gufo LLM instance. Stop the instance before editing.',
+  scope: 'Single session · Supports the unified API router. Gufo manages its own cache; llama.cpp checkpoint actions do not apply.',
+  model: 'Model GGUF (first shard)', projector: 'Vision projector GGUF', alias: 'API model name',
+  port: 'Local port', context: 'Context tokens', maxTokens: 'Maximum output tokens (−1: unlimited)',
+  family: 'Model family', speculative: 'Speculative decoding', mtp: 'Matching MTP sidecar', dflash: 'Matching DFlash2 draft',
+  drafts: 'Draft tokens', think: 'Thinking', effort: 'Reasoning effort', preserve: 'Preserve thinking',
+  cache: 'Cache', ram: 'RAM cache', ramGiB: 'RAM limit (GiB)', disk: 'Enable disk cache', diskGiB: 'Disk limit (GiB)',
+  cacheHint: 'Manager gives each instance its own cache under its data directory. Existing Gufo-GUI caches are not used.',
+  timeout: 'Startup timeout (seconds)', sampling: 'Sampling', temperature: 'Temperature', topK: 'Top K', topP: 'Top P', minP: 'Min P',
+  seed: 'Seed (−1: random)', repeatPenalty: 'Repeat penalty', repeatLast: 'Repeat last N', frequency: 'Frequency penalty', presence: 'Presence penalty',
+  auto: 'Automatic', off: 'Off', on: 'On', limit: 'Fixed limit', save: 'Validate and save', preview: 'Preview command',
+  saved: 'Configuration saved', busy: 'Validating…', missing: 'Select a scanned Gufo engine in Instances first.',
+  running: 'Stop this instance before changing its configuration.', back: 'Back to instances', loading: 'Loading model',
+}
+const zh: typeof en = {
+  title: 'Gufo 参数配置', description: '配置本地 Gufo 模型实例；修改前请先停止实例。',
+  scope: '单会话 · 支持统一 API 路由。Gufo 管理自己的缓存，不使用 llama.cpp 检查点操作。',
+  model: '主模型 GGUF（第一分片）', projector: '视觉投影 GGUF', alias: 'API 模型名称',
+  port: '本地端口', context: '上下文 Token 数', maxTokens: '最大输出 Token 数（−1：不限）',
+  family: '模型家族', speculative: '推测解码', mtp: '匹配的 MTP 模型', dflash: '匹配的 DFlash2 草稿',
+  drafts: '草稿 Token 数', think: '思考模式', effort: '推理强度', preserve: '保留思考内容',
+  cache: '缓存', ram: '内存缓存', ramGiB: '内存上限（GiB）', disk: '启用磁盘缓存', diskGiB: '磁盘上限（GiB）',
+  cacheHint: 'Manager 在自己的数据目录中为每个实例分配独立缓存，不使用现有 Gufo-GUI 缓存。',
+  timeout: '启动等待上限（秒）', sampling: '采样设置', temperature: '温度', topK: 'Top K', topP: 'Top P', minP: 'Min P',
+  seed: '随机种子（−1：随机）', repeatPenalty: '重复惩罚', repeatLast: '重复检测范围', frequency: '频率惩罚', presence: '存在惩罚',
+  auto: '自动', off: '关闭', on: '开启', limit: '固定上限', save: '校验并保存', preview: '预览命令',
+  saved: '配置已保存', busy: '正在校验…', missing: '请先在实例管理中选择已扫描的 Gufo 引擎。',
+  running: '请先停止实例，再修改配置。', back: '返回实例管理', loading: '模型加载中',
+}
+export const gufoCopy = (lang: string) => lang.startsWith('zh') ? zh : en

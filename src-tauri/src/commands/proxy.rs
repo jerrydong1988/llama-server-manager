@@ -27,7 +27,7 @@ use crate::commands::proxy_protocol::{
 };
 use crate::commands::proxy_runtime::{
     GlobalRequestPermit, InFlightBodyPermit, RouterRuntime, RoutingCandidate, TargetCapabilities,
-    TargetHealthSnapshot, TargetRequestPermit,
+    TargetAdmissionError, TargetHealthSnapshot, TargetRequestPermit,
 };
 use crate::commands::proxy_usage::{is_usage_only_line, request_stream_usage, UsageHandle};
 use crate::commands::server::{effective_api_key, effective_server_scheme};
@@ -45,6 +45,11 @@ use crate::vector_policy::ModelWorkload;
 mod delivery;
 #[path = "proxy_quota.rs"]
 mod quota;
+#[path = "proxy_errors.rs"]
+mod errors;
+use errors::RoutingFailure;
+#[path = "proxy_tool_history.rs"]
+mod tool_history;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 static PROXY_HTTP_CLIENTS: LazyLock<Mutex<VecDeque<(u64, reqwest::Client)>>> =
@@ -210,6 +215,7 @@ fn stored_target_matches_endpoint(
 #[derive(Clone)]
 struct ResolvedProxyTarget {
     public: ProxyTarget,
+    engine_kind: crate::gufo::EngineKind,
     upstream_model_id: String,
     api_key: String,
     api_prefix: String,
@@ -226,6 +232,7 @@ pub(crate) struct ProxyRequestResolution {
     config: ProxyConfig,
     candidates: Vec<ResolvedProxyTarget>,
     checkpoint_phase: Option<crate::checkpoint::CheckpointPhase>,
+    empty_failure: RoutingFailure,
 }
 
 impl ProxyRequestResolution {
@@ -964,6 +971,7 @@ fn resolved_target_for_id(
     }
     let workload = stored_instance_workload(config, &running_info.workload);
     Some(ResolvedProxyTarget {
+        engine_kind: config.engine_kind,
         public: ProxyTarget {
             instance_id: id.to_string(),
             name: config.name.clone(),
@@ -1186,10 +1194,18 @@ pub(crate) fn proxy_request_resolution_from(
         requested_model,
         endpoint_workload,
     );
+    let empty_failure = if candidates.is_empty() {
+        errors::unresolved_model_failure(
+            &config, instances, running, requested_model, endpoint_workload,
+        )
+    } else {
+        RoutingFailure::Unavailable
+    };
     ProxyRequestResolution {
         config,
         candidates,
         checkpoint_phase: None,
+        empty_failure,
     }
 }
 
@@ -1199,8 +1215,12 @@ fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
     if !value.is_object() {
         return Err("request body must be a JSON object".to_string());
     }
-    let Some(model) = value.get("model").and_then(|model| model.as_str()) else {
-        return Ok(None);
+    let model = match value.get("model") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(model)) if !model.trim().is_empty() => model,
+        _ => {
+            return Err("model must be a non-empty string, or omitted to use a default target".into())
+        }
     };
     if model.len() > MAX_PROXY_MODEL_SELECTOR_BYTES {
         return Err(format!(
@@ -1208,7 +1228,7 @@ fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
             MAX_PROXY_MODEL_SELECTOR_BYTES
         ));
     }
-    Ok(Some(model.to_string()))
+    Ok(Some(model.trim().to_string()))
 }
 
 fn request_uses_streaming(body: &[u8]) -> bool {
@@ -1518,6 +1538,17 @@ fn cors_origin(config: &ProxyConfig, headers: &HeaderMap) -> Result<Option<Strin
 }
 
 fn apply_cors_headers(response: &mut Response, origin: Option<&str>) {
+    // The gateway owns browser policy, including responses without an Origin.
+    // Never inherit wildcard/credentials policy from a local inference server.
+    for name in [
+        "access-control-allow-origin", "access-control-allow-credentials",
+        "access-control-allow-methods", "access-control-allow-headers",
+        "access-control-expose-headers", "access-control-max-age",
+        "access-control-allow-private-network",
+    ] {
+        response.headers_mut().remove(name);
+    }
+    response.headers_mut().append("vary", HeaderValue::from_static("Origin"));
     let Some(origin) = origin else {
         return;
     };
@@ -1526,9 +1557,6 @@ fn apply_cors_headers(response: &mut Response, origin: Option<&str>) {
             .headers_mut()
             .insert("access-control-allow-origin", value);
     }
-    response
-        .headers_mut()
-        .append("vary", HeaderValue::from_static("Origin"));
     response.headers_mut().insert(
         "access-control-allow-methods",
         HeaderValue::from_static("GET, POST, OPTIONS"),
@@ -1728,7 +1756,6 @@ async fn proxy_security_middleware(
             .runtime
             .try_acquire_body_bytes(reservation, MAX_PROXY_IN_FLIGHT_BODY_BYTES)
         else {
-            router_state.runtime.record_rejected();
             let mut response = error_response(
                 format,
                 StatusCode::TOO_MANY_REQUESTS,
@@ -2213,12 +2240,33 @@ async fn probe_target(
     config: ProxyConfig,
 ) {
     let started = std::time::Instant::now();
-    let health = fetch_target_json(&target, "/health", &config).await;
+    // Gufo /health is liveness: it can succeed while weights/cache are loading.
+    // Require the selected model to be ready before admitting router traffic.
+    let health = if target.engine_kind == crate::gufo::EngineKind::Gufo {
+        fetch_target_json(&target, "/ready", &config)
+            .await
+            .and_then(|value| {
+                if value.get("status").and_then(serde_json::Value::as_str) == Some("ready")
+                    && value.get("model").and_then(serde_json::Value::as_str)
+                        == Some(target.upstream_model_id.as_str())
+                {
+                    Ok(value)
+                } else {
+                    Err("Gufo model is not ready or its identity does not match".into())
+                }
+            })
+    } else {
+        fetch_target_json(&target, "/health", &config).await
+    };
     if let Err(error) = health {
         runtime.mark_probe_failure(
             &target.public.instance_id,
             error,
-            config.unhealthy_threshold,
+            if target.engine_kind == crate::gufo::EngineKind::Gufo {
+                1
+            } else {
+                config.unhealthy_threshold
+            },
             Duration::from_millis(config.recovery_cooldown_ms),
         );
         return;
@@ -2497,10 +2545,10 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
             "generation_preflight": ["chat_completions", "completions", "responses", "anthropic_messages"]
         },
         "anthropic_compatibility": {
-            "transport": "llama.cpp native Messages API",
+            "transport": "native engine Messages API (llama.cpp or Gufo)",
             "minimum_supported_baseline": "b10199",
             "request_limit_bytes": MAX_ANTHROPIC_REQUEST_BODY_BYTES,
-            "tools_require": "--jinja",
+            "tools_require": "engine tool-capable chat template; llama.cpp requires --jinja",
             "supported": ["messages", "streaming", "usage", "tool_use", "tool_result", "image_blocks", "count_tokens", "model_discovery"],
             "cloud_only_features": "passed through without manager-side emulation"
         },
@@ -2518,6 +2566,10 @@ fn model_health_snapshots(
         .filter(|target| seen.insert(target.public.instance_id.clone()))
         .map(|target| {
             let mut snapshot = runtime.target_snapshot(&target.public.instance_id);
+            if target.engine_kind == crate::gufo::EngineKind::Gufo && snapshot.last_success_at_ms == 0 {
+                snapshot.ready = false;
+                snapshot.status = "loading".into();
+            }
             if snapshot.capabilities.context_length.is_none() {
                 snapshot.capabilities.context_length = target.configured_context_length;
             }
@@ -2718,7 +2770,11 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
     ids
 }
 
-async fn proxy_usage_middleware(mut request: Request, next: Next) -> Response {
+async fn proxy_usage_middleware(
+    State(router_state): State<ProxyRouterState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     let usage = (request.method() == Method::POST)
         .then(|| UsageHandle::new(request.uri().path()))
         .flatten();
@@ -2727,9 +2783,33 @@ async fn proxy_usage_middleware(mut request: Request, next: Next) -> Response {
     }
     let response = next.run(request).await;
     match usage {
-        Some(usage) => usage.wrap(response),
+        Some(usage) => {
+            // Exactly one count for every local inference rejection, including
+            // auth, admission, body validation, routing, preflight and quotas.
+            // Upstream errors and cancelled streams are not local rejections.
+            if !usage.was_forwarded()
+                && (response.status().is_client_error() || response.status().is_server_error())
+            {
+                router_state.runtime.record_rejected();
+            }
+            usage.wrap(response)
+        }
         None => response,
     }
+}
+
+async fn proxy_not_found(uri: Uri, headers: HeaderMap) -> Response {
+    super::proxy_protocol::coded_error_response(
+        request_format(uri.path(), headers.contains_key("anthropic-version")),
+        StatusCode::NOT_FOUND, "validation", "endpoint_not_found", "endpoint not found", None,
+    )
+}
+
+async fn proxy_method_not_allowed(uri: Uri, headers: HeaderMap) -> Response {
+    super::proxy_protocol::coded_error_response(
+        request_format(uri.path(), headers.contains_key("anthropic-version")),
+        StatusCode::METHOD_NOT_ALLOWED, "validation", "method_not_allowed", "method not allowed for this endpoint", None,
+    )
 }
 
 // Each argument is a separate Axum extractor at this HTTP boundary.
@@ -2797,11 +2877,17 @@ async fn proxy_upstream(
             "API key authorization changed",
         );
     }
+    if let Some(error) = tool_history::validate(uri.path(), &body) {
+        return super::proxy_protocol::coded_error_response(
+            api_format, StatusCode::BAD_REQUEST, "validation", "invalid_tool_history",
+            error.message, Some(&error.param),
+        );
+    }
     // Pin quota policy at authentication, and recheck revocation before dispatch.
     let mut quota_config = proxy_config.clone();
     quota_config.api_keys = auth.policy.clone().into_iter().collect();
     let checkpoint_phase = resolution.checkpoint_phase;
-    let mut candidates = resolution.candidates;
+    let candidates = resolution.candidates;
     let routing_key = routing_group_key(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
@@ -2810,51 +2896,33 @@ async fn proxy_upstream(
         if let Some(phase) = checkpoint_phase {
             return checkpoint_unavailable_response(api_format, phase.as_str());
         }
-        return error_response(
-            api_format,
-            if requested_model.is_some() {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::SERVICE_UNAVAILABLE
-            },
-            "no public route matches the requested model",
-        );
+        return resolution.empty_failure.response(api_format);
     }
-    let (target, target_permit) = loop {
-        let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
-        let Some(selected) = router_state.runtime.select_target(
-            &scheduling,
-            &proxy_config.routing_strategy,
-            &routing_key,
-        ) else {
-            return error_response(
-                api_format,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "all matching routes are unavailable or at capacity",
-            );
-        };
-        let Some(index) = candidates
-            .iter()
-            .position(|target| target.public.instance_id == selected.instance_id)
-        else {
-            return error_response(
-                api_format,
-                StatusCode::BAD_GATEWAY,
-                "router selected an unknown target",
-            );
-        };
-        let target = candidates.remove(index);
-        if let Some(permit) = router_state.runtime.acquire_target(&selected) {
-            break (target, permit);
-        }
-        if candidates.is_empty() {
-            return error_response(
-                api_format,
-                StatusCode::TOO_MANY_REQUESTS,
-                "all matching targets are at capacity",
-            );
+    let scheduling = candidates
+        .iter()
+        .filter(|target| {
+            target.engine_kind != crate::gufo::EngineKind::Gufo || {
+                let health = router_state.runtime.target_snapshot(&target.public.instance_id);
+                health.ready && health.last_success_at_ms > 0
+            }
+        })
+        .map(routing_candidate)
+        .collect::<Vec<_>>();
+    let (selected, target_permit) = match router_state.runtime.select_and_acquire_target(
+        &scheduling,
+        &proxy_config.routing_strategy,
+        &routing_key,
+    ) {
+        Ok(acquired) => acquired,
+        Err(TargetAdmissionError::Capacity) => return RoutingFailure::Capacity.response(api_format),
+        Err(TargetAdmissionError::Unavailable) => {
+            return RoutingFailure::Unavailable.response(api_format)
         }
     };
+    let target = candidates
+        .into_iter()
+        .find(|target| target.public.instance_id == selected.instance_id)
+        .expect("selected target came from the same candidate list");
     if !vector_endpoint_matches_target(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
         target.workload,
@@ -2902,7 +2970,6 @@ async fn proxy_upstream(
         Ok(prepared) => prepared,
         Err(error) => {
             usage.failure("quota", error.code());
-            router_state.runtime.record_rejected();
             return quota::response(api_format, error);
         }
     };
@@ -2930,7 +2997,6 @@ async fn proxy_upstream(
             );
         }
         if let Some(violation) = check.filter(ContextLimitViolation::exceeded) {
-            router_state.runtime.record_rejected();
             let error_text = format!(
                 "context window exceeded: input_tokens={:?}, requested_output_tokens={}, context_window={}",
                 violation.input_tokens,
@@ -2970,7 +3036,6 @@ async fn proxy_upstream(
     }
     if let Err(error) = quota::admit(&usage, reservation).await {
         usage.failure("quota", error.code());
-        router_state.runtime.record_rejected();
         return quota::response(api_format, error);
     }
 
@@ -3412,8 +3477,12 @@ fn proxy_router_from_source_with_runtime_and_limits(
         .route("/reranking", post(proxy_upstream))
         .route("/v1/rerank", post(proxy_upstream))
         .route("/v1/reranking", post(proxy_upstream))
+        .fallback(proxy_not_found)
+        .method_not_allowed_fallback(proxy_method_not_allowed)
         .route_layer(security_layer)
-        .route_layer(middleware::from_fn(proxy_usage_middleware))
+        .route_layer(middleware::from_fn_with_state(
+            router_state.clone(), proxy_usage_middleware,
+        ))
         .layer(DefaultBodyLimit::max(request_body_limit))
         .with_state(router_state)
 }
@@ -3902,6 +3971,9 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    include!("proxy_gufo_tests.rs");
+    include!("proxy_manual_audit_tests.rs");
+    include!("proxy_tool_history_http_tests.rs");
     use std::time::Duration;
     #[tokio::test]
     async fn credentials_revoked_during_upload_never_reach_inference() {
@@ -4072,7 +4144,7 @@ mod tests {
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode, Uri};
     use axum::response::{IntoResponse, Response};
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use bytes::Bytes;
     use futures_util::StreamExt;
@@ -5367,6 +5439,7 @@ mod tests {
     #[test]
     fn target_url_brackets_ipv6_and_preserves_prefix_and_query() {
         let target = super::ResolvedProxyTarget {
+            engine_kind: crate::gufo::EngineKind::LlamaCpp,
             public: ProxyTarget {
                 instance_id: "ipv6".into(),
                 name: "IPv6".into(),

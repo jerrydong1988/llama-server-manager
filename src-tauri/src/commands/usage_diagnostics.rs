@@ -24,7 +24,12 @@ impl UsageFailure {
             "rate_limited" => "The API key request rate limit was reached.",
             "queue_timeout" => "No router concurrency slot became available before the queue deadline.",
             "route_unavailable" => "No matching route is ready to accept this request.",
-            "route_capacity" => "All matching routes are at capacity or unavailable.",
+            "route_capacity" => "All ready matching routes are at capacity; use bounded retries.",
+            "model_required" => "Supply a model or configure an unambiguous default target.",
+            "model_not_found" => "No public route matches the requested model.",
+            "model_endpoint_mismatch" => "The selected model does not support this endpoint workload.",
+            "endpoint_not_found" => "The router does not expose this endpoint.",
+            "method_not_allowed" => "The HTTP method is not supported by this endpoint.",
             "body_capacity" => "The router request body memory budget was reached.",
             "upstream_timeout" => "The upstream response deadline was exceeded.",
             "upstream_connection_failed" => "The router could not complete the upstream connection.",
@@ -34,6 +39,7 @@ impl UsageFailure {
             "client_cancelled" => "The request was dropped before response delivery completed.",
             "response_error" => "The upstream response could not be read within the router limits.",
             "invalid_request" => "The request did not satisfy the endpoint contract.",
+            "invalid_tool_history" => "Chat tool calls and results are missing, duplicated or incorrectly paired; generation was not forwarded.",
             _ => "The router could not complete this request.",
         };
         Self {

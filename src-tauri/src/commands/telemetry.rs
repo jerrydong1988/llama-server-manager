@@ -263,12 +263,12 @@ pub struct LlamaMetricSample {
     pub tokens_per_sec: f64,
     pub prompt_tokens: u64,
     pub gen_tokens: u64,
-    pub decode_calls_total: u64,
+    pub decode_calls_total: Option<u64>,
     pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
     pub requests_processing: u64,
     pub requests_deferred: u64,
-    pub busy_slots_per_decode: f64,
+    pub busy_slots_per_decode: Option<f64>,
 }
 
 enum TelemetryWrite {
@@ -1167,12 +1167,12 @@ fn insert_metric_sample(
             llama.map(|m| m.prompt_tokens as i64),
             llama.map(|m| m.gen_tokens as i64),
             None::<i64>,
-            llama.map(|m| m.decode_calls_total as i64),
+            llama.and_then(|m| m.decode_calls_total.map(|n| n as i64)),
             llama.map(|m| m.max_tokens_observed as i64),
             prompt_tokens_per_sec,
             llama.map(|m| m.requests_processing as i64),
             llama.map(|m| m.requests_deferred as i64),
-            llama.map(|m| m.busy_slots_per_decode),
+            llama.and_then(|m| m.busy_slots_per_decode),
         ],
     )
     .map_err(|e| format!("无法写入遥测采样: {}", e))?;
@@ -3446,12 +3446,12 @@ mod tests {
             tokens_per_sec: 4.0,
             prompt_tokens: 5,
             gen_tokens: 6,
-            decode_calls_total: 17,
+            decode_calls_total: Some(17),
             max_tokens_observed: 4096,
             prompt_tokens_per_sec: 7.0,
             requests_processing: 1,
             requests_deferred: 0,
-            busy_slots_per_decode: 1.0,
+            busy_slots_per_decode: Some(1.0),
         };
 
         insert_metric_sample(
@@ -3540,12 +3540,12 @@ mod tests {
             tokens_per_sec: 72.6,
             prompt_tokens: 5,
             gen_tokens: 6,
-            decode_calls_total: 17,
+            decode_calls_total: Some(17),
             max_tokens_observed: 4096,
             prompt_tokens_per_sec: 140.0,
             requests_processing: 0,
             requests_deferred: 0,
-            busy_slots_per_decode: 0.0,
+            busy_slots_per_decode: Some(0.0),
         };
 
         insert_metric_sample(
@@ -3572,7 +3572,7 @@ mod tests {
             tokens_per_sec: 45.0,
             prompt_tokens_per_sec: 90.0,
             requests_processing: 1,
-            busy_slots_per_decode: 1.0,
+            busy_slots_per_decode: Some(1.0),
             ..llama
         };
         insert_metric_sample(

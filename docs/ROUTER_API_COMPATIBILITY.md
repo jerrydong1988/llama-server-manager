@@ -21,6 +21,20 @@
 
 Chat Completions 与 Responses 会保持工具调用、结构化输出、usage 和 SSE 事件，仅把协议规定的响应模型标识改回公开模型名。OpenAI 错误统一为 `error.message/type/param/code`，响应包含 `x-request-id`。路由器使用官方 `openai` JavaScript SDK 对模型发现、Chat、Responses、工具、流式和 Token Count 做契约测试。
 
+上游已提供的 `x-request-id` / `request-id` 会保留，用于关联引擎日志，
+不承诺跨多个引擎全局唯一。推理和计数请求另有 `x-lsm-request-id`，
+这是 Manager 请求账本的唯一关联 ID；账本同时记录上游 ID。
+
+`POST /v1/chat/completions` 在占用目标槽位和执行预检前校验现代
+`assistant.tool_calls` 与 `role:tool` 结果的配对。缺失/重复/孤立/错配的
+调用 ID 返回 `400 invalid_tool_history`，`param` 给出消息字段路径；
+账本记为 `forwarded=false`、`outcome=rejected`、`failure.stage=validation`，
+拒绝计数只增加一次。合法并行结果可乱序，工具失败/取消结果也允许回传，
+不校验历史工具是否仍在当前声明中，不解析参数或工具结果正文。
+本规则只用于 Chat 生成：计数端点不做本地配对拦截，是否接受未完成历史
+由原生引擎决定；Responses/Messages 按各自原生协议处理，
+旧式 function_call/function 流程保持不变。
+
 ### Anthropic 格式
 
 | 能力 | 端点 |
@@ -64,11 +78,17 @@ Token 计数端点由目标 llama-server 提供。如果目标版本不支持、
 
 建议始终启用 `strictModelRouting`：
 
-- 存在显式路由表时，只有精确匹配的公开模型名可以调用；内部实例 ID、实例名称、模型文件路径和上游 `--alias` 都不是公共选择器。
+- 存在显式路由表时，请求体模型名去除首尾空白后必须精确匹配公开模型名；内部实例 ID、实例名称、模型文件路径和上游 `--alias` 都不是公共选择器。GET 单模型发现路径保持原样匹配。
 - 请求显式指定未知模型时返回 `404`，不会静默投递到默认实例。
 - 默认实例只处理没有 `model` 字段的请求。
 - 没有显式路由表时，只接受运行实例的公开别名精确匹配；别名为空时使用从模型文件名派生的安全公开名。
 - `/v1/models` 和响应中的 `model` 只公开上述公共标识。
+
+缺失或 null 的 `model` 在无可解析默认目标时返回 `400 model_required`；
+错误类型或空白字符串返回 400。保留已有单个隐式目标可作为默认值的行为。
+已配置公开别名的目标全部停机时，推理返回 `503 route_unavailable`；
+发现列表仍只展示运行中的实例。向量端点与运行模型任务类型不匹配返回
+`400 model_endpoint_mismatch`，不将聊天模型直接投递到 embedding/rerank 端点。
 
 关闭严格模式只用于迁移旧配置；它会恢复未知选择器向默认实例回退的旧行为，不建议用于生产。
 
@@ -96,6 +116,38 @@ Token 计数端点由目标 llama-server 提供。如果目标版本不支持、
 - `requestsPerMinute`：全局 Token Bucket 请求速率；`0` 表示不限。单 Key 的值为 `0` 时继承全局设置。
 
 请求体默认上限为 64 MiB；Anthropic Messages 上限为 32 MiB。缓冲 JSON 响应限制为 16 MiB，SSE 逐行处理并采用独立空闲超时。
+
+**目标容量满载不排队。** 所有健康匹配目标都没有执行槽位时立即返回
+`503 route_capacity`；目标停机、加载中或不健康返回 `503 route_unavailable`。
+两者都带 `Retry-After: 1`，供客户端安排有上限、有抖动的重试，不保证一秒后就绪。
+`queueTimeoutMs` 和公平排队只影响全局/Key 准入，不能改变目标级快速拒绝。
+选择与占用目标槽位原子完成，竞争失败不会偶发变为另一类 429。
+
+`lsm_router_requests_rejected_total` 统计已知推理/计数 POST 端点在转发前返回的
+本地错误，包括认证、准入、路由、预检和配额，每请求一次；不包含上游错误或取消。
+`requests_total` 是通过全局准入的数量，并非所有到达请求。
+`completed_total`/耗时直方图反映转发请求生命周期结束，可能包含错误或取消，
+不能直接作为成功率；按结果分析请使用请求账本中的 `forwarded` 和 `outcome`。
+
+当前 `/metrics` 使用 Prometheus 0.0.4 文本格式；`HELP` 是可选说明，缺少它
+不影响已有 TYPE 和样本的解析。以下指标名称均带 `lsm_router_` 前缀：
+
+| 指标 | 含义 |
+| --- | --- |
+| `upstream_errors_total` | 路由器记录的上游传输/服务异常计数，不等同所有非 2xx 响应，也不包含本地拒绝 |
+| `in_flight_requests` | 已通过全局准入、尚未释放许可的请求数，可能仍在预检，并非引擎正在生成的数量 |
+| `in_flight_request_body_bytes` | 已保留的请求体预算，单位字节，并非进程实际内存 |
+| `request_duration_milliseconds` | 转发请求生命周期耗时直方图，单位毫秒，包含错误/取消样本 |
+| `target_ready` | 运行目标的就绪/熔断缓存，1 为就绪，0 为未就绪 |
+| `target_active_requests` | 路由器对目标持有的请求许可数，包含预检，不是上游直接调用总数 |
+| `uptime_seconds` | 当前路由运行时运行秒数 |
+
+`/health` 的路由统计覆盖已配置的有效路由，并补入未被显式路由覆盖的运行实例；
+`target_*` 按实例 ID 输出运行目标缓存。后台探测会移除停止目标的缓存，因此
+停止后可能短暂保留旧样本，随后不再输出，不能把缺失理解为健康。
+多个公开别名可指向同一个实例，路由数量也不必等于目标样本数。
+查看已配置但离线的路由时结合实例/路由配置及 `unhealthy_routes`，
+不要只统计 `target_ready=0` 的现存样本。
 
 ## 鉴权、权限和 CORS
 

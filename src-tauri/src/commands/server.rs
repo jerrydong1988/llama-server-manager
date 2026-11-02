@@ -1883,6 +1883,9 @@ fn prepare_launch_checked(
     config: InstanceConfig,
     engine_path: &str,
 ) -> AppResult<(InstanceConfig, ModelWorkload, Vec<String>)> {
+    if crate::gufo::is_gufo(&config) {
+        return crate::gufo::prepare(config, engine_path).map(|(config, command)| (config, ModelWorkload::Inference, command));
+    }
     if uses_manual_command(&config) {
         prepare_manual_launch(config, engine_path)
     } else {
@@ -2089,6 +2092,9 @@ async fn trusted_engine_capabilities(
         }) else {
             return EngineCapabilityResolution::Missing;
         };
+        if config.engine_kind != engine.kind {
+            return EngineCapabilityResolution::Missing;
+        }
         if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
             return EngineCapabilityResolution::Stale;
         }
@@ -2201,6 +2207,9 @@ fn validate_configured_engine(
             false,
         ));
     };
+    if config.engine_kind != engine.kind {
+        return Err(AppError::new("ENGINE_KIND_MISMATCH", "Instance and engine types differ", false));
+    }
     if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
         return Err(AppError::new(
             "CONFIGURED_ENGINE_MISMATCH",
@@ -2307,6 +2316,7 @@ async fn assess_checkpoint_eligibility(
     final_fingerprint: Option<&CheckpointFingerprint>,
     engine_exe: &str,
 ) -> CheckpointEligibility {
+    if crate::gufo::is_gufo(config) { return CheckpointEligibility::ineligible(CheckpointReasonCode::EngineCapabilityMissing); }
     let (model_architecture, main_model_artifacts_complete, model_has_swa) = {
         let models = state.models.lock().unwrap();
         models
@@ -2816,6 +2826,40 @@ fn resolve_checkpoint_startup(
     coordinator.gate_allows_routing(instance_id)
 }
 
+async fn validate_gufo_capabilities(
+    state: &AppState,
+    config: &InstanceConfig,
+    executable: &str,
+    command: &[String],
+) -> AppResult<Box<EngineCapabilities>> {
+    let caps = match trusted_engine_capabilities(state, config, executable, true).await {
+        EngineCapabilityResolution::Available(caps) if caps.status == "detected" && caps.version_status == "detected" => caps,
+        _ => return Err(AppError::new("GUFO_PROBE_REQUIRED", "Probe the selected Gufo engine before launching", false)),
+    };
+    let unsupported: Vec<_> = command.iter()
+        .filter(|arg| arg.starts_with("--") && !caps.supported_flags.contains(arg))
+        .collect();
+    if !unsupported.is_empty() {
+        return Err(AppError::new("GUFO_PARAMETER_UNSUPPORTED", format!("Gufo does not advertise: {unsupported:?}"), false));
+    }
+    Ok(caps)
+}
+
+pub(crate) fn probe_config_readiness(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    key: &str,
+    config: &InstanceConfig,
+) -> bool {
+    if !crate::gufo::is_gufo(config) {
+        return probe_instance_readiness(client, endpoint, key);
+    }
+    let mut request = client.get(format!("{endpoint}/ready")).timeout(std::time::Duration::from_secs(2));
+    if !key.is_empty() { request = request.bearer_auth(key); }
+    request.send().ok().filter(|r| r.status().is_success()).and_then(|r| r.json::<serde_json::Value>().ok())
+        .is_some_and(|v| v["status"] == "ready" && v["model"].as_str() == Some(config.alias.as_str()))
+}
+
 pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
@@ -2828,6 +2872,10 @@ pub async fn generate_server_command(
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
     timing.mark("prepare");
+    if crate::gufo::is_gufo(&config) {
+        validate_gufo_capabilities(state.inner(), &config, &engine_exe, &command).await?;
+        return Ok(GeneratedServerCommand { command, unsupported_flags: Vec::new(), emitted_override_keys: config.explicit_overrides.clone().unwrap_or_default() });
+    }
     if manual {
         timing.finish("success");
         return Ok(GeneratedServerCommand {
@@ -2909,6 +2957,14 @@ pub async fn start_server(
 ) -> AppResult<()> {
     let operation = instance_operation_lock(state.inner(), &instance_id);
     let _operation = operation.lock().await;
+    // A runtime exit may precede the next GUI bridge heartbeat. Reconcile the
+    // authoritative snapshot before reserving a start, so immediate recovery
+    // does not reject a dead process as still running. Keep this under the
+    // instance operation lock; the daemon retains its own duplicate-start guard.
+    if crate::runtime_service::manages_instances() {
+        let status = crate::runtime_service::runtime_status().await?;
+        crate::runtime_service::reconcile_app_runtime(&app, &status);
+    }
     start_server_impl(
         instance_id,
         config,
@@ -3008,7 +3064,10 @@ async fn start_server_impl(
     let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
-    let (mut cmd, engine_capabilities) = if manual {
+    let (mut cmd, engine_capabilities) = if crate::gufo::is_gufo(&config) {
+        let caps = validate_gufo_capabilities(state.inner(), &config, &engine_exe, &generated_cmd).await?;
+        (generated_cmd, Some(caps))
+    } else if manual {
         (generated_cmd, None)
     } else {
         let engine_capabilities =
@@ -3080,9 +3139,9 @@ async fn start_server_impl(
                     &cmd[0],
                 ))?,
                 workload: workload.as_str().to_string(),
-                working_directory: std::env::current_dir()
-                    .ok()
-                    .map(|path| path.to_string_lossy().to_string()),
+                working_directory: if crate::gufo::is_gufo(&config) {
+                    Some(crate::gufo::instance_directory(&config.id).to_string_lossy().into_owned())
+                } else { std::env::current_dir().ok().map(|path| path.to_string_lossy().to_string()) },
                 checkpoint: Some(crate::runtime_service::RuntimeCheckpointLaunchSpec {
                     eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
                     eligibility: checkpoint_plan.eligibility.clone(),
@@ -3191,7 +3250,15 @@ async fn start_server_impl(
 
     let lookup_run = crate::lookup_cache_store::prepare(&instance_id, &config, &mut cmd)?;
     let graceful_exit_safe = crate::engine_process::safe_to_flush(&cmd, lookup_run.is_some());
-    let mut child = crate::engine_process::spawn(&cmd, None)
+    let spawned = if crate::gufo::is_gufo(&config) {
+        crate::gufo::ensure_port_available(&config)?;
+        let environment = crate::gufo::environment(&config).map_err(|e| e.to_string())?;
+        let cwd = crate::gufo::instance_directory(&instance_id);
+        crate::engine_process::spawn_with_environment(&cmd, Some(&cwd.to_string_lossy()), &environment)
+    } else {
+        crate::engine_process::spawn(&cmd, None)
+    };
+    let mut child = spawned
         .map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_display))?;
 
     let pid = child.id();
@@ -3851,13 +3918,13 @@ fn monitor_loop(
             break;
         }
 
-        let ready = probe_instance_readiness(&client, &endpoint_base, &api_key);
+        let ready = probe_config_readiness(&client, &endpoint_base, &api_key, &launch_config);
         if !is_my_instance() {
             break;
         }
         let health_transition = advance_health_state(
             ready,
-            start_instant.elapsed() >= INITIAL_HEALTH_GRACE,
+            start_instant.elapsed() >= crate::gufo::startup_grace(&launch_config),
             &mut health_failures,
             &mut last_health_ready,
         );
@@ -5023,12 +5090,12 @@ pub struct MetricsInfo {
     pub tokens_per_sec: f64,
     pub prompt_tokens: u64,
     pub gen_tokens: u64,
-    pub decode_calls_total: u64,
+    pub decode_calls_total: Option<u64>,
     pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
     pub requests_processing: u64,
     pub requests_deferred: u64,
-    pub busy_slots_per_decode: f64,
+    pub busy_slots_per_decode: Option<f64>,
 }
 
 pub async fn get_metrics(
@@ -5077,20 +5144,21 @@ fn parse_llama_metric_sample(
 ) -> Result<crate::commands::telemetry::LlamaMetricSample, String> {
     let extract = |key: &str| -> Result<f64, String> {
         body.lines()
-            .find(|line| line.starts_with(key))
-            .and_then(|line| line.split_whitespace().last()?.parse().ok())
+            .find(|line| line.split_whitespace().next() == Some(key))
+            .and_then(|line| line.split_whitespace().last()?.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
             .ok_or_else(|| format!("Missing or invalid llama metric: {key}"))
     };
     Ok(crate::commands::telemetry::LlamaMetricSample {
         tokens_per_sec: extract("llamacpp:predicted_tokens_seconds")?,
         prompt_tokens: extract("llamacpp:prompt_tokens_total")? as u64,
         gen_tokens: extract("llamacpp:tokens_predicted_total")? as u64,
-        decode_calls_total: extract("llamacpp:n_decode_total")? as u64,
+        decode_calls_total: extract("llamacpp:n_decode_total").ok().map(|n| n as u64),
         max_tokens_observed: extract("llamacpp:n_tokens_max")? as u64,
         prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds")?,
         requests_processing: extract("llamacpp:requests_processing")? as u64,
         requests_deferred: extract("llamacpp:requests_deferred")? as u64,
-        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode")?,
+        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode").ok(),
     })
 }
 
@@ -7332,10 +7400,28 @@ mod perf_parser_tests {
         )
         .unwrap();
 
-        assert_eq!(sample.decode_calls_total, 9);
+        assert_eq!(sample.decode_calls_total, Some(9));
         assert_eq!(sample.max_tokens_observed, 4096);
         assert_eq!(sample.tokens_per_sec, 12.5);
         assert_eq!(sample.prompt_tokens_per_sec, 48.0);
+    }
+
+    #[test]
+    fn gufo_metrics_preserve_available_counters_without_inventing_llama_fields() {
+        let sample = parse_llama_metric_sample(concat!(
+            "llamacpp:predicted_tokens_seconds 12.5\n",
+            "llamacpp:prompt_tokens_total 120\n",
+            "llamacpp:tokens_predicted_total 80\n",
+            "llamacpp:n_tokens_max 4096\n",
+            "llamacpp:prompt_tokens_seconds 48\n",
+            "llamacpp:requests_processing 1\n",
+            "llamacpp:requests_deferred 0\n",
+            "llamacpp:kv_cache_usage_ratio 0.5\n",
+        )).unwrap();
+        assert_eq!(sample.tokens_per_sec, 12.5);
+        assert_eq!(sample.requests_processing, 1);
+        assert_eq!(sample.decode_calls_total, None);
+        assert_eq!(sample.busy_slots_per_decode, None);
     }
 
     #[test]
