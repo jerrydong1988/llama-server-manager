@@ -44,5 +44,5 @@ Earlier real-engine qualification covered both Gufo profiles at a configured
 262K context and a real llama.cpp control, including tool rounds, malformed
 history rejection, streaming, cancellation and preserved production-file hashes.
 This is not a claim that full 262K input, GPU reset recovery or indefinite
-unattended operation was tested. Final execution results are recorded with the
-release validation below.
+unattended operation was tested. Final execution results are recorded in the
+pull request and release workflow runs for the exact submitted commit.
