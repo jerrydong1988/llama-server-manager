@@ -6,6 +6,8 @@ test('Gufo config exposes supported fields, persists the draft, and separates ca
     localStorage.setItem('lastTab', 'instances')
   })
   await page.goto('/?scenario=gufo')
+  await expect(page.getByRole('button', { name: '配置参数', exact: true }).last()).toBeVisible()
+  await expect(page.getByRole('button', { name: '清除检查点', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
   await expect(page.getByRole('heading', { name: /Gufo 参数配置/ })).toBeVisible()
   await expect(page.getByRole('textbox', { name: '参数搜索' })).toHaveCount(0)

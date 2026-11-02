@@ -6,7 +6,8 @@ export function isConfiguredEngineMissing(
   engines: EngineInfo[],
 ) {
   const configuredId = config.engine_id.trim()
-  return Boolean(configuredId && !engines.some(engine => pathsEqual(engine.id, configuredId)))
+  return Boolean(configuredId && !engines.some(engine => pathsEqual(engine.id, configuredId)
+    && (engine.kind ?? 'llama_cpp') === (config.engine_kind ?? 'llama_cpp')))
 }
 
 export function resolveEffectiveEngine(

@@ -1,4 +1,4 @@
-# Gufo managed instances — phase 1
+# Gufo managed engines — integration and validation
 
 Manager can discover and launch a local Windows `gufo.exe` alongside llama.cpp.
 The initial qualified profiles are Qwen3.8-Flash-Next with MTP and Qwen3.8-27B
@@ -25,7 +25,7 @@ CLI and MCP. Gufo has a nested `gufo` configuration. It generates
 `gufo serve ... llm ...` arguments directly; llama.cpp flag projection and
 checkpoint qualification are not used. Unknown Gufo fields and unsupported
 parameter combinations are rejected. Managed Gufo currently binds only to
-`127.0.0.1`; custom/manual commands are outside this phase.
+`127.0.0.1`; custom/manual commands are not supported for managed Gufo instances.
 
 Every Gufo instance owns `<Manager data directory>/gufo/<instance id>/`:
 
@@ -53,21 +53,35 @@ startup grace expires (default 600 seconds; accepted range 60–3600). llama.cpp
 retains its existing probe and 120-second grace. A timeout reports failure;
 it does not repeatedly restart the model.
 
-The runtime advertises `gufo_engine_v1`; a client requiring this capability
-cannot treat an older daemon as compatible. Persisted Gufo launch arguments
+The runtime advertises `gufo_engine_v2`; a client requiring this capability
+cannot treat a phase-one daemon as API-capable, even with an identical app version.
+Persisted Gufo launch arguments
 are reconstructed and checked against their configuration before replay.
 
 On Windows, engines use a private hidden console. Stop sends Ctrl+C, waits up
 to the existing 30-second grace, and falls back to terminating the owned process
-tree. Gufo can drain accepted disk writes during graceful shutdown. This phase
-does not promise recovery of pending data after forced termination, nor complete
-cache persistence/restart qualification.
+tree. Gufo can drain accepted disk writes during graceful shutdown. Forced
+termination cannot promise recovery of pending writes. Starting reconciles the
+authoritative daemon state first, allowing immediate recovery after an unexpected
+exit without waiting for the GUI heartbeat. A pre-spawn port check rejects an
+occupied Gufo endpoint without stopping the existing owner.
 
-Gufo instances are excluded from the unified API router in phase 1. Their local
-API can be used directly after readiness. llama.cpp checkpoint actions are
-ineligible for Gufo. Exact input-token APIs exist in the qualified Gufo baseline,
-but proxy forwarding, hard quotas, full monitoring semantics and extended
-lifecycle/cache acceptance remain phase 2/3 work.
+Gufo instances participate in the unified API router. Readiness uses `/ready`
+with the expected model alias, including before the first routing probe succeeds.
+Chat Completions, Responses and Anthropic Messages use native engine endpoints;
+model aliases, streaming events, tools, images, errors, cancellation and usage
+pass through the existing router contracts. Input-token count endpoints are
+queried on the selected executable; 404/501 remains unavailable. Hard quotas
+reject requests when exact metering is unavailable, while ordinary forwarding
+retains the engine's own limits. Legacy Completions/tokenization and cloud-only
+features are not emulated.
+
+Gufo omits llama.cpp's decode-call count and average busy-slots-per-decode.
+Those fields are optional (null), not zero, so available throughput and request
+metrics still reach CLI/MCP, the live monitor and telemetry. Gufo's context
+occupancy ratio is not physical memory or retained-cache usage. Process RAM,
+device memory and slot observations remain separate. llama.cpp checkpoint actions
+are ineligible for Gufo; Gufo owns its isolated snapshot cache.
 
 ## Reproducible validation
 
@@ -82,6 +96,7 @@ The real-engine runner is opt-in and requires a **new**, absolute output root:
 ```powershell
 node scripts/test-gufo-real.cjs --root C:/Temp/lsm-gufo-32k --launcher C:/path/to/Gufo/launcher.json --context 32768
 node scripts/test-gufo-real.cjs --root C:/Temp/lsm-gufo-262k --launcher C:/path/to/Gufo/launcher.json --context 262144
+node scripts/test-gufo-real.cjs --root C:/Temp/lsm-gufo-full --launcher C:/path/to/Gufo/launcher.json --context 262144 --extended true --lifecycle true
 node scripts/test-gufo-real.cjs --root C:/Temp/lsm-llama-regression --launcher C:/path/to/Gufo/launcher.json --only-llama true --llama-engine C:/path/to/llama-server.exe
 ```
 
@@ -93,6 +108,13 @@ deliberately omits `engine_kind` to exercise legacy defaults. Use short roots
 outside watched source trees if Windows rejects atomic JSON replacement; retain
 any failed attempt's report instead of counting it as a pass.
 
+Extended mode checks authenticated direct/proxy text, SSE, Responses, Messages,
+exact counts (including tools/images), multimodal inference, cancellation, errors,
+context preflight, monitoring and hard quotas. Lifecycle mode checks disk restore,
+window hide/show, abnormal exit and explicit recovery, occupied ports and stopping
+during load. `scripts/package-gufo-trial.cjs` creates the isolated portable Windows
+candidate described in [the manual test guide](GUFO_MANUAL_TEST.md).
+
 The November 2, 2026 local acceptance used Gufo 0.28.1 revision `408a04357827`
 (the deployed Windows compiler-flag fix), both existing model/projector profiles,
 32K and 262K configured contexts. All four short inference runs returned the
@@ -101,8 +123,18 @@ request cycle took about 263 seconds and remained loading past 120 seconds.
 Both models stopped and released their ports; accepted cache writes were
 published during graceful exit. A llama.cpp b12032/Qwen3.8-27B control also passed.
 
-These are short text-inference and management-lifecycle results. A 262K context
-allocation is **not** a complete 262K input test. Vision, long conversations,
-proxy parity, crash recovery and simultaneous model residency were not qualified
-by these runs. The original programs, launcher/Manager configurations and Gufo
-cache inventory remained unchanged.
+The subsequent 262K-context acceptance exercised both profiles through authenticated
+native and unified APIs: counts matched across paths, including tools and images;
+Chat, Responses and Messages streaming, real tool calls, vision, cancellation,
+context rejection, usage and hard quotas passed. Both profiles restored disk
+snapshots across process restarts (2,275-token repeated prompt), preserved the
+inference process when hiding/showing the window, rejected occupied test ports,
+and stopped during loading. An intentionally terminated 27B process was detected
+and immediately restarted successfully. These tests exposed and fixed stale GUI
+runtime state and Windows Gufo port reuse. The original programs, launcher/Manager
+configurations and Gufo cache inventory remained unchanged; no owned PIDs remained.
+
+A 262K context allocation is **not** a complete 262K input test. Full-capacity
+prompts, extended unattended runs, GPU-reset recovery and simultaneous residency
+remain outside this qualification. Pending writes cannot be guaranteed after a
+forced kill; controlled shutdown and reuse of completed snapshots were verified.

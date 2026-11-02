@@ -669,7 +669,7 @@ const InstanceManager = () => {
                 </div>
               </div>
 
-              <CheckpointStatusCard instance={selectedInstance} />
+              {selectedInstance.config.engine_kind !== 'gufo' && <CheckpointStatusCard instance={selectedInstance} />}
 
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.primaryActions}</div>

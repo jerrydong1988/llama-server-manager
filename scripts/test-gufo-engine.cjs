@@ -5,7 +5,7 @@ const entry = `
 import assert from 'node:assert/strict'
 import { defaultInstanceConfig } from './src/store/defaults'
 import { configForEngine } from './src/gufo'
-import { resolveEffectiveEngine } from './src/store/engineResolution'
+import { resolveEffectiveEngine, isConfiguredEngineMissing } from './src/store/engineResolution'
 import { normalizeInstanceConfig } from './src/modelPolicy'
 const llama = { id: 'llama', kind: 'llama_cpp' }
 const gufo = { id: 'gufo', kind: 'gufo' }
@@ -24,6 +24,7 @@ assert.equal(selected.kv_checkpoint.enabled, false)
 assert.deepEqual(selected.explicit_overrides, [])
 assert.equal(selected.gufo.sessions, 1)
 assert.equal(resolveEffectiveEngine(selected, [llama], 'llama'), null)
+assert.equal(isConfiguredEngineMissing({ engine_id: 'llama', engine_kind: 'gufo' }, [llama, gufo]), true)
 assert.deepEqual(normalizeInstanceConfig(selected).config, selected)
 assert.equal(configForEngine(selected, llama).engine_kind, 'llama_cpp')
 assert.equal(legacy.kv_checkpoint.enabled, true)

@@ -210,6 +210,7 @@ fn stored_target_matches_endpoint(
 #[derive(Clone)]
 struct ResolvedProxyTarget {
     public: ProxyTarget,
+    engine_kind: crate::gufo::EngineKind,
     upstream_model_id: String,
     api_key: String,
     api_prefix: String,
@@ -959,13 +960,12 @@ fn resolved_target_for_id(
     let stored_config = instances.get(id)?;
     let running_info = running.get(id)?;
     let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
-    // Gufo API forwarding is admitted only after the phase-two contract suite.
-    if crate::gufo::is_gufo(config) { return None; }
     if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
         return None;
     }
     let workload = stored_instance_workload(config, &running_info.workload);
     Some(ResolvedProxyTarget {
+        engine_kind: config.engine_kind,
         public: ProxyTarget {
             instance_id: id.to_string(),
             name: config.name.clone(),
@@ -2215,12 +2215,33 @@ async fn probe_target(
     config: ProxyConfig,
 ) {
     let started = std::time::Instant::now();
-    let health = fetch_target_json(&target, "/health", &config).await;
+    // Gufo /health is liveness: it can succeed while weights/cache are loading.
+    // Require the selected model to be ready before admitting router traffic.
+    let health = if target.engine_kind == crate::gufo::EngineKind::Gufo {
+        fetch_target_json(&target, "/ready", &config)
+            .await
+            .and_then(|value| {
+                if value.get("status").and_then(serde_json::Value::as_str) == Some("ready")
+                    && value.get("model").and_then(serde_json::Value::as_str)
+                        == Some(target.upstream_model_id.as_str())
+                {
+                    Ok(value)
+                } else {
+                    Err("Gufo model is not ready or its identity does not match".into())
+                }
+            })
+    } else {
+        fetch_target_json(&target, "/health", &config).await
+    };
     if let Err(error) = health {
         runtime.mark_probe_failure(
             &target.public.instance_id,
             error,
-            config.unhealthy_threshold,
+            if target.engine_kind == crate::gufo::EngineKind::Gufo {
+                1
+            } else {
+                config.unhealthy_threshold
+            },
             Duration::from_millis(config.recovery_cooldown_ms),
         );
         return;
@@ -2499,10 +2520,10 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
             "generation_preflight": ["chat_completions", "completions", "responses", "anthropic_messages"]
         },
         "anthropic_compatibility": {
-            "transport": "llama.cpp native Messages API",
+            "transport": "native engine Messages API (llama.cpp or Gufo)",
             "minimum_supported_baseline": "b10199",
             "request_limit_bytes": MAX_ANTHROPIC_REQUEST_BODY_BYTES,
-            "tools_require": "--jinja",
+            "tools_require": "engine tool-capable chat template; llama.cpp requires --jinja",
             "supported": ["messages", "streaming", "usage", "tool_use", "tool_result", "image_blocks", "count_tokens", "model_discovery"],
             "cloud_only_features": "passed through without manager-side emulation"
         },
@@ -2520,6 +2541,10 @@ fn model_health_snapshots(
         .filter(|target| seen.insert(target.public.instance_id.clone()))
         .map(|target| {
             let mut snapshot = runtime.target_snapshot(&target.public.instance_id);
+            if target.engine_kind == crate::gufo::EngineKind::Gufo && snapshot.last_success_at_ms == 0 {
+                snapshot.ready = false;
+                snapshot.status = "loading".into();
+            }
             if snapshot.capabilities.context_length.is_none() {
                 snapshot.capabilities.context_length = target.configured_context_length;
             }
@@ -2823,7 +2848,16 @@ async fn proxy_upstream(
         );
     }
     let (target, target_permit) = loop {
-        let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
+        let scheduling = candidates
+            .iter()
+            .filter(|target| {
+                target.engine_kind != crate::gufo::EngineKind::Gufo || {
+                    let health = router_state.runtime.target_snapshot(&target.public.instance_id);
+                    health.ready && health.last_success_at_ms > 0
+                }
+            })
+            .map(routing_candidate)
+            .collect::<Vec<_>>();
         let Some(selected) = router_state.runtime.select_target(
             &scheduling,
             &proxy_config.routing_strategy,
@@ -3904,6 +3938,7 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    include!("proxy_gufo_tests.rs");
     use std::time::Duration;
     #[tokio::test]
     async fn credentials_revoked_during_upload_never_reach_inference() {
@@ -5369,6 +5404,7 @@ mod tests {
     #[test]
     fn target_url_brackets_ipv6_and_preserves_prefix_and_query() {
         let target = super::ResolvedProxyTarget {
+            engine_kind: crate::gufo::EngineKind::LlamaCpp,
             public: ProxyTarget {
                 instance_id: "ipv6".into(),
                 name: "IPv6".into(),

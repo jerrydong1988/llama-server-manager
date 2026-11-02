@@ -26,6 +26,22 @@ impl EngineKind {
     }
 }
 
+/// Gufo's Windows socket reuse can otherwise bind an already occupied endpoint.
+/// Check immediately before spawning, under the runtime's lifecycle lock.
+pub fn ensure_port_available(config: &InstanceConfig) -> AppResult<()> {
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
+    if std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(300)).is_ok()
+        || std::net::TcpListener::bind(address).is_err()
+    {
+        return Err(AppError::new(
+            "GUFO_PORT_IN_USE",
+            format!("Gufo 端口 {} 已被占用。请选择其他端口；不会停止占用该端口的程序。", config.port),
+            false,
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GufoConfig {
@@ -359,6 +375,16 @@ pub fn startup_grace(config: &InstanceConfig) -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gufo_rejects_occupied_port_without_touching_its_owner() {
+        let owner = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let config = InstanceConfig { port: owner.local_addr().unwrap().port(), ..InstanceConfig::default() };
+        assert!(ensure_port_available(&config).is_err());
+        assert!(owner.local_addr().is_ok());
+        drop(owner);
+        assert!(ensure_port_available(&config).is_ok());
+    }
 
     #[test]
     fn legacy_configs_keep_llama_defaults_and_gufo_is_distinct_from_backend() {

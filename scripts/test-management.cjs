@@ -301,6 +301,15 @@ async function run() {
   await call('monitoring.series', { id: 'agent-fixture', range_ms: 10000 })
   assert.equal((await call('system.port', { port })).data, false)
   await mutate('routes.stop', {})
+  // Health reads the daemon immediately; restart must not wait for the GUI's
+  // periodic bridge to forget an exited process (also covers legacy llama kind).
+  process.kill(health.data.running.pid)
+  for (let i = 0; ; i++) {
+    if (!(await call('instances.health', { id: 'agent-fixture' })).data.running) break
+    assert.ok(i < 100, 'daemon did not observe fixture exit'); await wait(50)
+  }
+  await mutate('instances.start', { id: 'agent-fixture' })
+  assert.notEqual((await call('instances.health', { id: 'agent-fixture' })).data.running.pid, health.data.running.pid)
   // Real host scheduling: a slow engine probe must not block instance controls,
   // while a queued same-domain mutation can be cancelled durably via MCP.
   fs.writeFileSync(path.join(engineDir, 'probe-delay-ms'), '3000', 'utf8')

@@ -2957,6 +2957,14 @@ pub async fn start_server(
 ) -> AppResult<()> {
     let operation = instance_operation_lock(state.inner(), &instance_id);
     let _operation = operation.lock().await;
+    // A runtime exit may precede the next GUI bridge heartbeat. Reconcile the
+    // authoritative snapshot before reserving a start, so immediate recovery
+    // does not reject a dead process as still running. Keep this under the
+    // instance operation lock; the daemon retains its own duplicate-start guard.
+    if crate::runtime_service::manages_instances() {
+        let status = crate::runtime_service::runtime_status().await?;
+        crate::runtime_service::reconcile_app_runtime(&app, &status);
+    }
     start_server_impl(
         instance_id,
         config,
@@ -3242,7 +3250,15 @@ async fn start_server_impl(
 
     let lookup_run = crate::lookup_cache_store::prepare(&instance_id, &config, &mut cmd)?;
     let graceful_exit_safe = crate::engine_process::safe_to_flush(&cmd, lookup_run.is_some());
-    let mut child = crate::engine_process::spawn(&cmd, None)
+    let spawned = if crate::gufo::is_gufo(&config) {
+        crate::gufo::ensure_port_available(&config)?;
+        let environment = crate::gufo::environment(&config).map_err(|e| e.to_string())?;
+        let cwd = crate::gufo::instance_directory(&instance_id);
+        crate::engine_process::spawn_with_environment(&cmd, Some(&cwd.to_string_lossy()), &environment)
+    } else {
+        crate::engine_process::spawn(&cmd, None)
+    };
+    let mut child = spawned
         .map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_display))?;
 
     let pid = child.id();
@@ -5074,12 +5090,12 @@ pub struct MetricsInfo {
     pub tokens_per_sec: f64,
     pub prompt_tokens: u64,
     pub gen_tokens: u64,
-    pub decode_calls_total: u64,
+    pub decode_calls_total: Option<u64>,
     pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
     pub requests_processing: u64,
     pub requests_deferred: u64,
-    pub busy_slots_per_decode: f64,
+    pub busy_slots_per_decode: Option<f64>,
 }
 
 pub async fn get_metrics(
@@ -5128,20 +5144,21 @@ fn parse_llama_metric_sample(
 ) -> Result<crate::commands::telemetry::LlamaMetricSample, String> {
     let extract = |key: &str| -> Result<f64, String> {
         body.lines()
-            .find(|line| line.starts_with(key))
-            .and_then(|line| line.split_whitespace().last()?.parse().ok())
+            .find(|line| line.split_whitespace().next() == Some(key))
+            .and_then(|line| line.split_whitespace().last()?.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
             .ok_or_else(|| format!("Missing or invalid llama metric: {key}"))
     };
     Ok(crate::commands::telemetry::LlamaMetricSample {
         tokens_per_sec: extract("llamacpp:predicted_tokens_seconds")?,
         prompt_tokens: extract("llamacpp:prompt_tokens_total")? as u64,
         gen_tokens: extract("llamacpp:tokens_predicted_total")? as u64,
-        decode_calls_total: extract("llamacpp:n_decode_total")? as u64,
+        decode_calls_total: extract("llamacpp:n_decode_total").ok().map(|n| n as u64),
         max_tokens_observed: extract("llamacpp:n_tokens_max")? as u64,
         prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds")?,
         requests_processing: extract("llamacpp:requests_processing")? as u64,
         requests_deferred: extract("llamacpp:requests_deferred")? as u64,
-        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode")?,
+        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode").ok(),
     })
 }
 
@@ -7383,10 +7400,28 @@ mod perf_parser_tests {
         )
         .unwrap();
 
-        assert_eq!(sample.decode_calls_total, 9);
+        assert_eq!(sample.decode_calls_total, Some(9));
         assert_eq!(sample.max_tokens_observed, 4096);
         assert_eq!(sample.tokens_per_sec, 12.5);
         assert_eq!(sample.prompt_tokens_per_sec, 48.0);
+    }
+
+    #[test]
+    fn gufo_metrics_preserve_available_counters_without_inventing_llama_fields() {
+        let sample = parse_llama_metric_sample(concat!(
+            "llamacpp:predicted_tokens_seconds 12.5\n",
+            "llamacpp:prompt_tokens_total 120\n",
+            "llamacpp:tokens_predicted_total 80\n",
+            "llamacpp:n_tokens_max 4096\n",
+            "llamacpp:prompt_tokens_seconds 48\n",
+            "llamacpp:requests_processing 1\n",
+            "llamacpp:requests_deferred 0\n",
+            "llamacpp:kv_cache_usage_ratio 0.5\n",
+        )).unwrap();
+        assert_eq!(sample.tokens_per_sec, 12.5);
+        assert_eq!(sample.requests_processing, 1);
+        assert_eq!(sample.decode_calls_total, None);
+        assert_eq!(sample.busy_slots_per_decode, None);
     }
 
     #[test]

@@ -11,9 +11,10 @@ for (const key of ['root', 'launcher']) assert.ok(args[key] && path.isAbsolute(a
 assert.ok(!fs.existsSync(args.root), 'use a new validation root to preserve previous evidence')
 fs.mkdirSync(args.root, { recursive: true })
 const data = path.join(args.root, 'data')
+const authKey = args.extended ? 'isolated-gufo-engine-acceptance-key' : ''
 const source = JSON.parse(fs.readFileSync(args.launcher, 'utf8'))
 const enginePath = source.launcher.executable
-const bin = path.resolve('src-tauri/target', args.profile || 'debug')
+const bin = args.bin || path.resolve('src-tauri/target', args.profile || 'debug')
 const client = managementClient({ cli: path.join(bin, 'lsm.exe'), app: path.join(bin, 'llama-server-manager.exe'), data, timeout: 900000 })
 const report = { started_at: new Date().toISOString(), engine: enginePath, context: Number(args.context || 32768), data, checks: [] }
 const reportPath = path.join(args.root, 'result.json')
@@ -46,7 +47,7 @@ async function freePort() {
   return port
 }
 async function request(port, route, body) {
-  const response = await fetch(`http://127.0.0.1:${port}${route}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' },
+  const response = await fetch(`http://127.0.0.1:${port}${route}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(authKey ? { authorization: `Bearer ${authKey}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(180000) })
   const result = await response.json()
   assert.equal(response.status, 200, JSON.stringify(result))
@@ -83,7 +84,7 @@ async function main() {
     const s = preset.settings, id = `gufo-real-${index}`, port = await freePort()
     ids.push(id); ports.push(port)
     const config = { engine_kind: 'gufo', engine_id: engine.id, name: preset.name, model_path: s.model, mmproj_path: s.mmproj,
-      alias: s.served_model_name, host: '127.0.0.1', port, ctx_size: report.context, n_predict: s.max_tokens,
+      alias: s.served_model_name, api_key: authKey, host: '127.0.0.1', port, ctx_size: report.context, n_predict: s.max_tokens,
       temp: s.temperature, top_k: s.top_k, top_p: s.top_p, min_p: s.min_p, seed: s.seed, repeat_penalty: s.repeat_penalty,
       repeat_last_n: s.repeat_last_n, presence_penalty: s.presence_penalty, frequency_penalty: s.frequency_penalty,
       gufo: { model_family: s.model_family, speculative: s.speculative, mtp_model: s.mtp_model, dflash_model: s.dflash_model,
@@ -122,6 +123,11 @@ async function main() {
     const logs = await mcp.tool('instances.logs', { id, lines: 100 })
     assert.ok(JSON.stringify(logs).length > 100)
     record('model_inference', { id, model: s.served_model_name, loadingObserved, ready_seconds: (Date.now() - at) / 1000, port, props, usage: answer.usage })
+    if (args.extended) {
+      const routerPort = await freePort(); ports.push(routerPort)
+      await require('./lib/gufo-api-acceptance.cjs').gufoApiAcceptance({ client, mcp, id, model: s.served_model_name, port, routerPort, root: args.root, record, context: report.context, authKey })
+    }
+    if (args.lifecycle) await require('./lib/gufo-lifecycle-acceptance.cjs').gufoLifecycleAcceptance({ client, mcp, id, port, model: s.served_model_name, data, record, owned, authKey, crash: index === 0 })
     await mcp.mutate('instances.stop', { id })
     assert.equal((await mcp.tool('instances.health', { id })).running, null)
     const probe = await fetch(`http://127.0.0.1:${port}/ready`, { signal: AbortSignal.timeout(2000) }).catch(() => null)

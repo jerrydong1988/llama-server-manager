@@ -429,7 +429,7 @@ impl RuntimeSupervisor {
                 KV_CHECKPOINT_CAPABILITY.to_string(),
                 ROUTER_USAGE_CAPABILITY.to_string(),
                 ROUTER_LISTENER_CAPABILITY.to_string(),
-                "gufo_engine_v1".to_string(),
+                "gufo_engine_v2".to_string(),
             ],
             config_revision,
             background_enabled,
@@ -977,6 +977,7 @@ impl RuntimeSupervisor {
             if spec.config.id != spec.instance_id { return Err("Gufo instance identity mismatch".into()); }
             let (_, expected) = crate::gufo::prepare(spec.config.clone(), &spec.command[0]).map_err(|e| e.to_string())?;
             if expected != spec.command { return Err("Gufo launch spec differs from its validated configuration".into()); }
+            crate::gufo::ensure_port_available(&spec.config).map_err(|e| e.to_string())?;
         }
         // Persisted launch specs may predate newly supported secret flags.
         crate::security::validate_runtime_executable(&spec.command[0], &spec.executable_sha256)?;
