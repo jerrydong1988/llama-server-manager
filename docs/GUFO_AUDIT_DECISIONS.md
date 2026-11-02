@@ -17,24 +17,30 @@
 修复后目标选择与槽位预留在同一锁内完成，消除两步竞争导致的偶发 429。
 忙碌目标仍可以切换到其他符合条件的备用目标。
 
-| 情况 | HTTP / error.code | 处理 |
+| 情况 | HTTP / 错误标识（默认指 error.code） | 处理 |
 | --- | --- | --- |
 | 健康匹配目标全部满载 | 503 / `route_capacity` | `Retry-After: 1`，提示客户端有界重试 |
 | 已配置公开路由的目标停机、加载中或不健康 | 503 / `route_unavailable` | `Retry-After: 1`；不承诺一秒内就绪 |
 | 未知公开模型 | 404 / `model_not_found` | 检查模型名，不静默回退 |
 | model 缺失/null，且无可解析的默认目标 | 400 / `model_required` | 修改请求或配置默认实例 |
-| model 是错误类型或空字符串 | 400 / `invalid_request_error` | 不再当作省略 model |
+| model 是错误类型或空字符串 | 400 / **error.type**=`invalid_request_error` | OpenAI 的 code 为 null；Anthropic 此类通用错误不带 code/param。不再当作省略 model。 |
 | 运行模型与向量端点任务类型不匹配 | 400 / `model_endpoint_mismatch` | 选用匹配的 embedding/rerank 模型 |
 | 全局/Key 准入超时或限流 | 429，保留现有行为 | 与目标忙碌分开 |
-| 路径不存在 / 方法不支持 | 404 / `endpoint_not_found`；405 / `method_not_allowed` | 返回相应协议 JSON 信封 |
+| 路径不存在 / 方法不支持 | 404 / `endpoint_not_found`；405 / `method_not_allowed` | 返回相应协议 JSON 信封；Messages 的版本门可能先返回 400，见下文。 |
 
 上述路由错误码在 OpenAI 和 Anthropic 信封中一致，并与请求账本中的
 诊断代码一致。保留已配置默认实例和既有单个隐式目标回退规则。
 实机回归另外修复了客户端混合请求头的协议选择：已知推理端点以 URL
 为准，Chat/Responses 即使携带 anthropic-version 也保持 OpenAI 错误与
-x-request-id；共享发现端点仍按该请求头选择格式。
+x-request-id；共享发现端点按该请求头选择请求 ID 头及错误信封，成功 JSON
+使用同时包含 OpenAI/Anthropic 字段的统一模型描述，不按头重写数据结构。
 严格路由仍只接受公开别名；不通过错误分类暴露内部实例 ID、私有名称或路径。
 模型列表继续只展示运行中的模型，管理界面负责展示停机配置。
+
+在 CORS、鉴权和权限检查通过后，Messages 路径先校验 anthropic-version，
+再进入方法处理。因此 GET /v1/messages 缺版本时返回 400，带有效版本时
+返回 405；OPTIONS 预检单独处理。保留此顺序，不把同时存在多个问题的
+请求强制改为优先报告方法错误。
 
 拒绝计数统一在 HTTP 响应出口统计：已知推理/计数端点的 POST 请求，
 在尚未转发生成/计数请求时返回的本地 4xx/5xx，每次只计一次。
@@ -92,3 +98,21 @@ x-request-id；共享发现端点仍按该请求头选择格式。
   Gufo 额外比较相同思考设置的计数，以及预算/stop 的直连与代理结果。
 - 必须完成 `npm run check:release`、生产构建、Rust 测试及实际新包验证。
   最终运行结果记录在本任务的交付说明中，未执行的测试不计通过。
+
+## 第二轮剩余 INFO/LOW 的复核
+
+依据 `guf-api-audit-r2-20261102/reports/REPORT-R2.md` §5，核对源码、
+原始指标文本、SDK 类型及官方协议说明；本轮仅整理文档，不改程序或部署。
+
+| 项目 | 决定 |
+| --- | --- |
+| L-01 版本门先于方法检查 | 行为合理；补明校验顺序，不调整 400/405 优先级。 |
+| L-02 type 被列成 code | 确认文档错误，已修正上表，并区分 null 与字段缺失。 |
+| L-03 7 组指标缺 HELP | 事实成立，但当前 Prometheus 0.0.4 文本格式允许省略 HELP，采集不受影响；在路由说明中补指标释义，不为元数据注释单独修改二进制或重打包。 |
+| L-04 模型发现成功体不按版本头切换 | 保留统一描述，补文档。data 并非 OpenAI 独有；当前还包含 first_id/last_id/has_more 及 type/display_name/created_at 等 Anthropic 字段，不能定性成“仅 OpenAI 格式”。不据此承诺完整覆盖所有云端模型元数据。 |
+| L-05 停机目标无 target_* 样本 | 两类接口覆盖范围不同，补明配置路由与运行目标缓存的口径；缺失不等于健康，不新增混淆两种口径的样本。 |
+| L-06 Responses 不接受顶层 reasoning_effort | 是请求字段用错协议；Responses 使用 reasoning.effort，Chat 使用 reasoning_effort。修正测试/调用示例，不在网关做隐式参数映射，也不归类为 Gufo 缺少标准 Responses 推理控制。 |
+
+协议依据：[Prometheus 文本格式的可选 HELP](https://prometheus.io/docs/instrumenting/exposition_formats/)、
+[Anthropic 模型列表](https://platform.claude.com/docs/en/api/typescript/models/list)、
+[OpenAI 推理字段说明](https://developers.openai.com/api/docs/guides/reasoning)。

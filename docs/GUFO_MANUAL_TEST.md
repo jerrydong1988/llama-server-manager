@@ -66,6 +66,10 @@ Responses 的 `status=incomplete`、Messages 的 `stop_reason=max_tokens`，
 | Responses | `"reasoning":{"effort":"none"}` |
 | Anthropic Messages | `"thinking":{"type":"disabled"}` |
 
+这三种写法不能跨协议照搬。Responses 应传 `reasoning.effort`（例如上表的
+嵌套对象），不是 Chat 的顶层 `reasoning_effort`；当前 Gufo 会以 400 拒绝
+后者。Manager 保留此校验，不做隐式参数转换。
+
 Chat 还支持 `chat_template_kwargs.enable_thinking=false` 和
 `thinking.type=disabled`；顶层 `think`、`enable_thinking`、
 `reasoning.enabled` 不是该 Gufo Chat 接口的有效替代写法。
