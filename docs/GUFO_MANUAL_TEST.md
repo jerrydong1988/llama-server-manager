@@ -83,6 +83,28 @@ Chat 流式需要 usage 时传 `stream_options.include_usage=true`。
 Messages 首帧 usage 暂为零，使用末帧累计值并加上缓存输入；
 本地 thinking signature 不具备 Claude 云端签名验证能力。
 
+## 工具调用历史与截断
+
+统一 API 的 `POST /v1/chat/completions` 会检查现代工具历史：每个 assistant
+`tool_calls[].id` 必须由且仅由一个 `role:tool` 消息的 `tool_call_id` 应答，
+并在后续非 tool 消息或新一轮生成之前完成。缺失、错配、重复或孤立结果
+返回 `400`、`error.type=invalid_request_error`、`error.code=invalid_tool_history`；
+`error.param` 指向消息/字段位置，例如 `messages[2].tool_call_id`。
+错误请求不会进入模型生成、Token 预检或配额预留，本地拒绝计数加一次。
+
+并行结果允许乱序；失败或取消也可以作为正常工具结果回传。历史工具不必仍在
+当前 tools 列表中。该校验不解释工具参数、不修改历史，不作用于 Token 计数、
+Responses、Messages 或旧式 function_call/function 消息。直连 Gufo 端口
+绕过此 Manager 校验，仍由原生引擎决定是否接受历史。
+
+`tool_choice=required` 或指定某个函数仍受总输出预算约束，不保证调用一定完整。
+128/256 Token 都不是通用安全阈值；关闭思考也不保证较长参数能容纳在小预算内。
+Agent 客户端应把 `finish_reason=length`（以及 Responses incomplete、
+Messages max_tokens）视为未完成，不能把空工具调用列表直接当作任务结束。
+不要执行尚未拼接完整的 SSE 工具参数。需要重试时保留已有执行记录，
+对有副作用的工具做幂等/去重，避免整轮重放导致重复操作；失败/取消结果须用
+原调用 ID 回传。Manager 不自动提高预算、关闭思考或重试工具。
+
 `BUILD.json` 和 `SHA256SUMS.txt` 记录候选程序及引擎身份。测试包不是正式安装版或自动更新渠道。
 首次初始化后，界面内修改会持久保存；再次运行 Start.cmd 不会重置配置。
 如权重被移动，优先在参数页面更新路径；首次初始化前也可编辑 profiles.json。

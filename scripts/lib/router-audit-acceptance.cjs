@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { sleep } = require('./management-client.cjs')
 
-async function routerAuditAcceptance({ routerPort, port, model, upstreamModel, key, authKey = '', gufo, root, id, record }) {
+async function routerAuditAcceptance({ client, routerPort, port, model, upstreamModel, key, authKey = '', gufo, root, id, record }) {
   const evidence = []
   async function request(route, body, { direct = false, method = body ? 'POST' : 'GET', origin } = {}) {
     const res = await fetch(`http://127.0.0.1:${direct ? port : routerPort}${route}`, {
@@ -51,6 +51,7 @@ async function routerAuditAcceptance({ routerPort, port, model, upstreamModel, k
   assert.equal(answer.status, 200)
   assert.equal(answer.headers['access-control-allow-origin'], undefined)
   assert.ok(answer.headers['x-lsm-request-id']); assert.ok(answer.headers['x-request-id'])
+  await require('./tool-history-acceptance.cjs').toolHistoryAcceptance({ client, request, metrics, model, upstreamModel, root, id, record })
   if (gufo) {
     for (const enabled of [true, false]) {
       const body = { model, messages: prompt.messages, max_tokens: 128, temperature: 0,

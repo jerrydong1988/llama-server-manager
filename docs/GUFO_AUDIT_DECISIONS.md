@@ -116,3 +116,36 @@ x-request-id；共享发现端点按该请求头选择请求 ID 头及错误信�
 协议依据：[Prometheus 文本格式的可选 HELP](https://prometheus.io/docs/instrumenting/exposition_formats/)、
 [Anthropic 模型列表](https://platform.claude.com/docs/en/api/typescript/models/list)、
 [OpenAI 推理字段说明](https://developers.openai.com/api/docs/guides/reasoning)。
+
+## 27B 工具调用复核与处理 — 2026-11-03
+
+依据 `guf-api-audit-27b-20261102/reports/REPORT-27B.md`、原始请求与
+Manager 侧六次直连/代理对照复测，用户授权后实现以下范围：
+
+- **A-02：修复 Manager 的 Chat 生成入口。** 新增工具调用与结果的结构配对
+  校验，缺失/重复/错配/孤立结果返回 `400 invalid_tool_history` 和消息位置。
+  在目标许可、预检与配额预留之前拒绝；保持统一计数和账本诊断。
+  同一 assistant 批次 ID 唯一，每个调用恰好一个结果；并行结果允许乱序，
+  已完成的不同轮次不做全局 ID 去重。失败/取消是合法工具结果。
+  不把历史函数名强制绑定到当前 tools，不校验参数含义，也不修改工具载荷。
+  范围限于 `/v1/chat/completions`，不把 Chat 配对规则套到计数接口、
+  Responses 的状态化流程、Messages 或旧式 function_call/function 历史。
+  Gufo 二进制基线保留，直连原生端口不受此网关校验保护。
+- **A-01：保留预算语义，完善工具场景说明。** length/incomplete/max_tokens
+  是截断信号；required/named 不绕过预算。不得把 128 当通用安全阈值，
+  报告自己已有 named + 128 截断反例。关闭思考也不能保证任意长参数完整。
+  客户端应检查完成状态、完整拼接参数，并在重试前处理工具执行去重。
+- **A-03/TP-03：性能观察。** 优先按需挂载工具、缩小候选集合与上下文；
+  不根据不同模型/负载的接受率直接判断 DFlash2 净收益，不调整当前部署参数。
+- **TP-01/TP-02：保留 strict 约束。** Gufo 当前对单个工具参数 schema 编译
+  累计 enum/const 值，超过 1000 拒绝；OpenAI 也有总 enum 值 1000 的限制。
+  additionalProperties=false、全部属性 required 是 strict 规则，不作为故障修复。
+  错误缺少工具/字段路径可由 Gufo 校验器后续完善，本轮不在 Manager 复制编译器。
+- **TP-04/05/06/07/08：保留行为。** 未知工具名已有明确拒绝，能力 null
+  表示未知，计数须同参，draft 指标按协议读取。tool_choice=none 禁止本轮用工具，
+  模型说明没有实时工具不能单独定为故障。报告预算脚本将 named 标为 required，
+  覆盖范围需按实际请求重新标注。
+
+回归包括非法历史的同步/流式拒绝、合法并行结果乱序、错误结果、历史工具移除、
+旧式函数/assistant 文本预填充、计数与其他协议不被拦截，以及 Gufo 两模型和
+llama.cpp 的真实工具往返、拒绝增量与账本 forwarded/outcome/failure 核对。

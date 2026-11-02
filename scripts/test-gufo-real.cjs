@@ -173,7 +173,7 @@ async function main() {
         routes: [{ id: 'llama-audit', enabled: true, model_alias: id, target_instance_id: id, max_concurrent_requests: 1 }],
       } })
       await client.mutate('routes.start')
-      await require('./lib/router-audit-acceptance.cjs').routerAuditAcceptance({ routerPort, port, model: id,
+      await require('./lib/router-audit-acceptance.cjs').routerAuditAcceptance({ client, routerPort, port, model: id,
         upstreamModel: id, key, gufo: false, root: args.root, id, record })
       await client.mutate('routes.stop')
     }

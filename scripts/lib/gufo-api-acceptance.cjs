@@ -116,7 +116,7 @@ async function gufoApiAcceptance({ client, mcp, id, model, port, routerPort, roo
   assert.equal(metrics.decode_calls_total, null); assert.equal(metrics.busy_slots_per_decode, null)
   record('gufo_errors_cancellation_monitoring', { id, metrics })
 
-  await require('./router-audit-acceptance.cjs').routerAuditAcceptance({ routerPort, port, model: publicModel,
+  await require('./router-audit-acceptance.cjs').routerAuditAcceptance({ client, routerPort, port, model: publicModel,
     upstreamModel: model, key, authKey, gufo: true, root, id, record })
 
   const quotaKey = `quota-${id}`

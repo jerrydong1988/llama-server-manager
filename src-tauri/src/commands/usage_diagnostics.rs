@@ -39,6 +39,7 @@ impl UsageFailure {
             "client_cancelled" => "The request was dropped before response delivery completed.",
             "response_error" => "The upstream response could not be read within the router limits.",
             "invalid_request" => "The request did not satisfy the endpoint contract.",
+            "invalid_tool_history" => "Chat tool calls and results are missing, duplicated or incorrectly paired; generation was not forwarded.",
             _ => "The router could not complete this request.",
         };
         Self {

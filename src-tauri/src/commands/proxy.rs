@@ -48,6 +48,8 @@ mod quota;
 #[path = "proxy_errors.rs"]
 mod errors;
 use errors::RoutingFailure;
+#[path = "proxy_tool_history.rs"]
+mod tool_history;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 static PROXY_HTTP_CLIENTS: LazyLock<Mutex<VecDeque<(u64, reqwest::Client)>>> =
@@ -2875,6 +2877,12 @@ async fn proxy_upstream(
             "API key authorization changed",
         );
     }
+    if let Some(error) = tool_history::validate(uri.path(), &body) {
+        return super::proxy_protocol::coded_error_response(
+            api_format, StatusCode::BAD_REQUEST, "validation", "invalid_tool_history",
+            error.message, Some(&error.param),
+        );
+    }
     // Pin quota policy at authentication, and recheck revocation before dispatch.
     let mut quota_config = proxy_config.clone();
     quota_config.api_keys = auth.policy.clone().into_iter().collect();
@@ -3965,6 +3973,7 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 mod tests {
     include!("proxy_gufo_tests.rs");
     include!("proxy_manual_audit_tests.rs");
+    include!("proxy_tool_history_http_tests.rs");
     use std::time::Duration;
     #[tokio::test]
     async fn credentials_revoked_during_upload_never_reach_inference() {

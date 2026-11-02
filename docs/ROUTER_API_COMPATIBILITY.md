@@ -25,6 +25,15 @@ Chat Completions 与 Responses 会保持工具调用、结构化输出、usage �
 不承诺跨多个引擎全局唯一。推理和计数请求另有 `x-lsm-request-id`，
 这是 Manager 请求账本的唯一关联 ID；账本同时记录上游 ID。
 
+`POST /v1/chat/completions` 在占用目标槽位和执行预检前校验现代
+`assistant.tool_calls` 与 `role:tool` 结果的配对。缺失/重复/孤立/错配的
+调用 ID 返回 `400 invalid_tool_history`，`param` 给出消息字段路径；
+账本记为 `forwarded=false`、`outcome=rejected`、`failure.stage=validation`，
+拒绝计数只增加一次。合法并行结果可乱序，工具失败/取消结果也允许回传，
+不校验历史工具是否仍在当前声明中，不解析参数或工具结果正文。
+本规则只用于 Chat 生成：计数端点可计算尚未完成的工具历史，Responses/
+Messages 按各自原生协议处理，旧式 function_call/function 流程保持不变。
+
 ### Anthropic 格式
 
 | 能力 | 端点 |
