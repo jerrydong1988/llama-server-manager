@@ -37,6 +37,7 @@
     "test:frontend-dependency-security": "node scripts/test-frontend-dependency-security.cjs"
   },
   "overrides": {
+    "minimatch": "11.0.3",
     "braces": "$braces",
     "postcss-selector-parser": "7.1.6",
     "zod": "4.6.6"

@@ -60,7 +60,21 @@ async function main() {
   const micromatchRequire = createRequire(globRequire.resolve('micromatch/package.json'))
   assert.equal(fs.realpathSync(micromatchRequire.resolve('braces')), installed)
   const lock = require('../package-lock.json')
+  // GHSA-g3hv-75wg-m249: keep every lint/parser consumer on the bounded matcher.
+  for (const consumer of ['eslint', '@eslint/config-array', '@typescript-eslint/typescript-estree']) {
+    const consumerRequire = createRequire(require.resolve(consumer))
+    assert.equal(consumerRequire('minimatch/package.json').version, '11.0.3', consumer)
+    const { minimatch } = consumerRequire('minimatch')
+    assert.equal(minimatch('src/App.tsx', 'src/**/*.{ts,tsx}'), true, consumer)
+    assert.equal(minimatch('src/icon.png', 'src/**/*.{ts,tsx}'), false, consumer)
+  }
+  const boundedGlob = spawnSync(process.execPath, ['--max-old-space-size=128', __filename, '--minimatch-adversarial'], {
+    cwd: root, encoding: 'utf8', timeout: 10000,
+  })
+  assert.equal(boundedGlob.error, undefined, String(boundedGlob.error))
+  assert.equal(boundedGlob.status, 0, boundedGlob.stderr)
   for (const [location, metadata] of Object.entries(lock.packages)) {
+    if (location.endsWith('node_modules/minimatch')) assert.equal(metadata.version, '11.0.3')
     if (location.endsWith('node_modules/braces')) {
       assert.equal(metadata.link, true, location)
       assert.equal(metadata.resolved, 'vendor/braces', location)
@@ -140,5 +154,12 @@ async function main() {
   console.log('Frontend dependency security regression passed: bounded inputs, installed consumers, globs and CSS controls.')
 }
 
-if (process.argv[2] === '--adversarial') adversarial(process.argv[3])
+if (process.argv[2] === '--minimatch-adversarial') {
+  const { Minimatch } = require('minimatch')
+  const expanded = new Minimatch(Array(24).fill('**/../a/b').join('/'), { optimizationLevel: 2, braceExpandMax: 64 })
+  assert.ok(expanded.set.length > 1 && expanded.set.length <= 64)
+  const normal = new Minimatch('**/../a/b/**/../c/d', { optimizationLevel: 2 })
+  assert.equal(normal.match('../a/b/../c/d'), true)
+  assert.equal(normal.match('x/a/b/y/c/d'), true)
+} else if (process.argv[2] === '--adversarial') adversarial(process.argv[3])
 else main().catch(error => { console.error(error); process.exitCode = 1 })
