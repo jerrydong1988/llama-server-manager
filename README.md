@@ -6,7 +6,11 @@ Llama Server Manager 是面向 `llama-server` 的桌面管理器，覆盖模型�
 
 Llama Server Manager is a desktop manager for `llama-server`, covering model downloads and inventory, engine management, instance lifecycle, cluster workers, unified API routing, performance telemetry, and logs.
 
-[官方网站 / Website](https://docs.cnzone.net/) | [使用文档 / Documentation](https://docs.cnzone.net/docs) | [下载中心 / Download](https://download.cnzone.net/) | [版本说明 / Release Notes](https://docs.cnzone.net/release-notes) | [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest)
+[官方网站 / Website](https://docs.cnzone.net/) | [备用官网（东京） / Mirror (Tokyo)](https://mirror.cnzone.net/) | [使用文档 / Documentation](https://docs.cnzone.net/docs) | [下载中心 / Download](https://download.cnzone.net/) | [版本说明 / Release Notes](https://docs.cnzone.net/release-notes) | [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest)
+
+主站访问缓慢或不可用时，可手动打开[东京备用官网](https://mirror.cnzone.net/)。备用站定期同步经验证的官网内容，不会自动接管主站访问。安装包下载与应用内更新仍使用现有 Cloudflare R2 分发。
+
+If the primary site is slow or unavailable, open the [Tokyo mirror](https://mirror.cnzone.net/) manually. The mirror periodically syncs validated website content; traffic does not switch automatically. Installer downloads and in-app updates still use the existing Cloudflare R2 distribution.
 
 ## 安装与更新 / Install and Update
 
