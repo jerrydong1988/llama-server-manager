@@ -1,6 +1,7 @@
 // Opt-in Windows/ROCm integration campaign. Never uses the default manager root.
 // --bin DIR --root NEW_DIR --engine EXE --model GGUF --mtp GGUF
-// --profile PROFILE_ID [--parallel 4] [--port PORT] [--spec-type ngram-mod,draft-mtp]
+// (--profile PROFILE_ID | --local-validation true) [--parallel 4] [--port PORT]
+// [--spec-type ngram-mod,draft-mtp] (--local-validation true also allows draft-simple)
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -18,7 +19,8 @@ const parallel = Number(args.parallel || 4), context = Number(args['context-budg
 const localValidation = args['local-validation'] === 'true';
 assert.ok(['f16', 'q8_0'].includes(kv));
 const specType = args['spec-type'] || 'draft-mtp';
-assert.ok(['draft-mtp', 'ngram-mod,draft-mtp'].includes(specType));
+assert.ok(['draft-mtp', 'ngram-mod,draft-mtp', 'draft-simple'].includes(specType));
+assert.ok(specType !== 'draft-simple' || localValidation, 'ordinary draft requires isolated local qualification');
 assert.ok([2, 4].includes(parallel));
 for (const key of ['engine', 'model', 'mtp'])
     assert.ok(fs.statSync(args[key]).isFile(), `missing ${key}`);
@@ -27,7 +29,7 @@ fs.mkdirSync(args.root, { recursive: true });
 fs.writeFileSync(path.join(args.root, '.owned-validation'), 'manager-multislot-acceptance-v1');
 const profiles = require('../src-tauri/src/commands/persistence_profiles.json');
 const profile = profiles.find(p => p.id === args.profile);
-assert.ok(profile, '--profile must name an embedded, immutable qualification candidate');
+assert.ok(localValidation || profile, '--profile is required unless --local-validation true');
 const data = path.join(args.root, 'data'), id = 'checkpoint-acceptance', port = Number(args.port || 18771);
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536);
 if (args.fingerprints) {
@@ -211,8 +213,9 @@ async function main() {
     report.manager_sha256 = sha(path.join(args.bin, 'llama-server-manager.exe'));
     report.cli_sha256 = sha(path.join(args.bin, 'lsm.exe'));
     await new Promise((resolve, reject) => { const p = require('node:net').createServer(); p.once('error', reject); p.listen({ host: '127.0.0.1', port, exclusive: true }, () => p.close(resolve)); });
-    assert.equal(sha(args.engine), profile.launcher_sha256);
-    report.profile = profile.id;
+    report.engine_sha256 = sha(args.engine);
+    if (profile) assert.equal(report.engine_sha256, profile.launcher_sha256);
+    report.profile = profile?.id || null;
     report.model_sha256 = sha(args.model);
     report.draft_sha256 = sha(args.mtp);
     await client.call('service.start');
@@ -226,8 +229,8 @@ async function main() {
     const engine = (await client.call('engines.list')).engines.find(e => norm(e.exe) === norm(args.engine));
     assert.ok(engine);
     const probed = await client.mutate('engines.probe', { id: engine.id });
-    assert.equal(probed.capabilities.persistenceProfile, profile.id);
-    record('fixed-build-profile', probed);
+    if (profile) assert.equal(probed.capabilities.persistenceProfile, profile.id);
+    record(profile ? 'fixed-build-profile' : 'unreviewed-local-candidate', probed);
     await update({ name: 'Isolated multi-slot acceptance', engine_id: engine.id, model_path: args.model, draft_model_path: args.mtp,
         host: '127.0.0.1', port, launch_mode: 'managed', ctx_size: context, ctx_size_auto: false,
         cache_type_k: kv, cache_type_v: kv, cache_type_draft_k: kv, cache_type_draft_v: kv, kv_unified: true, kv_unified_mode: 'on',

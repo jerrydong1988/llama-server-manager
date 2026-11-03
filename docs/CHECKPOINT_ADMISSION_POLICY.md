@@ -78,6 +78,15 @@ written, and existing engines are not stopped or switched.
 7. Recheck runtime/model fingerprints and the Windows machine/GPU-driver and
    relevant environment identity before atomically publishing the receipt.
 
+The environment identity includes `LLAMA_KV_ROWS_DISABLE` by presence and exact
+value. Upstream disables KV rows whenever this variable exists, including an
+empty value or `0`. Adding, removing or changing it requires new local validation;
+restoring the original environment restores eligibility for an otherwise valid
+receipt. Windows variable names are compared case-insensitively. Receipt schema
+3 requires older experimental receipts to be revalidated: they cannot prove
+whether this previously ignored variable was present. Reviewed profiles and
+saved-state formats are unchanged; no new engine build is qualified.
+
 The Windows TCP listener owner is checked before each HTTP request; requests
 are rejected when the listener belongs to another local process. Cancellation
 is scoped to its validation ID, including stale requests from a previous attempt.

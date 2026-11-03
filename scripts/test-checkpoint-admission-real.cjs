@@ -19,7 +19,8 @@ if (args.fingerprints) {
 }
 const client = managementClient({ cli: path.join(args.bin, 'lsm.exe'), app: path.join(args.bin, 'llama-server-manager.exe'), data, timeout: 1500000 })
 const cases = JSON.parse(args.cases || '[{"slots":1,"context":4096,"kv":"f16"},{"slots":2,"context":8192,"kv":"f16"},{"slots":4,"context":16384,"kv":"f16"},{"slots":1,"context":8192,"kv":"q8_0"}]')
-const report = { started: new Date().toISOString(), scope: 'Windows/ROCm experimental local checkpoint admission', events: [], manager_sha256: sha256(path.join(args.bin, 'llama-server-manager.exe')) }
+const report = { started: new Date().toISOString(), scope: 'Windows/ROCm experimental local checkpoint admission', events: [], manager_sha256: sha256(path.join(args.bin, 'llama-server-manager.exe')),
+  kv_rows_disable: { present: process.env.LLAMA_KV_ROWS_DISABLE !== undefined, value: process.env.LLAMA_KV_ROWS_DISABLE ?? null } }
 const record = (name, details = {}) => {
   report.events.push({ ...details, name, at: new Date().toISOString() })
   fs.writeFileSync(path.join(args.root, 'report.json'), JSON.stringify(report, null, 2))
@@ -84,6 +85,31 @@ async function main() {
     assert.equal(receipt.old_process_exited, true); assert.equal(receipt.slots.length, shape.slots)
     assert.ok(receipt.slots.every(slot => slot.passed && slot.generated.timings.cache_n > 0))
     record('fresh-process-inference-locally-admitted', { shape, after, receipt, memory })
+    const backendLog = fs.readFileSync(path.join(receipt.evidence_directory, 'before.log'), 'utf8')
+    record('kv-rows-backend-observation', { lines: backendLog.split(/\r?\n/).filter(line => /kv_rows|K\/V rows|fused_kv|ROCm|offloaded .*layers/.test(line)) })
+    if (index === 0 && args['check-environment'] === 'true') {
+      assert.equal(process.env.LLAMA_KV_ROWS_DISABLE, undefined, 'environment campaign starts with the flag absent');
+      const receiptFile = path.join(data, 'kv-checkpoints', '.qualifications', `${receipt.fingerprint.digest}.json`)
+      const originalReceipt = sha256(receiptFile)
+      for (const value of ['0', '1']) {
+        await client.mutate('service.stop'); await sleep(1500)
+        assert.equal(owned().length, 0, 'old isolated controllers and engines must exit')
+        process.env.LLAMA_KV_ROWS_DISABLE = value
+        await client.call('service.start')
+        const changed = await client.call('checkpoints.eligibility', { id })
+        assert.equal(changed.eligible, false, JSON.stringify(changed))
+        assert.equal(changed.qualification, 'needs_validation')
+        assert.equal(sha256(receiptFile), originalReceipt)
+        record('changed-kv-rows-environment-rejects-receipt', { value, changed })
+      }
+      await client.mutate('service.stop'); await sleep(1500)
+      assert.equal(owned().length, 0)
+      delete process.env.LLAMA_KV_ROWS_DISABLE
+      await client.call('service.start')
+      assert.equal((await client.call('checkpoints.eligibility', { id })).eligible, true)
+      assert.equal(sha256(receiptFile), originalReceipt)
+      record('original-environment-restores-receipt-eligibility')
+    }
     await update(id, { ctx_size: config.ctx_size + shape.slots * 1024 })
     const changed = await client.call('checkpoints.eligibility', { id })
     assert.equal(changed.eligible, false); assert.equal(changed.qualification, 'needs_validation')

@@ -45,7 +45,8 @@ let sampler
 const report = { started: new Date().toISOString(), scope: 'native API candidate, not automatic manager qualification',
   mode: args.mode, specType, parallel, context, kv, draftKv, records, predict, cycles, stressPredict, checkpointCount,
   engine: args.engine, model: args.model, draft: args.draft,
-  environment: { GGML_CUDA_NO_PINNED: process.env.GGML_CUDA_NO_PINNED || null, LLAMA_TRACE: process.env.LLAMA_TRACE || null }, events: [], owned_pids: [], stop_verifications: [] }
+  environment: { GGML_CUDA_NO_PINNED: process.env.GGML_CUDA_NO_PINNED || null, LLAMA_TRACE: process.env.LLAMA_TRACE || null,
+    LLAMA_KV_ROWS_DISABLE: { present: process.env.LLAMA_KV_ROWS_DISABLE !== undefined, value: process.env.LLAMA_KV_ROWS_DISABLE ?? null } }, events: [], owned_pids: [], stop_verifications: [] }
 const logPath = path.join(data, 'configs', 'logs', `${id}.log`)
 const record = (name, details = {}) => {
   report.events.push({ ...details, name, at: new Date().toISOString() })
@@ -124,9 +125,10 @@ async function stop(label) {
     }
   }
 }
-const sentinel = slot => `Slot ${slot}. Write the result of 17 times 23 as 391, then repeat 391 separated by spaces. Answer: 391 391 391 `
+const slotMarker = slot => String(17 * (23 + slot))
+const sentinel = slot => `Slot ${slot}. Write the result of 17 times ${23 + slot} as ${slotMarker(slot)}, then repeat ${slotMarker(slot)} separated by spaces. Answer: ${slotMarker(slot)} ${slotMarker(slot)} ${slotMarker(slot)} `
 const longPrompt = (slot, revised = false, rewriteAfter = records - 20) => 'Reference records for a multiplication exercise.\n' +
-  Array.from({ length: records }, (_, i) => `Record ${i}: ${revised && i > rewriteAfter ? 'nineteen times twenty-three equals 437' : 'seventeen times twenty-three equals 391'}.\n`).join('') +
+  Array.from({ length: records }, (_, i) => `Record ${i}: ${revised && i > rewriteAfter ? 'nineteen times twenty-three equals 437' : slot === 0 ? 'seventeen times twenty-three equals 391' : `seventeen times ${23 + slot} equals ${slotMarker(slot)}`}.\n`).join('') +
   (revised ? `Slot ${slot}. Use the result in the last record. Repeat that result separated by spaces. Answer: 437 437 437 ` : sentinel(slot))
 const immutable = new Map()
 const rollbackPrefix = [...Array(15).fill('391'), '397'].join(' ')
@@ -136,7 +138,7 @@ async function inferenceEverySlot(references, name) {
   const results = []
   for (let slot = 0; slot < parallel; slot++) {
     const result = await completion(slot, sentinel(slot))
-    assertInference(references[slot], result, { draft: hasDraft, draftCounts: args.mode === 'mtp-ngram' ? 'rate' : 'exact' })
+    assertInference(references[slot], result, { draft: hasDraft, marker: slotMarker(slot), draftCounts: args.mode === 'mtp-ngram' ? 'rate' : 'exact' })
     results.push({ slot, content: result.content, tokens: result.tokens, timings: result.timings })
   }
   record(name, { results, monitoring: (await client.call('instances.health', { id })).monitoring })
@@ -191,7 +193,7 @@ async function main() {
   record('cold-reference-for-rewrite-before-checkpoint', { result: earlyRewriteReference })
   for (let slot = 0; slot < parallel; slot++) {
     references.push(await completion(slot, sentinel(slot)))
-    assert.ok(references[slot].content.includes('391'))
+    assert.ok(references[slot].content.includes(slotMarker(slot)))
     const prompt = longPrompt(slot), prefill = await completion(slot, prompt, 24)
     assert.ok(prefill.timings.prompt_n > 1000)
     const filename = `good-${slot}.bin`, saved = await request(`/slots/${slot}?action=save`, { filename })
@@ -207,12 +209,22 @@ async function main() {
     record('saved-complete-native-state', { slot, saved, format, sha256: immutable.get(file),
       speculative_nonempty: (format.liveDraft?.speculative.bytes || 0) > 0 })
   }
+  // Deny an overwrite of an existing, test-owned good cache. This covers Windows
+  // read-only rejection, not mid-write disk-full, atomic replacement or crashes.
+  const protectedState = checkpoints[0]
+  fs.chmodSync(protectedState.file, 0o444)
+  try {
+    const rejected = await request(`/slots/${protectedState.slot}?action=save`, { filename: protectedState.filename }, true)
+    assert.notEqual(rejected.status, 200, 'read-only cache overwrite must fail')
+    assertImmutable()
+    record('denied-native-overwrite-preserves-old-cache', { result: rejected, sha256: immutable.get(protectedState.file) })
+  } finally { fs.chmodSync(protectedState.file, 0o666) }
   await stop('baseline')
   const secondPid = await start('restore'); assert.notEqual(secondPid, firstPid)
   for (const state of checkpoints) assertFullRead(state.saved, await request(`/slots/${state.slot}?action=restore`, { filename: state.filename }))
   for (const state of checkpoints) {
     const restored = await completion(state.slot, state.continuation)
-    assertInference(lives[state.slot], restored, { draft: hasDraft, reuse: true, minimumReuse: state.saved.n_saved })
+    assertInference(lives[state.slot], restored, { draft: hasDraft, marker: slotMarker(state.slot), reuse: true, minimumReuse: state.saved.n_saved })
     record('fresh-process-restored-inference', { slot: state.slot, old_pid: firstPid, new_pid: secondPid, live: lives[state.slot], restored })
   }
   const rewritten = await completion(0, longPrompt(0, true))
@@ -284,8 +296,10 @@ async function main() {
   const finalPid = await start('final-recovery'); assert.notEqual(finalPid, pressurePid)
   for (const state of checkpoints) {
     assertFullRead(state.saved, await request(`/slots/${state.slot}?action=restore`, { filename: state.filename }))
+  }
+  for (const state of checkpoints) {
     const restored = await completion(state.slot, state.continuation)
-    assertInference(lives[state.slot], restored, { draft: hasDraft, reuse: true, minimumReuse: state.saved.n_saved })
+    assertInference(lives[state.slot], restored, { draft: hasDraft, marker: slotMarker(state.slot), reuse: true, minimumReuse: state.saved.n_saved })
   }
   record('old-checkpoints-recover-in-new-process-after-faults', { pid: finalPid }); assertImmutable()
   if (args.mode === 'mtp-ngram') {
