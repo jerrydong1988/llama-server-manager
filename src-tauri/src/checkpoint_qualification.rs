@@ -225,25 +225,36 @@ fn hardware_identity() -> Result<String, String> {
     if !result.status.success() || result.stdout.is_empty() || result.stdout.len() > 65536 {
         return Err("GPU/driver identity is unavailable".into());
     }
-    let environment = std::env::vars()
+    hardware_environment_digest(&result.stdout, std::env::vars())
+}
+
+fn hardware_environment_digest(
+    hardware: &[u8],
+    variables: impl IntoIterator<Item = (String, String)>,
+) -> Result<String, String> {
+    let environment = variables
+        .into_iter()
         .map(|(key, value)| (key.to_ascii_uppercase(), value))
         .filter(|(key, _)| {
-            [
-                "GGML_",
-                "HIP_",
-                "HIPBLASLT_",
-                "ROCR_",
-                "ROCBLAS_",
-                "TENSILE_",
-                "CUDA_",
-                "LLAMA_ARG_",
-            ]
-            .iter()
-            .any(|prefix| key.starts_with(prefix))
+            // Upstream tests presence, so even an empty value or "0" disables KV rows.
+            // Retain the exact value and distinguish an absent variable from a present one.
+            key == "LLAMA_KV_ROWS_DISABLE"
+                || [
+                    "GGML_",
+                    "HIP_",
+                    "HIPBLASLT_",
+                    "ROCR_",
+                    "ROCBLAS_",
+                    "TENSILE_",
+                    "CUDA_",
+                    "LLAMA_ARG_",
+                ]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut digest = Sha256::new();
-    digest.update(result.stdout);
+    digest.update(hardware);
     digest.update(serde_json::to_vec(&environment).map_err(|e| e.to_string())?);
     Ok(format!("{:x}", digest.finalize()))
 }
@@ -1210,6 +1221,78 @@ fn run_pair(
 mod tests {
     use super::*;
     use crate::checkpoint::{build_checkpoint_fingerprint, FingerprintMaterials};
+
+    #[test]
+    fn kv_rows_environment_invalidates_qualification_for_every_presence_or_value_change() {
+        let identity = |value: Option<&str>| {
+            hardware_environment_digest(
+                b"machine-driver",
+                value.map(|value| ("LLAMA_KV_ROWS_DISABLE".into(), value.into())),
+            )
+            .unwrap()
+        };
+        let absent = identity(None);
+        // No-flag receipts retain their previous digest; this is not a blanket migration.
+        let mut previous = Sha256::new();
+        previous.update(b"machine-driver");
+        previous.update(b"{}");
+        assert_eq!(absent, format!("{:x}", previous.finalize()));
+        let identities = [
+            absent.clone(),
+            identity(Some("")),
+            identity(Some("0")),
+            identity(Some("1")),
+        ];
+        for (i, before) in identities.iter().enumerate() {
+            for (j, after) in identities.iter().enumerate() {
+                assert_eq!(before == after, i == j);
+            }
+        }
+        let fingerprint = fingerprint(&config());
+        let receipt = Receipt {
+            schema: SCHEMA,
+            fingerprint: fingerprint.clone(),
+            hardware: absent,
+            completed_at: "2026-11-03T00:00:00Z".into(),
+            old_process_exited: true,
+            processes: vec![json!({"exited":true}); 4],
+            effective_slots: json!({}),
+            slots: (0..4).map(|id| json!({"id":id,"passed":true})).collect(),
+            evidence_directory: "isolated-evidence".into(),
+        };
+        assert!(matches(&receipt, &fingerprint, &identity(None), 4));
+        for value in ["", "0", "1"] {
+            assert!(!matches(&receipt, &fingerprint, &identity(Some(value)), 4));
+        }
+    }
+
+    #[test]
+    fn qualification_environment_is_order_independent_and_windows_case_insensitive() {
+        let variables = vec![
+            ("ggml_cuda_no_pinned".into(), "1".into()),
+            ("llama_kv_rows_disable".into(), "0".into()),
+        ];
+        let expected = hardware_environment_digest(b"gpu", variables.clone()).unwrap();
+        let mut reordered = variables;
+        reordered.reverse();
+        reordered
+            .iter_mut()
+            .for_each(|(key, _)| *key = key.to_ascii_uppercase());
+        reordered.push(("UNRELATED_TEST_SETTING".into(), "ignored".into()));
+        assert_eq!(
+            expected,
+            hardware_environment_digest(b"gpu", reordered.clone()).unwrap()
+        );
+        assert_ne!(
+            expected,
+            hardware_environment_digest(b"new-driver", reordered).unwrap()
+        );
+        assert_ne!(
+            expected,
+            hardware_environment_digest(b"gpu", [("LLAMA_KV_ROWS_DISABLE".into(), "0".into())])
+                .unwrap()
+        );
+    }
 
     fn config() -> InstanceConfig {
         InstanceConfig {
