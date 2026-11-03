@@ -45,10 +45,13 @@ LLAMA_KV_ROWS_DISABLE now participates in local qualification's
 hardware/environment digest. Absent, empty, 0, and 1 are distinct.
 Upstream checks presence, so 0 is not an enabled-mode control.
 Windows key case and enumeration order do not change identity; unrelated
-environment variables remain excluded. No-flag receipts preserve the old digest.
+environment variables remain excluded. Receipt schema 3 rejects older experimental
+receipts even if the new environment digest matches: the old receipt cannot prove
+whether the formerly ignored variable was present. Reviewed profiles and saved
+cache formats remain unchanged.
 
 Rust tests cover receipt rejection, presence/value differences, key case,
-ordering, retained existing prefixes and hardware changes. No saved-state
+ordering, legacy receipt rejection, retained existing prefixes and hardware changes. No saved-state
 format or supported model/build changes.
 
 The opt-in admission harness can restart isolated controllers with 0 and 1
@@ -142,6 +145,11 @@ Evidence is under C:/Users/Jerry/Documents/Codex/2026-11-03/b12061-checkpoints.
 It includes official API responses, archive verification, the local bundle
 manifest, loaded modules, test-manager hashes, native logs and reports.
 Unsuccessful admission attempts remain recorded.
+
+The native campaigns used the listed test-manager binary before the final
+receipt-schema migration. They did not enter automatic qualification. The schema
+migration is covered by the subsequent Rust receipt tests, not presented as an
+additional GPU acceptance run.
 
 Local checks passed: production build, release checks including 192 browser
 tests, 662 Rust tests with four ignored, Clippy with warnings denied, seven

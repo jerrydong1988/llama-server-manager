@@ -14,7 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SCHEMA: u32 = 2;
+// Older receipts did not bind LLAMA_KV_ROWS_DISABLE and cannot prove its absence.
+const SCHEMA: u32 = 3;
 static ACTIVE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1232,7 +1233,8 @@ mod tests {
             .unwrap()
         };
         let absent = identity(None);
-        // No-flag receipts retain their previous digest; this is not a blanket migration.
+        // The no-flag digest remains stable; schema migration rejects old receipts
+        // because they cannot prove whether this previously ignored flag was present.
         let mut previous = Sha256::new();
         previous.update(b"machine-driver");
         previous.update(b"{}");
@@ -1261,6 +1263,9 @@ mod tests {
             evidence_directory: "isolated-evidence".into(),
         };
         assert!(matches(&receipt, &fingerprint, &identity(None), 4));
+        let mut legacy = receipt.clone();
+        legacy.schema = 2;
+        assert!(!matches(&legacy, &fingerprint, &identity(None), 4));
         for value in ["", "0", "1"] {
             assert!(!matches(&receipt, &fingerprint, &identity(Some(value)), 4));
         }
