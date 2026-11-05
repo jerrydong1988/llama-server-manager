@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, FolderOpen } from 'lucide-react'
 import { useAppStore } from '../../store'
 import type { GufoConfig, Instance, InstanceConfig } from '../../store/types'
 import { useConfigDraft } from './useConfigDraft'
@@ -7,6 +7,9 @@ import { useI18n } from '../../i18n'
 import { gufoCopy } from '../../i18n/gufoCopy'
 import { resolveEffectiveEngine } from '../../store/engineResolution'
 import { Button, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
+import { ModelAssetPicker } from './ModelAssetPicker'
+
+type GufoPathField = 'model_path' | 'mmproj_path' | 'mtp_model' | 'dflash_model'
 
 function GufoSection({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return <section aria-labelledby={id} className="grid min-w-0 gap-4 p-5 sm:p-6 lg:grid-cols-[10rem_minmax(0,1fr)] lg:gap-8">
@@ -26,7 +29,11 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [command, setCommand] = useState('')
+  const [pickerTarget, setPickerTarget] = useState<GufoPathField | null>(null)
+  const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const saving = draft.saveInFlightRef
+  const models = useAppStore(state => state.models)
+  const modelDirs = useAppStore(state => state.modelDirs)
   const engines = useAppStore(state => state.engines)
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
   const engine = resolveEffectiveEngine(local, engines, defaultEngineId)
@@ -38,6 +45,26 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
     setLocal(current => current ? ({ ...current, [key]: value, explicit_overrides: [] }) : current)
   }
   const gufo = <K extends keyof GufoConfig>(key: K, value: GufoConfig[K]) => set('gufo', { ...local.gufo, [key]: value })
+  const pathLabels: Record<GufoPathField, string> = {
+    model_path: copy.model, mmproj_path: copy.projector, mtp_model: copy.mtp, dflash_model: copy.dflash,
+  }
+  const setPath = (key: GufoPathField, value: string) => {
+    if (key === 'model_path' || key === 'mmproj_path') set(key, value)
+    else gufo(key, value)
+  }
+  const pathField = (key: GufoPathField) => {
+    const value = key === 'model_path' || key === 'mmproj_path' ? local[key] : local.gufo[key]
+    const label = pathLabels[key]
+    const chooseLabel = `${copy.chooseFile}: ${label}`
+    return <div className="min-w-0 space-y-2 text-sm">
+      <label htmlFor={`${id}-${key}`} className="block font-medium leading-5">{label}</label>
+      <div className="flex min-w-0 items-center gap-2">
+        <TextInput id={`${id}-${key}`} value={value} title={value} onChange={event => setPath(key, event.target.value)} />
+        <Button size="icon" className="h-11 w-11 shrink-0" title={chooseLabel} aria-label={chooseLabel}
+          disabled={busy || running} onClick={() => setPickerTarget(key)}><FolderOpen className="h-4 w-4" aria-hidden="true" /></Button>
+      </div>
+    </div>
+  }
   const field = (key: keyof InstanceConfig, label: string, numeric = false) => (
     <label key={key} htmlFor={`${id}-${key}`} className="flex min-w-0 flex-col gap-2 text-sm">
       <span className="font-medium leading-5">{label}</span>
@@ -114,7 +141,7 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
     <Surface>
       <fieldset disabled={busy || running} className="min-w-0 divide-y divide-slate-200 disabled:opacity-60 dark:divide-slate-800">
         <GufoSection id={`${id}-files`} title={copy.filesSection}>
-          {field('model_path', copy.model)}{field('mmproj_path', copy.projector)}
+          {pathField('model_path')}{pathField('mmproj_path')}
         </GufoSection>
         <GufoSection id={`${id}-service`} title={copy.serviceSection}>
           <div className="grid items-end gap-4 sm:grid-cols-3">
@@ -130,8 +157,8 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
             {select('speculative', copy.speculative, [['off', copy.off], local.gufo.model_family === 'qwen38_27b' ? ['dflash2', 'DFlash2'] : ['mtp', 'MTP']])}
             {local.gufo.speculative !== 'off' && gufoField('draft_tokens', copy.drafts, true)}
           </div>
-          {local.gufo.speculative === 'mtp' && gufoField('mtp_model', copy.mtp)}
-          {local.gufo.speculative === 'dflash2' && gufoField('dflash_model', copy.dflash)}
+          {local.gufo.speculative === 'mtp' && pathField('mtp_model')}
+          {local.gufo.speculative === 'dflash2' && pathField('dflash_model')}
         </GufoSection>
         <GufoSection id={`${id}-thinking`} title={copy.thinkingSection}>
           <div className="grid items-end gap-4 sm:grid-cols-3">
@@ -178,5 +205,24 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
       </div>
     </Surface>
     {command && <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-100 p-4 text-xs dark:bg-slate-900">{command}</pre>}
+    {pickerTarget && <ModelAssetPicker
+      target={pickerTarget === 'model_path' ? 'model' : pickerTarget === 'mmproj_path' ? 'mmproj' : 'draft'}
+      models={models.filter(model => !model.is_shard && /\.gguf$/i.test(model.path))}
+      modelDirs={modelDirs} collapsed={pickerCollapsed} description={pathLabels[pickerTarget]} emptyLabel={copy.noFiles}
+      onToggle={path => setPickerCollapsed(current => {
+        const next = new Set(current)
+        if (next.has(path)) next.delete(path)
+        else next.add(path)
+        return next
+      })}
+      onPick={path => {
+        setPickerTarget(null)
+        const current = useAppStore.getState().instances.find(item => item.id === instance.id)
+        if (saving.current) return
+        if (current?.status === 'running' || !current) { setError(copy.running); return }
+        setPath(pickerTarget, path)
+      }}
+      onClose={() => setPickerTarget(null)}
+    />}
   </div>
 }
