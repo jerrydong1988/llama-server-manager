@@ -1,6 +1,7 @@
 const en = {
   title: 'Gufo configuration', description: 'Configure a local Gufo LLM instance. Stop the instance before editing.',
   scope: 'Single session · Supports the unified API router. Gufo manages its own cache; llama.cpp checkpoint actions do not apply.',
+  filesSection: 'Model files', serviceSection: 'Service & limits', speculationSection: 'Speculative decoding', thinkingSection: 'Thinking controls',
   model: 'Model GGUF (first shard)', projector: 'Vision projector GGUF', alias: 'API model name',
   port: 'Local port', context: 'Context tokens', maxTokens: 'Maximum output tokens (−1: unlimited)',
   family: 'Model family', speculative: 'Speculative decoding', mtp: 'Matching MTP sidecar', dflash: 'Matching DFlash2 draft',
@@ -19,6 +20,7 @@ const en = {
 const zh: typeof en = {
   title: 'Gufo 参数配置', description: '配置本地 Gufo 模型实例；修改前请先停止实例。',
   scope: '单会话 · 支持统一 API 路由。Gufo 管理自己的缓存，不使用 llama.cpp 检查点操作。',
+  filesSection: '模型文件', serviceSection: '服务与容量', speculationSection: '推测解码', thinkingSection: '思考控制',
   model: '主模型 GGUF（第一分片）', projector: '视觉投影 GGUF', alias: 'API 模型名称',
   port: '本地端口', context: '上下文 Token 数', maxTokens: '最大输出 Token 数（−1：不限）',
   family: '模型家族', speculative: '推测解码', mtp: '匹配的 MTP 模型', dflash: '匹配的 DFlash2 草稿',
