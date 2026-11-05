@@ -53,6 +53,7 @@ pub struct GufoConfig {
     pub sessions: u32,
     pub think: String,
     pub reasoning_effort: String,
+    pub reasoning_budget: i64,
     pub preserve_thinking: bool,
     pub cache_ram_mode: String,
     pub cache_ram_gib: u32,
@@ -72,6 +73,7 @@ impl Default for GufoConfig {
             sessions: 1,
             think: "on".into(),
             reasoning_effort: "auto".into(),
+            reasoning_budget: -1,
             preserve_thinking: true,
             cache_ram_mode: "auto".into(),
             cache_ram_gib: 4,
@@ -199,6 +201,12 @@ pub fn prepare(
         ));
     }
     let g = &config.gufo;
+    // Keep JSON numbers lossless through the JavaScript configuration editor.
+    if !(-1..=9_007_199_254_740_991).contains(&g.reasoning_budget) {
+        return Err(invalid(
+            "Gufo reasoning budget must be an integer from -1 to 9007199254740991",
+        ));
+    }
     if !matches!(g.model_family.as_str(), "qwen38_flash_next" | "qwen38_27b")
         || !matches!(g.speculative.as_str(), "off" | "mtp" | "dflash2")
         || (g.speculative == "mtp" && g.model_family != "qwen38_flash_next")
@@ -301,6 +309,9 @@ pub fn prepare(
     if g.think != "off" && g.reasoning_effort != "auto" {
         command.extend(["--reasoning-effort".into(), g.reasoning_effort.clone()]);
     }
+    if g.reasoning_budget >= 0 {
+        command.extend(["--reasoning-budget".into(), g.reasoning_budget.to_string()]);
+    }
     if !config.mmproj_path.is_empty() {
         command.extend(["--mmproj".into(), config.mmproj_path.clone()]);
     }
@@ -397,6 +408,71 @@ mod tests {
             EngineKind::LlamaCpp
         );
         assert!(serde_json::from_str::<GufoConfig>("{\"unknown\":true}").is_err());
+    }
+
+    #[test]
+    fn reasoning_budget_migrates_old_configs_and_requires_an_integer() {
+        let old: GufoConfig =
+            serde_json::from_str(r#"{"think":"on","reasoning_effort":"high"}"#).unwrap();
+        assert_eq!(old.reasoning_budget, -1);
+        for value in [-1, 0, 4096] {
+            let config = GufoConfig {
+                reasoning_budget: value,
+                ..Default::default()
+            };
+            let restored: GufoConfig =
+                serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+            assert_eq!(restored, config);
+        }
+        for value in ["null", "1.5", "\"1024\""] {
+            assert!(
+                serde_json::from_str::<GufoConfig>(&format!(r#"{{"reasoning_budget":{value}}}"#))
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reasoning_budget_launch_handles_unlimited_zero_and_limits_independently_of_llama() {
+        let root = std::env::temp_dir().join(format!("lsm-gufo-budget-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let model = root.join("model.gguf");
+        std::fs::write(&model, b"GGUF").unwrap();
+        let mut config = InstanceConfig {
+            id: "gufo-budget".into(),
+            engine_kind: EngineKind::Gufo,
+            model_path: model.to_string_lossy().into_owned(),
+            ctx_size: 32768,
+            reasoning_budget: "777".into(), // llama.cpp's separate field must not leak.
+            ..Default::default()
+        };
+        for thinking in ["on", "off", "auto"] {
+            config.gufo.think = thinking.into();
+            for budget in [-1, 0, 1, 4096, 9_007_199_254_740_991] {
+                config.gufo.reasoning_budget = budget;
+                let (normalized, command) = prepare(config.clone(), "gufo.exe").unwrap();
+                assert_eq!(normalized.gufo.reasoning_budget, budget);
+                let values: Vec<_> = command
+                    .windows(2)
+                    .filter(|p| p[0] == "--reasoning-budget")
+                    .map(|p| p[1].as_str())
+                    .collect();
+                if budget == -1 {
+                    assert!(values.is_empty(), "legacy defaults must not add a flag");
+                } else {
+                    assert_eq!(values, vec![budget.to_string()]);
+                }
+            }
+        }
+        for budget in [-2, 9_007_199_254_740_992, i64::MAX] {
+            config.gufo.reasoning_budget = budget;
+            assert!(prepare(config.clone(), "gufo.exe")
+                .unwrap_err()
+                .to_string()
+                .contains("reasoning budget"));
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

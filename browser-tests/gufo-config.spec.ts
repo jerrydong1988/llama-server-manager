@@ -8,6 +8,8 @@ test('a failed Gufo save does not roll back a newer instance update', async ({ p
   await page.goto('/?scenario=gufo-delayed-config-save')
   await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
   await page.getByLabel('启动等待上限（秒）').fill('900')
+  await expect(page.getByLabel('思考预算（Token 数）', { exact: true })).toHaveValue('-1')
+  await page.getByLabel('思考预算（Token 数）', { exact: true }).fill('4096')
   await page.getByRole('button', { name: '校验并保存' }).click()
   await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'save_config').length)).toBe(1)
   await page.evaluate(async () => {
@@ -26,6 +28,7 @@ test('a failed Gufo save does not roll back a newer instance update', async ({ p
   })).toBe('newer-alias')
   await expect(page.getByLabel('API 模型名称')).toHaveValue('newer-alias')
   await expect(page.getByLabel('启动等待上限（秒）')).toHaveValue('900')
+  await expect(page.getByLabel('思考预算（Token 数）', { exact: true })).toHaveValue('4096')
 })
 
 test('Gufo config exposes supported fields, persists the draft, and separates cache policy', async ({ page }) => {
@@ -45,13 +48,44 @@ test('Gufo config exposes supported fields, persists the draft, and separates ca
   await page.getByRole('combobox', { name: '内存缓存', exact: true }).selectOption('off')
   await page.getByLabel('启用磁盘缓存').check()
   await page.getByLabel('启动等待上限（秒）').fill('900')
+  await page.getByLabel('思考预算（Token 数）', { exact: true }).fill('4096')
   await page.getByRole('button', { name: '校验并保存' }).click()
   await expect(page.getByRole('status')).toContainText('配置已保存')
   const saved = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])
   expect(saved.engine_kind).toBe('gufo')
-  expect(saved.gufo).toMatchObject({ model_family: 'qwen38_27b', speculative: 'dflash2', cache_ram_mode: 'off', cache_disk: true, startup_timeout_seconds: 900 })
+  expect(saved.gufo).toMatchObject({ model_family: 'qwen38_27b', speculative: 'dflash2', cache_ram_mode: 'off', cache_disk: true, startup_timeout_seconds: 900, reasoning_budget: 4096 })
+  const preview = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.find(call => call.command === 'generate_server_command'))
+  expect(preview?.payload).toMatchObject({ config: { gufo: { reasoning_budget: 4096 } } })
+  await page.getByRole('button', { name: '返回实例管理', exact: true }).click()
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+  await expect(page.getByLabel('思考预算（Token 数）', { exact: true })).toHaveValue('4096')
   await page.setViewportSize({ width: 900, height: 900 })
   await expect(page.getByLabel('主模型 GGUF（第一分片）')).toBeVisible()
   await page.screenshot({ path: 'test-results/gufo-config.png', fullPage: true })
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
+})
+
+test('Gufo reasoning budget rejects invalid input and preserves zero and unlimited', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=gufo')
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+  const budget = page.getByLabel('思考预算（Token 数）', { exact: true })
+  await expect(budget).toHaveValue('-1')
+  for (const value of ['', '-2', '1.5', '9007199254740992']) {
+    await budget.fill(value)
+    for (const button of ['预览命令', '校验并保存']) {
+      await page.getByRole('button', { name: button, exact: true }).click()
+      await expect(page.getByRole('alert')).toContainText('思考预算请输入')
+    }
+  }
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => ['save_config', 'generate_server_command'].includes(call.command)).length)).toBe(0)
+  for (const value of ['0', '-1']) {
+    await budget.fill(value)
+    await page.getByRole('button', { name: '校验并保存' }).click()
+    await expect(page.getByRole('status')).toContainText('配置已保存')
+    expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].gufo.reasoning_budget)).toBe(Number(value))
+  }
 })

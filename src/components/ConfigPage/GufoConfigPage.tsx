@@ -23,6 +23,7 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
   const engine = resolveEffectiveEngine(local, engines, defaultEngineId)
   const running = instance.status === 'running'
+  const reasoningBudget = local.gufo.reasoning_budget ?? -1
   const set = <K extends keyof InstanceConfig>(key: K, value: InstanceConfig[K]) => {
     setSaved(false); setCommand(''); setError('')
     draft.editRevisionRef.current += 1
@@ -62,6 +63,7 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
   const validate = async (persist: boolean) => {
     if (saving.current || running) return
     if (!engine) { setError(copy.missing); return }
+    if (!Number.isSafeInteger(reasoningBudget) || reasoningBudget < -1) { setError(copy.reasoningBudgetInvalid); return }
     saving.current = true; draft.setSaveStage('validating'); setBusy(true); setError(''); setSaved(false)
     const store = useAppStore.getState()
     const previous = store.instances.find(item => item.id === instance.id)?.config
@@ -109,6 +111,13 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
           {local.gufo.speculative !== 'off' && gufoField('draft_tokens', copy.drafts, true)}
           {select('think', copy.think, [['auto', copy.auto], ['on', copy.on], ['off', copy.off]])}
           {select('reasoning_effort', copy.effort, ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => [value, value]))}
+          <div className="space-y-1 text-sm">
+            <label htmlFor={`${id}-reasoning-budget`}>{copy.reasoningBudget}</label>
+            <TextInput id={`${id}-reasoning-budget`} type="number" min={-1} max={Number.MAX_SAFE_INTEGER} step={1}
+              aria-describedby={`${id}-reasoning-budget-hint`} value={Number.isNaN(reasoningBudget) ? '' : reasoningBudget}
+              onChange={event => gufo('reasoning_budget', event.target.value === '' ? Number.NaN : Number(event.target.value))} />
+            <p id={`${id}-reasoning-budget-hint`} className="text-sm text-slate-600 dark:text-slate-300">{copy.reasoningBudgetHint}</p>
+          </div>
           {checkbox('preserve_thinking', copy.preserve)}
           {gufoField('startup_timeout_seconds', copy.timeout, true)}
         </div>
