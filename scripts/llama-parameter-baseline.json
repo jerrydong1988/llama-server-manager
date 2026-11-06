@@ -1,18 +1,18 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-10-29",
+  "verifiedAt": "2026-11-06",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.8.0",
-  "upstreamCommit": "8642541b255bfb5dc39cd351a178be09013a55d6",
-  "upstreamMasterChecked": "8ab29faec401829db0e617f40af2c942f4a9eaab",
+  "upstreamRelease": "v0.9.0",
+  "upstreamCommit": "cd959bae99ff4bed22bef2604f45241c09bbb8c8",
+  "upstreamMasterChecked": "67107ac34f62882d8b53ea41ad68010ea635b9be",
   "releaseSnapshot": {
-    "ref": "v0.8.0",
-    "commit": "8642541b255bfb5dc39cd351a178be09013a55d6",
+    "ref": "v0.9.0",
+    "commit": "cd959bae99ff4bed22bef2604f45241c09bbb8c8",
     "parameterCount": 261,
     "snapshotHash": "449a1c51628ce54dd177744fcea461a2cf7bd1908ca1a0d1f899f79a0d571a45",
     "parameters": [
@@ -2265,6 +2265,7 @@
     "checkpointMemoryArchitectures": {
       "hybrid": [
         "bailingmoe3",
+        "clover_moe",
         "deepseek4",
         "deepseek41",
         "falcon-h1",
@@ -2276,6 +2277,7 @@
         "lfm2",
         "lfm2moe",
         "lfm3",
+        "metis16",
         "minimax-01",
         "nemotron_h",
         "nemotron_h_moe",
@@ -2297,7 +2299,7 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "8ab29faec401829db0e617f40af2c942f4a9eaab",
+    "commit": "67107ac34f62882d8b53ea41ad68010ea635b9be",
     "parameterCount": 261,
     "snapshotHash": "449a1c51628ce54dd177744fcea461a2cf7bd1908ca1a0d1f899f79a0d571a45",
     "parameters": [
@@ -4550,6 +4552,7 @@
     "checkpointMemoryArchitectures": {
       "hybrid": [
         "bailingmoe3",
+        "clover_moe",
         "deepseek4",
         "deepseek41",
         "falcon-h1",
@@ -4561,6 +4564,7 @@
         "lfm2",
         "lfm2moe",
         "lfm3",
+        "metis16",
         "minimax-01",
         "nemotron_h",
         "nemotron_h_moe",
