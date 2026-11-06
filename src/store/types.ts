@@ -59,7 +59,7 @@ export interface ModelDeletionResult {
 export type EngineKind = 'llama_cpp' | 'gufo'
 export interface GufoConfig {
   model_family: string; speculative: string; mtp_model: string; dflash_model: string;
-  draft_tokens: number; sessions: number; think: string; reasoning_effort: string; preserve_thinking: boolean;
+  draft_tokens: number; sessions: number; think: string; reasoning_effort: string; reasoning_budget: number; preserve_thinking: boolean;
   cache_ram_mode: string; cache_ram_gib: number; cache_disk: boolean; cache_disk_gib: number; startup_timeout_seconds: number;
 }
 
