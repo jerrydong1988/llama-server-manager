@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LlamaServerManager",
-  "version": "2.9.55",
+  "version": "2.9.56",
   "identifier": "com.llama.manager",
   "build": {
     "frontendDist": "../dist",

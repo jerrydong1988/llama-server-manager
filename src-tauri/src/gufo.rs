@@ -425,10 +425,10 @@ mod tests {
             assert_eq!(restored, config);
         }
         for value in ["null", "1.5", "\"1024\""] {
-            assert!(
-                serde_json::from_str::<GufoConfig>(&format!(r#"{{"reasoning_budget":{value}}}"#))
-                    .is_err()
-            );
+            assert!(serde_json::from_str::<GufoConfig>(&format!(
+                r#"{{"reasoning_budget":{value}}}"#
+            ))
+            .is_err());
         }
     }
 
