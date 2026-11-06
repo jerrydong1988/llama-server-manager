@@ -1,10 +1,10 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.56 · Windows / macOS / Linux
+> v2.9.57 · Windows / macOS / Linux
 
-本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
+本说明介绍 llama.cpp 与 Windows Gufo 的模型、引擎、实例、路由、监控、后台任务和存储维护。应用内“使用说明”随安装包离线提供本文件和图片；更新应用后才会获得新版内置手册。截图使用隔离的演示数据。
 
-This guide follows the real workflow from models and engines to instances, routing, and monitoring. The in-app Guide ships the same content and images for offline use.
+This guide covers llama.cpp and Windows Gufo, including models, engines, instances, routing, monitoring, background tasks, and storage maintenance. The in-app Guide ships this file and its images offline; updating the app updates the bundled manual. Screenshots use isolated demonstration data.
 
 在线最新版本请访问[文档主站](https://docs.cnzone.net/docs)，正式安装包请从[下载中心](https://download.cnzone.net/)获取。
 
@@ -20,14 +20,19 @@ Visit the [documentation site](https://docs.cnzone.net/docs) for the latest onli
 4. [下载管理 / Download Manager](#下载管理-download-manager)
 5. [引擎管理 / Engine Management](#引擎管理-engine-management)
 6. [实例管理 / Instance Management](#实例管理-instance-management)
-7. [参数配置 / Parameter Configuration](#参数配置-parameter-configuration)
-8. [集群管理 / Cluster Management](#集群管理-cluster-management)
-9. [实例路由 / Instance Routing](#实例路由-instance-routing)
-10. [路由使用统计 / Router Usage Statistics](#路由使用统计-router-usage-statistics)
-11. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
-12. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
-13. [服务器日志 / Server Logs](#服务器日志-server-logs)
-14. [常见问题 / FAQ](#常见问题-faq)
+7. [Gufo 实例 / Gufo Instances](#gufo-实例-gufo-instances)
+8. [参数配置 / Parameter Configuration](#参数配置-parameter-configuration)
+9. [集群管理 / Cluster Management](#集群管理-cluster-management)
+10. [实例路由 / Instance Routing](#实例路由-instance-routing)
+11. [路由使用统计 / Router Usage Statistics](#路由使用统计-router-usage-statistics)
+12. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
+13. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
+14. [服务器日志 / Server Logs](#服务器日志-server-logs)
+15. [后台任务 / Background Tasks](#后台任务-background-tasks)
+16. [存储维护 / Storage Maintenance](#存储维护-storage-maintenance)
+17. [CLI 与 MCP / CLI and MCP](#cli-与-mcp-cli-and-mcp)
+18. [常见问题 / FAQ](#常见问题-faq)
+19. [帮助与反馈 / Guide and Support](#帮助与反馈-guide-and-support)
 
 ---
 
@@ -37,12 +42,12 @@ Visit the [documentation site](https://docs.cnzone.net/docs) for the latest onli
 
 1. 从[下载中心](https://download.cnzone.net/)下载对应平台安装包；无法访问时可使用 [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) 备用源。
 2. Windows 使用 MSI 或 NSIS 安装包；macOS 使用 DMG；Linux 使用 DEB。自 `v2.9.43` 起暂停发布 AppImage，以避免旧版内置 GLib/Wayland 与新系统图形栈混用造成空白窗口。
-3. 准备与本机后端匹配的 `llama-server`，例如 CUDA、ROCm、Vulkan 或 CPU 构建。
+3. 准备与本机后端匹配的 `llama-server`，例如 CUDA、ROCm、Vulkan 或 CPU 构建；Windows 也可准备与模型兼容的 Gufo 安装目录。
 4. 准备本地 GGUF 模型，或稍后从 ModelScope / HuggingFace 下载。
 
 1. Download the package for your platform from the [Download Center](https://download.cnzone.net/), with [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) available as an alternative source.
 2. Use MSI or NSIS on Windows, DMG on macOS, and DEB on Linux. AppImage distribution is suspended starting with `v2.9.43` because mixing older bundled GLib/Wayland libraries with newer system graphics stacks can produce a blank window.
-3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU.
+3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU, or a compatible Gufo installation on Windows.
 4. Prepare a local GGUF model, or download one later from ModelScope or HuggingFace.
 
 Linux DEB 安装后可正常配置“开机自启动”，版本更新需要从下载中心或 GitHub Releases 手动安装。正式标签构建在配置证书时执行 Windows 签名与 macOS 签名和公证；未配置时仍会发布文件名带 `-unsigned` 的 Windows 安装包和带 `-adhoc` 的 macOS DMG。普通 CI 产物仅用于测试。
@@ -60,6 +65,10 @@ The app checks the project's Cloudflare R2 update service at startup. When an up
 `v2.9.35` and earlier do not contain Tauri Updater, so `v2.9.36` or later must first be installed manually before Windows and macOS can use in-app updates. Linux currently ships only DEB packages and does not provide in-app updates; install updates manually from the Download Center or GitHub Releases.
 
 ### 交互式引导 / Interactive Guide
+
+六步基础引导当前面向 llama.cpp 的结构化参数页。Gufo 请按下方“Gufo 实例”章节配置；两种引擎的参数与缓存策略分别管理。
+
+The six-step setup walkthrough currently targets the structured llama.cpp configuration page. Follow the Gufo Instances chapter for Gufo; its parameters and cache policy are managed separately.
 
 应用内“使用说明 → 开始交互式引导”提供六步基础流程：准备模型、确认引擎、创建或选择实例、检查参数、启动、测试连接。底部引导栏显示真实进度，支持上一步、稍后继续和退出；页面和表单仍可正常操作。已有模型、引擎和运行实例可以复用，下载是可选分支。引导不会自动保存配置或启动服务，只有连接测试成功后才会显示基础流程完成。
 
@@ -91,13 +100,13 @@ Explore Advanced Features separately covers the dashboard, downloads, clusters, 
 
 ### 界面导航 / Navigation
 
-左侧导航按“运行概况、资源准备、服务配置、分布式与路由、诊断、帮助”的顺序排列，共 12 个入口：系统总览、模型仓库、下载管理、引擎管理、实例管理、参数配置、集群管理、实例路由、性能监控、监控大屏、服务器日志和使用说明。
+左侧导航包括系统总览、模型仓库、下载管理、引擎管理、实例管理、参数配置、集群管理、实例路由、性能监控、监控大屏、服务器日志、存储维护和使用说明。路由使用统计位于实例路由内；后台任务位于顶部任务中心。
 
-The sidebar contains 12 entries ordered around status, resources, service configuration, distributed routing, diagnostics, and help: Dashboard, Model Repository, Downloads, Engines, Instances, Configuration, Cluster, Instance Routing, Performance, Monitoring Wall, Logs, and Guide.
+The sidebar contains Dashboard, Model Repository, Downloads, Engines, Instances, Configuration, Cluster, Instance Routing, Performance, Monitoring Wall, Logs, Storage Maintenance, and Guide. Usage statistics is inside Instance Routing; background tasks is inside the header's task center.
 
-按 `Ctrl+K` 打开任务中心，可快速跳转页面、启动或停止实例、处理下载和查看诊断。`Ctrl+Enter` 启动或停止一个实例，`Ctrl+S` 保存配置。
+按 `Ctrl+K` 打开任务中心，在“常用操作”中跳转页面或操作资源，在“后台任务”中查看管理任务的进度与结果。`Ctrl+Enter` 启动或停止一个实例，`Ctrl+S` 保存配置。
 
-Press `Ctrl+K` for the command center. `Ctrl+Enter` starts or stops an instance, and `Ctrl+S` saves configuration.
+Press `Ctrl+K` for Quick actions and Background tasks. `Ctrl+Enter` starts or stops an instance, and `Ctrl+S` saves configuration.
 
 ---
 
@@ -211,9 +220,9 @@ For failed downloads, inspect the error details. Check repository access for aut
 
 ## 引擎管理 / Engine Management
 
-引擎管理扫描 `llama-server` 可执行文件，自动识别 CUDA、ROCm、Vulkan 或 CPU 后端，并允许多个版本并存。
+引擎管理扫描 `llama-server` 可执行文件，识别 CUDA、ROCm、Vulkan 或 CPU 后端，并允许多个版本并存。Windows 还支持兼容的 Gufo 引擎；创建实例时检查引擎类型，配置页会随类型切换。
 
-Engine Management scans `llama-server` executables, detects CUDA, ROCm, Vulkan, or CPU backends, and supports multiple installed versions.
+Engine Management scans `llama-server` executables, detects CUDA, ROCm, Vulkan, or CPU backends, and supports multiple installed versions. Windows also recognizes compatible Gufo engines. Check the engine type when creating an instance; configuration follows that type.
 
 ![引擎扫描、后端识别和默认引擎 / Engine scanning, backend detection, and default selection](public/docs/guide/04-engine-manager.png)
 
@@ -283,11 +292,48 @@ When startup fails, inspect the instance state and server logs instead of repeat
 
 ---
 
+## Gufo 实例 / Gufo Instances
+
+Gufo 集成目前限 Windows，使用单会话本地实例。支持的配置包括 Qwen3.8-Flash-Next 与匹配 MTP、Qwen3.8-27B 与匹配 DFlash2；模型文件和所选 Gufo 构建必须兼容。
+
+Gufo integration currently supports single-session local instances on Windows. Configure Qwen3.8-Flash-Next with a matching MTP sidecar, or Qwen3.8-27B with a matching DFlash2 draft. Model files must match the selected Gufo build.
+
+### 创建与配置 / Create and Configure
+
+1. 在模型仓库扫描主模型、视觉投影和需要的草稿 GGUF，在引擎管理扫描兼容的 Gufo 安装目录。
+2. 创建实例时选择 Gufo 引擎，确认模型与空闲端口，再进入“配置参数”。
+3. 在“模型文件”选择主模型第一分片和可选视觉投影；文件按钮使用模型仓库目录树，隐藏后续分片。缺少文件时先扫描目录，也可手工填写路径。
+4. 在“服务与容量”设置 API 模型名称、上下文、最大输出 Token 数与启动等待时间。在“推测解码”选择模型家族、算法和匹配的 MTP 或 DFlash2 文件。
+5. 在“思考控制”设置思考模式、推理强度、思考预算和保留思考内容；缓存和采样使用下方各自的分组。
+6. 点击“预览命令”检查参数，使用“校验并保存”持久化，然后返回实例管理启动并测试连接。实例运行期间先停止，再修改配置。
+
+Scan model assets and the Gufo installation, create an instance with that engine and a free port, then open Configuration. File buttons select the model's first shard, optional projector, MTP sidecar, or DFlash2 draft from the model repository. Service & limits controls the API model name, context, output limit, and startup timeout. Choose the matching family and speculation files, review Thinking controls, Cache, and Sampling, then preview, validate, and save. Start and test the instance from Instance Management; stop it before editing.
+
+![Gufo 模型文件、推测解码与思考设置 / Gufo model, speculation, and thinking controls](public/docs/guide/12-gufo-configuration.png)
+
+### 思考预算与缓存 / Reasoning Budget and Cache
+
+- 思考预算为 `−1` 时不限，`0` 时不生成思考，正整数限制思考 Token 数；最大输出 Token 数仍约束思考与最终回答的总长度。旧配置默认保留 `−1`，Gufo 与 llama.cpp 的预算字段独立。
+- 每个 Gufo 实例使用 Manager 数据目录中的独立缓存，可设置 RAM 缓存与磁盘缓存容量。llama.cpp 的 slot 检查点、本机资格验证和清除检查点操作不适用于 Gufo。
+- 将运行中的 Gufo 实例加入统一路由后，按引擎实际能力使用 Chat Completions、Responses 或 Anthropic Messages。配置预览成功、模型加载就绪与请求推理成功是不同状态，启动后仍需测试实际请求。
+
+A reasoning budget of `−1` is unlimited, `0` disables reasoning, and a positive integer caps reasoning tokens. The maximum output limit still includes reasoning and the final answer together. Old configurations retain `−1`, independently of the llama.cpp budget. Gufo owns a separate per-instance RAM/disk cache under Manager's data directory; llama.cpp checkpoint operations do not apply. Add a running Gufo instance to unified routing for its supported native protocols, and verify a real request after startup.
+
+---
+
 ## 参数配置 / Parameter Configuration
 
-参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.8.0 基线跟踪 261 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
+本节适用于 llama.cpp 实例；Gufo 使用上一节的独立配置页。
 
-Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.8.0 baseline tracks 261 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
+This section applies to llama.cpp instances; Gufo uses the separate configuration described above.
+
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.9.0 基线跟踪 261 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
+
+Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.9.0 baseline tracks 261 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
+
+v0.9.0 的参数数量保持不变，新增 Clover MoE（`clover_moe`）与 Metis 1.6（`metis16`）的混合架构分类。未经验证的混合架构仍受检查点资格限制；升级后会重新评估已有资格。下面保留旧版适配说明，便于使用不同引擎版本时核对默认行为。
+
+v0.9.0 keeps the parameter count unchanged and adds hybrid classifications for Clover MoE (`clover_moe`) and Metis 1.6 (`metis16`). Unverified hybrid configurations remain subject to checkpoint restrictions, and persisted eligibility is reassessed after upgrading. The older-version notes below explain defaults when using different engine builds.
 
 v0.8.0 适配：保留推理轨迹的“继承”不传入开关，遵循聊天模板默认值（v0.7.0 默认开启）；显式开启或关闭仍需模板支持。上游 llama.cpp 多模型路由可通过自定义参数 `--models-memory-margin 1024` 为每个设备保留 1024 MiB，按最近最少使用顺序卸载模型以腾出空间；默认 0 禁用，此选项不控制管理器的 API 路由器。实验性 `--connect` 和 `--connect-code CODE` 仅允许在手动命令模式使用：前者打开点对点隧道，后者指定 40 字符连接码，不指定则每次生成新码。隧道可能使本机服务可被远端访问，管理器不会自动开启；命令展示和管理接口回执会隐藏显式连接码，原始配置仍保存用户输入。托管模式会根据所选引擎的能力检测检查内存参数；手动命令不做参数能力拦截，使用隧道前需核对该引擎的 `--help`。`lfm3` 和 `deepseek41` 作为未经跨进程复用验证的混合架构，禁用受管检查点复用。
 
@@ -335,21 +381,30 @@ The manager passes the instance port explicitly; new instances still default to 
 
 ### KV / Prefill 缓存检查点 / Cache Checkpoint
 
-实验性 KV / Prefill Cache Checkpoint 默认关闭。它在受控停止本机受管实例时保存当前 slot 0 前缀，不会导出 Cache RAM 中的其它前缀。相同模型、引擎和强兼容配置重启后，先验证恢复再开放代理路由。若 restore 已发送后失败，必须终止旧 PID、启动干净进程后才进入 `Ready (cold)`；进程重建失败时保持不可路由。
+实验性 KV / Prefill Cache Checkpoint 默认关闭，适用于获得资格的本机 llama.cpp 文本生成实例。它保存已获资格的 slot 集合，而非全部 Cache RAM 历史前缀。相同模型、引擎、配置和环境下重启时，先完整恢复并验证各 slot，再开放管理器代理路由。Gufo 使用自身缓存。
 
-The experimental KV / Prefill Cache Checkpoint is off by default. It saves the current slot 0 prefix on a controlled stop, not all prefixes in Cache RAM. Restore is verified before routing opens. A failure after sending restore requires a fresh healthy process before cold routing; failed process replacement remains unavailable.
+The experimental KV / Prefill Cache Checkpoint is off by default for qualified local llama.cpp text-generation instances. It saves the qualified slot set rather than all historical Cache RAM prefixes. Every slot is restored and verified before manager routing opens, with matching model, engine, configuration, and environment identity. Gufo uses its own cache.
 
-使用要求：
+先看配置页的资格状态：
 
-- `parallel = 1`，启用 prompt cache、slots、idle-slot cache，并让 Cache RAM 为正数或 `-1`。
-- 滑动窗口模型启用 SWA 完整缓存；请先评估额外 KV 内存。
-- 使用单文件或同目录完整分片集的文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 router、多模型、Embedding、Reranker、LoRA 或 mmproj。自定义参数默认阻断；只有安全分类器明确认可的加载 I/O 参数可放行，当前为 `--lazy-mode` / `-lzm` / 旧 `--tensor-read-lazy` 的 `auto`、`on`、`off`。界面会列出其他具体阻断标志。
-- 推测解码可以关闭，也可以选择当前引擎明确报告的组合。`ngram-*` 可从 target prompt 重建；`draft-*` 还要求引擎的 `--slot-save-path` 帮助包含 `slot KV cache and context checkpoints`，并启用 `ctx_checkpoints > 0`。帮助标记不能代替真实跨进程验证。未知类型、`spec-default` 或外部 lookup cache 仍回退冷启动。
-- 已知 hybrid/recurrent 架构默认不支持；仅保留已有验收记录的 `qwen35` 实验组合，且须满足 context 持久化与数量条件。Qwen3.8-Flash-Next 的 `qwen4exp` 跨进程实测 restore 后 `cache_n = 0`，继续禁用持久检查点。
-- DeepSeek Harness 必须连接管理器代理而不是实例直连端口。Harness 的标题请求可能先占用 slot，idle-slot cache 和足够的 Cache RAM 用于保留刚恢复的长前缀。
-- 从实例页分别查看文件恢复验证结果，以及最近一次观察到的已完成请求的缓存 token、处理 token 和可关联的 prefill 时间；只有实例完全停止时才能清除数据。
+| 状态 / State | 处理方式 / Action |
+|---|---|
+| 标准支持范围 / Standard supported scope | 按页面要求配置，资格绑定具体模型、构建和参数。 / Follow the displayed requirements for the exact model, build, and configuration. |
+| 兼容候选，尚需本机验证 / Local validation required | 开启本机验证选项并运行隔离验证，通过前持久化保持禁用。 / Opt in and run isolated validation before enabling persistence. |
+| 本机自检通过（实验性） / Locally validated | 仅适用于此次验证记录的机器和组合。 / Applies only to the machine and tuple recorded by the test. |
+| 当前组合不支持本机验证 / Unsupported | 按资格原因调整配置，保持冷启动。 / Follow the reported reasons and use a cold start. |
 
-Complete shard sets are fingerprinted as one logical model. Draft state requires an explicit target/draft context-persistence capability claim and positive `ctx_checkpoints`. Hybrid/recurrent models remain excluded except the documented experimental `qwen35` combination. Custom arguments fail closed except validated lazy-loading settings. Files contain sensitive prompt-derived state and are not portable session backups. The status card distinguishes file verification from observed request reuse; polling can miss short requests and cannot attribute all cache hits to disk restore. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the matrix, failure isolation, and pending official disk-cache integration.
+- 单 slot 默认要求 prompt cache、slots、idle-slot cache，以及正数或 `-1` 的 Cache RAM。多 slot 仅在精确支持范围或本机验证通过后使用；多 slot 要关闭 idle-slot cache，并完整保存、恢复整组 slot。
+- 本机验证面向满足条件的 Windows/ROCm 组合，可评估 1、2 或 4 个 slot。验证使用独立目录、端口和真实 GPU 推理，需预留内存与显存；仅打开开关或通过 HTTP 健康检查不会取得资格。
+- `draft-*` 要求 target/draft context 持久化能力、正数 `ctx_checkpoints`，以及内置支持范围或本机验证凭据。帮助文字和版本号本身不能证明兼容；混合推测组合也要单独验证。
+- 使用完整文本 GGUF 文件集和本机受管 loopback HTTP 引擎。多模态、LoRA、RPC、向量业务、未知参数或未验证的混合架构仍可能阻止准入；具体原因以当前页面为准。
+- 修改模型、运行库、配置、驱动或 `LLAMA_KV_ROWS_DISABLE` 的存在与值后，原资格可能失效。该变量即使为空或 `0` 也会禁用 KV rows；旧版未绑定此环境的凭据需重新验证。
+- 启动时必须先完成全组恢复，管理器代理才开放流量。restore 发送后失败会隔离旧进程并用新进程冷启动；重建失败时保持不可路由。客户端直连实例端口不受此路由保护。
+- 在实例页区分 `Ready (file verified)`、`Ready (cold)` 和实际请求复用量。文件验证通过不等于已获得加速；用相同前缀的新进程请求核对缓存 Token 和 Prefill。只有实例完全停止时才能清除检查点。
+
+One slot normally needs prompt caching, slots, idle-slot caching, and positive or unlimited Cache RAM. Multiple slots require an exact supported scope or a successful local test, with idle-slot caching disabled and complete-set save/restore. The Windows/ROCm validator can evaluate eligible one-, two-, or four-slot candidates using isolated directories, ports, and real GPU inference; reserve memory before running it. Draft modes require target/draft context persistence, positive `ctx_checkpoints`, and reviewed or locally validated evidence. A help marker, version number, or successful startup is insufficient.
+
+Receipts bind model files, runtime libraries, configuration, drivers, and environment. Changes to `LLAMA_KV_ROWS_DISABLE`, including absence versus an empty value or `0`, invalidate the recorded environment; legacy receipts must be revalidated. Failed restores require a fresh healthy process before routing. File verification and observed request reuse are separate. Checkpoint files contain prompt-derived state and are not portable conversation backups. See [检查点使用与排障 / Checkpoint guide](https://github.com/jerrydong1988/llama-server-manager/blob/master/docs/KV_CACHE_CHECKPOINT.md) and [本机验证范围 / Local qualification](https://github.com/jerrydong1988/llama-server-manager/blob/master/docs/CHECKPOINT_ADMISSION_POLICY.md) for exact requirements.
 
 ---
 
@@ -445,7 +500,7 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 
 `/v1/models` publishes the runtime `n_ctx` as `context_length`, `context_window`, and vLLM-compatible `max_model_len`, with an explicit non-auto `ctx_size` fallback before the first probe, the safe minimum across failover targets, and no guessed value when any target is unknown. Chat Completions, Responses, small Legacy Completions batches, and Anthropic Messages use the target's native token counter before inference; oversized requests receive an OpenAI `400 context_length_exceeded` or Anthropic `400 invalid_request_error`. Older targets without a compatible counter fail open to their own final validation rather than using an inaccurate character estimate.
 
-完整端点、调度、错误格式、超时、权限与部署边界见[生产级模型路由器说明](docs/ROUTER_API_COMPATIBILITY.md)。
+完整端点、调度、错误格式、超时、权限与部署边界见[生产级模型路由器说明](https://github.com/jerrydong1988/llama-server-manager/blob/master/docs/ROUTER_API_COMPATIBILITY.md)。
 
 ### 安全与后台保活 / Security and Background Keep-Alive
 
@@ -609,6 +664,63 @@ Common signals include port conflicts, model path or permission errors, GPU allo
 
 ---
 
+## 后台任务 / Background Tasks
+
+点击顶部“任务中心”或按 `Ctrl+K`，切到“后台任务”。这里显示提交到管理宿主的操作，与 CLI/MCP 共用任务 ID、状态和结果。下载传输详情和模型加载状态仍在对应资源页面查看。
+
+- 按操作名或任务 ID 搜索，按排队、执行中、成功、失败、取消或中断筛选；选中记录查看结果、错误和可重试状态。
+- 任务面板可取消排队任务。运行中的普通操作需到资源页停止或暂停；检查点隔离验证在其配置面板提供专门的取消入口。
+- “删除记录”只处理已结束的单项；“清理全部已结束任务”也包括当前筛选隐藏的记录，两者均需确认。删除历史不撤销操作，排队或执行中的任务会保留。
+- 任务成功表示管理操作完成；启动任务成功后还要确认模型就绪，下载入队成功后还要等待传输完成。宿主异常退出后的中断任务应先核对实际资源再重试。
+
+Open the header's task center (`Ctrl+K`) and select Background Tasks. It shares IDs, state, and results with CLI/MCP management operations. Search or filter records and inspect results or errors. The panel cancels queued work; use the resource page for running operations, or the checkpoint configuration panel for isolated-validation cancellation. Delete individual finished records or clear all finished history, including filtered-out records, after confirmation. History deletion does not undo work. A successful start or enqueue task still requires checking model readiness or download completion.
+
+![后台任务状态与结果 / Background task status and results](public/docs/guide/13-background-tasks.png)
+
+---
+
+## 存储维护 / Storage Maintenance
+
+在左侧“存储维护”查看管理器暂存、平台缓存、崩溃转储、遥测占用、目录授权和外部输出引用。先刷新清单，再按每个分组显示的可处理数量与操作说明选择动作。
+
+- 暂存清理会显示处理数量、跳过项和失败原因。正在使用、不安全或不满足清理条件的项目会保留。
+- WebView 缓存清理安排在下次重启执行，并可取消安排；范围包括 Cookie、Local Storage、IndexedDB，可能重置界面偏好或网页登录状态。
+- 撤销目录访问权只撤销管理授权。外部模型、引擎、自定义 slot 目录等输出引用用于盘点，不提供任意文件批量删除。
+- 遥测整理、检查点清除和模型删除各有自己的条件与入口；清理前核对页面显示的对象和影响。
+
+Storage Maintenance lists Manager staging files, platform caches, crash dumps, telemetry storage, directory permissions, and external output references. Refresh first and review eligible items. Cleanup reports removed, skipped, and failed items. WebView cleanup is scheduled for the next restart and includes cookies, Local Storage, and IndexedDB, which can reset UI preferences or web logins. Revoking directory access changes authorization; external references are inventory-only. Telemetry maintenance, checkpoints, and model deletion retain their own requirements and controls.
+
+![存储清单与维护操作 / Storage inventory and maintenance](public/docs/guide/14-storage-maintenance.png)
+
+---
+
+## CLI 与 MCP / CLI and MCP
+
+GUI、`lsm` CLI 和 MCP 共用本机当前账户的管理状态。管理操作前先打开桌面应用，或显式执行 `lsm service start`；该命令启动无窗口、无托盘的管理宿主。`lsm service show --wait` 可显示桌面界面。CLI/MCP 连接不会自动唤醒已退出的宿主；MCP 初始化和工具枚举可以离线完成。
+
+GUI, the `lsm` CLI, and MCP share local management state for the current OS account. Open the desktop app or explicitly run `lsm service start` before management operations. This starts a host without a window or tray icon; `lsm service show --wait` displays the desktop. Connecting does not wake an exited host, while MCP initialization and tool discovery can work offline.
+
+以下命令在已有兼容 `lsm` 可执行文件的终端运行；以该版本 `lsm help` 展示的操作与参数为准：
+
+Windows 安装目录包含 `lsm.exe`。PowerShell 可在该目录使用 `.\lsm.exe`，或填写完整可执行路径；命令示例假定 `lsm` 已可从当前终端找到。使用与应用匹配的版本和数据目录。
+
+Run these commands with a compatible `lsm` executable available; its `lsm help` output defines supported operations and arguments:
+
+The Windows installation includes `lsm.exe`. Use `.\lsm.exe` from that directory in PowerShell, or its full path. The examples assume `lsm` is already available to the terminal. Match the app version and data directory.
+
+```text
+lsm help
+lsm service status
+lsm service start
+lsm service show --wait
+```
+
+修改、删除和远程集群权限按客户端启动选项分别开放。操作返回任务 ID 时，可在后台任务面板追踪。后台推理运行时的保活选项与管理宿主启停分别控制；退出界面时按确认框选择保留后台或停止服务。更多接口与配置示例见[CLI/MCP 管理说明](https://github.com/jerrydong1988/llama-server-manager/blob/master/docs/agent-management-exploration.md)。
+
+Mutation, deletion, and remote-cluster permissions are enabled separately by client startup options. Track returned task IDs in Background Tasks. Inference keep-alive and management-host lifecycle are separate controls; choose the intended background/stop action when exiting. See the linked management reference for detailed client configuration.
+
+---
+
 ## 常见问题 / FAQ
 
 ### 为什么没有检测到引擎？ / Why is no engine detected?
@@ -668,3 +780,18 @@ The app automatically tries `instances.json.bak`. If recovery still fails, back 
 不需要。说明截图位于安装包的 `docs/guide` 资源目录中；GitHub README 和手册也引用仓库内同一批文件。
 
 No. Guide images ship under `docs/guide` in the frontend bundle and are shared with repository documentation.
+
+---
+
+## 帮助与反馈 / Guide and Support
+
+- [在线文档 / Online documentation](https://docs.cnzone.net/docs)
+- [东京备用官网 / Tokyo mirror](https://mirror.cnzone.net/)
+- [下载中心 / Download Center](https://download.cnzone.net/)
+- [当前版本说明 / Release notes](https://docs.cnzone.net/release-notes)
+- [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest)
+- [问题反馈 / Report an issue](https://github.com/jerrydong1988/llama-server-manager/issues)
+
+内置手册随应用版本固定，仓库中的最新手册可能包含尚未安装的更新。反馈问题时附上应用版本、平台、引擎类型与构建、复现步骤和已脱敏日志；API Key、连接码、私有路径等敏感信息请先移除。
+
+The bundled manual is fixed to the installed application version; the repository guide may describe updates you have not installed yet. Include the app version, platform, engine type/build, reproduction steps, and redacted logs when reporting issues. Remove API keys, connection codes, and private paths first.

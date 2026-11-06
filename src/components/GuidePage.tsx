@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { marked } from 'marked'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { ArrowUp, BookOpen, CheckCircle2, ChevronDown, Circle, Compass, PlayCircle } from 'lucide-react'
-import { version } from '../../package.json'
 import { useAppStore } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getGuideLabels } from '../i18n/pageLabels'
@@ -122,13 +121,9 @@ export default function GuidePage() {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const tocScrollRef = useRef<HTMLDivElement>(null)
   const tocItemRefs = useRef(new Map<string, HTMLButtonElement>())
-  const guideContent = useMemo(
-    () => guideMd.replace(/v\d+\.\d+\.\d+/g, `v${version}`),
-    [],
-  )
   const inAppGuideContent = useMemo(
-    () => stripInAppTableOfContents(guideContent),
-    [guideContent],
+    () => stripInAppTableOfContents(guideMd),
+    [],
   )
   const labels = useMemo(() => getGuideLabels(lang), [lang])
   const tourCopy = getGuideTourCopy(lang)
@@ -205,6 +200,10 @@ export default function GuidePage() {
       for (const heading of headings) {
         if (heading.getBoundingClientRect().top > activationLine) break
         currentId = heading.id
+      }
+      // A short final chapter cannot reach the activation line at maximum scroll.
+      if (container.scrollTop > 0 && container.scrollTop + container.clientHeight >= container.scrollHeight - 2) {
+        currentId = headings[headings.length - 1].id
       }
 
       setActiveSectionId(currentId)
