@@ -218,11 +218,15 @@ html.dark body {
 .guide-content th { background: #f1f5f9; font-weight: 600; }
 .dark .guide-content th { background: #334155; }
 .guide-content blockquote { border-left: 3px solid #94a3b8; padding-left: 0.75rem; color: #64748b; margin-bottom: 0.5rem; }
+.dark .guide-content blockquote { color: #94a3b8; }
 .guide-content hr { border: none; border-top: 1px solid #e2e8f0; margin: 1rem 0; }
 .dark .guide-content hr { border-color: #475569; }
 .guide-content a { color: #2563eb; text-decoration: underline; }
+.dark .guide-content a { color: #93c5fd; }
 .guide-content strong { font-weight: 600; }
 .guide-content img { display: block; width: 100%; height: auto; margin: 1rem 0 1.5rem; border: 1px solid #cbd5e1; border-radius: 0.5rem; background: #f8fafc; color: #475569; }
+/* Bundled captures are 8:5; reserve their space before lazy loading for stable chapter jumps. */
+.guide-content img[src^="/docs/guide/"] { aspect-ratio: 8 / 5; }
 .dark .guide-content img { border-color: #334155; background: #0f172a; color: #cbd5e1; }
 
 /* Config search highlight */
