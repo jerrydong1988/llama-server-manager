@@ -5,6 +5,8 @@ test.afterEach(async ({ page }) => {
 })
 
 test('performance monitoring keeps global resources independent from the selected session', async ({ page }) => {
+  // Compare the fixed snapshot without aging it while lazy modules load.
+  await page.clock.setFixedTime(Date.now())
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'perf')
@@ -54,13 +56,15 @@ test('dashboard exposes CPU, GPU, memory, and VRAM as four global resources', as
 })
 
 test('big screen uses the same global resource snapshot and live task throughput', async ({ page }) => {
+  await page.clock.setFixedTime(Date.now())
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'bigscreen')
   })
   await page.goto('/?scenario=monitoring')
 
-  await expect(page.getByRole('heading', { name: '大屏模式' })).toBeVisible()
+  const screenHeading = page.locator('[data-guide="monitoring-header"]').getByRole('heading', { name: '大屏模式', exact: true })
+  await expect(screenHeading).toBeVisible({ timeout: 15_000 })
   const resources = page.getByRole('heading', { name: '资源压力' }).locator('xpath=ancestor::section[1]')
   await expect(resources).toContainText('9%')
   await expect(resources).toContainText('12%')
