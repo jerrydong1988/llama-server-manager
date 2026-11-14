@@ -327,9 +327,21 @@ A reasoning budget of `−1` is unlimited, `0` disables reasoning, and a positiv
 
 This section applies to llama.cpp instances; Gufo uses the separate configuration described above.
 
-参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.9.0 基线跟踪 261 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v1.0.0 基线跟踪 266 个参数条目。实例的主机字段仍填写单个监听地址，不支持逗号分隔的多地址列表。
 
-Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.9.0 baseline tracks 261 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
+Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v1.0.0 baseline tracks 266 parameter entries. An instance's host field still accepts a single listen address, not a comma-separated list of addresses.
+
+v1.0.0 适配：主模型与草稿 KV 类型可选择 `f8_e4m3`，但所选引擎的完整能力探测必须明确列出该值；这不代表所有 GPU 后端或检查点组合已获验证。推理保留在继承状态下跟随引擎；v0.9.0 与 v1.0.0 源码均默认开启，本次仅补正旧 README 的过时说明。`--defrag-thold` / `-dt` 已移除，旧自定义命令在不支持它的引擎上会被阻止，不会自动删除配置。新增 `kimi-k31` hybrid 分类已受现有检查点限制覆盖。
+
+The v1.0.0 adaptation adds `f8_e4m3` for target and draft KV caches only when a complete probe of the selected engine explicitly advertises it. This is not GPU backend or checkpoint qualification. Inherited reasoning preservation follows the engine. Both v0.9.0 and v1.0.0 source code default to enabled; this change corrects stale README wording. Removed `--defrag-thold` / `-dt` custom arguments are rejected by engines that do not advertise them; saved configuration is not silently rewritten. The new `kimi-k31` hybrid classification is already covered by checkpoint restrictions.
+
+`--moe-cache-cpu-share`（0 到 1，默认 0）、`--tts-lang`、`--tts-voice` 可使用经能力检测的用户自定义参数；后两者依赖具体语音模型。`--ple` / `--shard` 的额外 GGUF 分片尚未纳入托管文件授权与检查点指纹，只允许手动命令。`--allow-unauthenticated-tools`、`--media-allow-private-urls` 同样只允许手动命令显式填写，不会自动启用；管理器仍要求非本机监听配置 API 密钥。手动命令需自行核对所选引擎支持情况，不能使用托管检查点复用。
+
+Use capability-checked custom arguments for `--moe-cache-cpu-share` (0 to 1, default 0), `--tts-lang` and `--tts-voice`; speech options depend on the model. Extra GGUF files supplied by `--ple` / `--shard` are not tracked by managed file authorization or checkpoint fingerprints, so these flags require manual mode. `--allow-unauthenticated-tools` and `--media-allow-private-urls` also require explicit manual commands and are never added automatically; the manager still requires an API key for non-loopback listeners. Check the selected engine manually in this mode; managed checkpoint reuse is unavailable.
+
+v1.0.0 的 `--cors-origins localhost` 表示同源，不再允许所有本机端口。`--ui-mcp-proxy` 仅代理公网 MCP 地址，默认切换为同源 CORS；它不是管理器的 stdio MCP。HTTP(S) 媒体 URL 默认拒绝私网地址。升级引擎时需核对跨端口前端、局域网图片和本地 MCP 服务的连接方式。
+
+In v1.0.0, `--cors-origins localhost` means same-origin, not every localhost port. `--ui-mcp-proxy` only proxies public MCP destinations and defaults to same-origin CORS; it is unrelated to the manager stdio MCP. HTTP(S) media URLs reject private addresses by default. Review cross-port frontends, LAN images and local MCP connections when upgrading the engine.
 
 v0.9.0 的参数数量保持不变，新增 Clover MoE（`clover_moe`）与 Metis 1.6（`metis16`）的混合架构分类。未经验证的混合架构仍受检查点资格限制；升级后会重新评估已有资格。下面保留旧版适配说明，便于使用不同引擎版本时核对默认行为。
 

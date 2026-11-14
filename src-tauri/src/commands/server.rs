@@ -1928,6 +1928,11 @@ fn validate_cache_and_draft_parameters(
 }
 
 const SECURITY_SENSITIVE_CUSTOM_FLAGS: &[&str] = &[
+    // Extra shards are outside managed artifact identity/authorization tracking.
+    "--ple",
+    "--shard",
+    "--allow-unauthenticated-tools",
+    "--media-allow-private-urls",
     "--connect",
     "--connect-code",
     "--host",
@@ -2893,10 +2898,10 @@ pub async fn generate_server_command(
     timing.mark("capabilities");
     validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
     let command = adapt_managed_arguments_for_capabilities(&command, capabilities.as_deref());
-    let unsupported_flags = capabilities
-        .as_deref()
-        .map(|value| unsupported_command_flags(&command, value))
-        .unwrap_or_default();
+    let unsupported_flags = unsupported_command_flags(
+        &command,
+        capabilities.as_deref().unwrap_or(&EngineCapabilities::default()),
+    );
     let blocked = blocked_security_flags(&command, capabilities.as_deref());
     if !blocked.is_empty() {
         return Err(AppError::new(
@@ -3081,8 +3086,11 @@ async fn start_server_impl(
             &generated_cmd,
             engine_capabilities.as_deref(),
         );
-        if let Some(capabilities) = engine_capabilities.as_deref() {
-            let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
+        {
+            let unsupported = unsupported_command_flags(
+                &generated_cmd,
+                engine_capabilities.as_deref().unwrap_or(&EngineCapabilities::default()),
+            );
             if !unsupported.is_empty() {
                 return Err(AppError::new(
                     "ENGINE_PARAMETER_UNSUPPORTED",
@@ -6849,6 +6857,12 @@ mod perf_parser_tests {
             "--connect",
             "--connect-code 0123456789012345678901234567890123456789",
             "--connect-code=0123456789012345678901234567890123456789",
+            "--allow-unauthenticated-tools",
+            "--media-allow-private-urls",
+            "--ple C:/outside/extra.gguf",
+            "--ple=C:/outside/extra.gguf",
+            "--shard C:/outside/extra.gguf",
+            "--shard=C:/outside/extra.gguf",
         ] {
             let config = InstanceConfig {
                 model_path: "model.gguf".into(),
@@ -6899,6 +6913,30 @@ mod perf_parser_tests {
             assert!(!log.contains(code));
             assert!(log.ends_with("--port 8080"));
         }
+    }
+
+    #[test]
+    fn v1_reviewed_custom_and_manual_only_arguments_preserve_explicit_intent() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            custom_args: vec!["--moe-cache-cpu-share 0.25 --tts-lang en --tts-voice speaker".into()],
+            ..InstanceConfig::default()
+        };
+        let (_, _, command) = prepare_launch_checked(config, "llama-server").unwrap();
+        for (flag, value) in [("--moe-cache-cpu-share", "0.25"), ("--tts-lang", "en"), ("--tts-voice", "speaker")] {
+            assert!(has_flag_value(&command, flag, value));
+        }
+        for argument in ["--ple extra.gguf", "--shard=extra.gguf", "--allow-unauthenticated-tools", "--media-allow-private-urls"] {
+            let config = InstanceConfig {
+                launch_mode: "manual".into(),
+                manual_command: format!("-m model.gguf {argument}"),
+                ..InstanceConfig::default()
+            };
+            let (_, _, command) = prepare_launch_checked(config, "llama-server").unwrap();
+            assert!(command.iter().any(|token| token == argument.split_whitespace().next().unwrap()));
+        }
+        let default = generate_normalized_command(&InstanceConfig::default(), "llama-server");
+        assert!(!default.iter().any(|arg| ["--allow-unauthenticated-tools", "--media-allow-private-urls", "--ple", "--shard", "f8_e4m3"].contains(&arg.as_str())));
     }
 
     #[test]

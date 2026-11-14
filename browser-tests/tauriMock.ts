@@ -192,7 +192,7 @@ const engine: EngineInfo = {
       '--threads': 'automatic',
       '--mmap': 'enabled',
     },
-    reportedDefaultsVersion: 2,
+    reportedDefaultsVersion: 3,
     speculativeTypes: [
       'none', 'draft-simple', 'draft-eagle3', 'draft-mtp', 'draft-dflash', 'draft-dspark',
       'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod', 'ngram-cache',

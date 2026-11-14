@@ -86,6 +86,7 @@ export interface EngineCapabilities {
   reportedDefaults?: Record<string, string>
   reportedDefaultsVersion?: number
   speculativeTypes?: string[]
+  kvCacheTypes?: Record<string, string[]>
   contextCheckpointPersistence?: boolean
   persistenceRevision?: number
   persistenceProfile?: string | null

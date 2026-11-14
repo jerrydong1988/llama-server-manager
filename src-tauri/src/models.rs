@@ -281,6 +281,8 @@ pub struct EngineCapabilities {
     #[serde(default)]
     pub speculative_types: Vec<String>,
     #[serde(default)]
+    pub kv_cache_types: HashMap<String, Vec<String>>,
+    #[serde(default)]
     pub context_checkpoint_persistence: bool,
     /// Evidence revision and serialized draft modes, separate from CLI support.
     #[serde(default)]
@@ -317,6 +319,7 @@ impl Default for EngineCapabilities {
             reported_defaults: HashMap::new(),
             reported_defaults_version: 0,
             speculative_types: Vec::new(),
+            kv_cache_types: HashMap::new(),
             context_checkpoint_persistence: false,
             persistence_revision: 0,
             persistence_profile: None,

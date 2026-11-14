@@ -70,9 +70,9 @@ Scan GGUF models, shards, and projectors; manage ModelScope and HuggingFace queu
 
 ### 实例配置 / Instance Configuration
 
-为每个 llama.cpp 实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整结构化选项，并依据所选 `llama-server --help` 进行运行时能力协商。当前上游稳定版 v0.9.0 基线跟踪 261 个参数条目。
+为每个 llama.cpp 实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整结构化选项，并依据所选 `llama-server --help` 进行运行时能力协商。当前上游稳定版 v1.0.0 基线跟踪 266 个参数条目。
 
-Choose model, engine, and port per llama.cpp instance, tune structured options with search, presets, and validation, and negotiate runtime capabilities against the selected `llama-server --help`. The current stable upstream v0.9.0 baseline tracks 261 parameter entries.
+Choose model, engine, and port per llama.cpp instance, tune structured options with search, presets, and validation, and negotiate runtime capabilities against the selected `llama-server --help`. The current stable upstream v1.0.0 baseline tracks 266 parameter entries.
 
 ![参数配置 / Parameter Configuration](public/docs/guide/06-configuration.png)
 
