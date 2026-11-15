@@ -6,7 +6,7 @@ authors = ["开发者"]
 license = "MIT"
 edition = "2021"
 default-run = "llama-server-manager"
-rust-version = "1.80"
+rust-version = "1.89"
 
 [[bin]]
 name = "lsm"
@@ -43,7 +43,8 @@ regex-lite = "0.1"
 if-addrs = "0.13"
 socket2 = "0.5"
 mdns-sd = "0.20"
-rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+# SQLite >=3.54 fixes RUSTSEC-2026-0459; rusqlite 0.41 requires Rust 1.89.
+rusqlite = { version = "0.41.0", default-features = false, features = ["bundled"] }
 axum = "0.7"
 base64 = "0.22"
 sha2 = "0.10"

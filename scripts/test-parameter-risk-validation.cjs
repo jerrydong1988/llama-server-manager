@@ -191,6 +191,10 @@ const entry = `
   assert.equal(has('warnD1', { custom_args: ['--temp=0.5'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--connect'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--connect-code=example'] }), true)
+  for (const flag of ['--ple', '--shard', '--allow-unauthenticated-tools', '--media-allow-private-urls']) {
+    assert.equal(has('warnD1', { custom_args: [flag + '=value'] }), true, flag)
+    assert.equal(has('warnD1', { custom_args: [flag + ' value'] }), true, flag)
+  }
   assert.equal(has('warnD1', { custom_args: ['--temperature 0.5'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--top-p 0.9 --seed 7'] }), true)
   assert.equal(has('warnD1', { custom_args: ['--prompt "--temp"'] }), false)

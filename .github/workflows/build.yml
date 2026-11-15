@@ -60,7 +60,7 @@ jobs:
           working-directory: src-tauri
           ignore: RUSTSEC-2024-0429
       - name: Test Rust
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: npm run test:rust
       - name: Lint Rust
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
@@ -93,7 +93,7 @@ jobs:
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Windows
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: npm run test:rust
       - name: Lint Rust on Windows
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - name: Build independent runtime smoke binary
@@ -246,7 +246,7 @@ jobs:
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on macOS
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: npm run test:rust
       - name: Lint Rust on macOS
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - name: Build independent runtime smoke binary
@@ -425,7 +425,7 @@ jobs:
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Linux x64
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: npm run test:rust
       - name: Lint Rust on Linux x64
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - name: Build independent runtime smoke binary
@@ -496,7 +496,7 @@ jobs:
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Linux ARM64
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+        run: npm run test:rust
       - name: Lint Rust on Linux ARM64
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - name: Build independent runtime smoke binary

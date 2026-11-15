@@ -86,6 +86,6 @@ assert.match(server, /fn canonical_override_key\(/, 'backend emission metadata m
 assert.match(server, /emitted_override_keys:/, 'command preview response must serialize emission metadata')
 assert.match(types, /emittedOverrideKeys: Array<keyof InstanceConfig>/, 'frontend IPC type must expose emission metadata')
 assert.match(hook, /setCommandPreview\(result\)/, 'live compatibility preview must retain backend command metadata')
-assert.match(hook, /reportedDefaultsVersion \?\? 0\) < 2/, 'previously probed engines must be refreshed once without downgrading future metadata versions')
+assert.match(hook, /reportedDefaultsVersion \?\? 0\) < 3/, 'previously probed engines must be refreshed once without downgrading future metadata versions')
 
 console.log('Config parameter review and search navigation regression checks passed.')

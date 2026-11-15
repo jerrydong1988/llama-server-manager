@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-11-06",
+  "verifiedAt": "2026-11-14",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.9.0",
-  "upstreamCommit": "cd959bae99ff4bed22bef2604f45241c09bbb8c8",
-  "upstreamMasterChecked": "67107ac34f62882d8b53ea41ad68010ea635b9be",
+  "upstreamRelease": "v1.0.0",
+  "upstreamCommit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+  "upstreamMasterChecked": "a956a852c9c8bc1fb07206364838ddef299178c0",
   "releaseSnapshot": {
-    "ref": "v0.9.0",
-    "commit": "cd959bae99ff4bed22bef2604f45241c09bbb8c8",
-    "parameterCount": 261,
-    "snapshotHash": "449a1c51628ce54dd177744fcea461a2cf7bd1908ca1a0d1f899f79a0d571a45",
+    "ref": "v1.0.0",
+    "commit": "b1b770d90d94cad9e9ea5b993bdbc383a522fb28",
+    "parameterCount": 266,
+    "snapshotHash": "92ceff8a337fef2d21580162edec556a17642d3d8d385ce8e01141ec1e40010c",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -51,6 +51,14 @@
         ],
         "synopsisHash": "4edec9e67983682db31de60577f056777ad009c67059824025cf035b6d01ac18",
         "descriptionHash": "082f46ccd043e385a060cbdf2e0a487ebfd6ecad2ea0065c92d1e9966ba03aa8"
+      },
+      {
+        "canonical": "--allow-unauthenticated-tools",
+        "aliases": [
+          "--allow-unauthenticated-tools"
+        ],
+        "synopsisHash": "cecd44d7208781c72edfce05f48b61381d85a5de34ba73589c1713c16954b78d",
+        "descriptionHash": "907c9360181a58e24b4e4743f044944add02188467253312b08a10db0b39e237"
       },
       {
         "canonical": "--api-key",
@@ -145,7 +153,7 @@
           "-ctk"
         ],
         "synopsisHash": "0f944751b9a8412e99492ba217d28f1f9afb69d614367fa0cd331d93f168c0b1",
-        "descriptionHash": "335b0cefe6364e30abd2672fb733fcff3f34acf37377c9ec139e0d8bf105aecd"
+        "descriptionHash": "2d05adf23b5ff8d4505bd57e033d472646aa7006a3837fc1177902823421b20f"
       },
       {
         "canonical": "--cache-type-v",
@@ -154,7 +162,7 @@
           "-ctv"
         ],
         "synopsisHash": "ab875da89c0da289b41a680ec5bfa173d9433735e65bc45f12b22da2c4b2b3e5",
-        "descriptionHash": "a4eedfd3754a5364e3afd9a43268a9122bf9ea2717708a6ad816c0312b94ab9a"
+        "descriptionHash": "88537f4f6855cf46e9b8c4d6ba29abe1e5e5b1c35d300bfe1dbc3481b0248109"
       },
       {
         "canonical": "--chat-template",
@@ -296,7 +304,7 @@
           "--cors-origins"
         ],
         "synopsisHash": "38bf1814638ea7ad84b19333312b0db2be66f7db518be5d5d5adf9ba4d01876c",
-        "descriptionHash": "b717002495d81ec77df21ff852d170896de6cf633ff5e37f9e9b1ee12f2b99ad"
+        "descriptionHash": "7470b2266b530e71da32acd01dc49d44feeb7a2a9ac1218906f91520937e46ba"
       },
       {
         "canonical": "--cpu-mask",
@@ -377,15 +385,6 @@
         ],
         "synopsisHash": "81f85c6854c05905f809d480a8d68a465903dc849b192194346e2a2c6b4cb285",
         "descriptionHash": "27e69fbee55e90a82fb53af94757d2ee096d5197eb652f6b99a532b794f2c976"
-      },
-      {
-        "canonical": "--defrag-thold",
-        "aliases": [
-          "--defrag-thold",
-          "-dt"
-        ],
-        "synopsisHash": "6796f2f13539ee960ace0f1b571003098616bf88df09ec726a0357e298275479",
-        "descriptionHash": "ba37666f5663d4c0210030c31fbb195d1c4f7b50ae943171113dcaade3bbb705"
       },
       {
         "canonical": "--device",
@@ -946,6 +945,14 @@
         "descriptionHash": "88bc1fe36822f6f8d0076d4079a974786f1e13d0987771794da6e7a1f409ae78"
       },
       {
+        "canonical": "--media-allow-private-urls",
+        "aliases": [
+          "--media-allow-private-urls"
+        ],
+        "synopsisHash": "2f40dc68b246b426e73bedd921921123b0f597347bd3af33f13557ba7c7d9cd2",
+        "descriptionHash": "953a8448448bea38fe0ebd8682b5a44bd21622df47975eb69405b8158c016ad7"
+      },
+      {
         "canonical": "--media-path",
         "aliases": [
           "--media-path"
@@ -1099,6 +1106,14 @@
         "descriptionHash": "c0e148182bb88d0728bb459bc9218e116249242fb02d31df5c23205572f874a9"
       },
       {
+        "canonical": "--moe-cache-cpu-share",
+        "aliases": [
+          "--moe-cache-cpu-share"
+        ],
+        "synopsisHash": "c9e87295c31bee61ce06219f186471c5e20d42755e6dedf42b520c49cd4da629",
+        "descriptionHash": "12e21942dc437c5a15dd917fe879e3140c2e1b4f342cca69ea1b812cfb9a19c6"
+      },
+      {
         "canonical": "--moe-cache-mib",
         "aliases": [
           "--moe-cache-mib"
@@ -1207,6 +1222,15 @@
         ],
         "synopsisHash": "4fd65a0179a6edad624fee4cbf12451667bd488bf118e152215abc3bb5f46fe5",
         "descriptionHash": "20bfc97d94010283fefa2675f5890f29e3dfcddcebc1c05395a3654f7cf41c7b"
+      },
+      {
+        "canonical": "--ple",
+        "aliases": [
+          "--ple",
+          "--shard"
+        ],
+        "synopsisHash": "bf6545e1dc56d83a8d869c8ea4d6031a8be0bf4e09a7e972c4caa3884e70e26c",
+        "descriptionHash": "330424608d310a86208860bed6bac19b642f8d24354ecc56d6a28e21bdea6e2b"
       },
       {
         "canonical": "--poll",
@@ -1339,7 +1363,7 @@
           "--reasoning-preserve"
         ],
         "synopsisHash": "ec8323c80897d00b419d498eb1fee33d65836ba8da345f92273afed7b4141504",
-        "descriptionHash": "9c0a77e9a49b9d9a4325ce4f325a2e724b1dc338103cf11efb19705cd94dd649"
+        "descriptionHash": "319ef9537427f02d8993b2bf27a09d2d745e50d8291eec93ec9431738123eed5"
       },
       {
         "canonical": "--repack",
@@ -1754,7 +1778,7 @@
           "-ctkd"
         ],
         "synopsisHash": "1bfd928d2b8136d95700f4f71c539c0ebdac7241de9befbac1e94e549cba5b56",
-        "descriptionHash": "f913bb05dcf0fd82726abe80267814829cecdc4350d40c38402212f4c0de3439"
+        "descriptionHash": "92b91d54d22d4f58647dad88c6c6ce30bda88ab103f58c031793c694d13ccb60"
       },
       {
         "canonical": "--spec-draft-type-v",
@@ -1764,7 +1788,7 @@
           "-ctvd"
         ],
         "synopsisHash": "4eb62670d9a96a4217f4c19271bc751161ca1134aa7d4c8413d3f6ae441015c8",
-        "descriptionHash": "ce7a6da0a487b848d4dd836dee7c1676327b32509a5c0ff85ca4dd9d57b11f77"
+        "descriptionHash": "d4213525545af36ee7e13241f8003dd58e834b066fb02afb959ba94f26b52f7d"
       },
       {
         "canonical": "--spec-ngram-map-k-min-hits",
@@ -2071,6 +2095,22 @@
         "descriptionHash": "7c05b7557aadcb7714a7314473b69c403c271e24b211a194600483471a280d2e"
       },
       {
+        "canonical": "--tts-lang",
+        "aliases": [
+          "--tts-lang"
+        ],
+        "synopsisHash": "5bfdc70127edee63226cba81df5305b24c7e70f4b03d2f257ece57310e073c12",
+        "descriptionHash": "800541d8058cb81023d04dad640f664ef5eb348744df96befb0d3684b4e66398"
+      },
+      {
+        "canonical": "--tts-voice",
+        "aliases": [
+          "--tts-voice"
+        ],
+        "synopsisHash": "2a03d409b456014fae4b095e09907292235a028ad30bae92cc8624294b208257",
+        "descriptionHash": "37fee26d58c2c1de51f3dc8becebb98ebddc6883f833092df48b6df76a867c69"
+      },
+      {
         "canonical": "--typical",
         "aliases": [
           "--typical",
@@ -2126,7 +2166,7 @@
           "--webui-mcp-proxy"
         ],
         "synopsisHash": "8e890a31163b4115f7f9a7f8286bdb7efdbafb3f1500b4f8b0524625eed778fa",
-        "descriptionHash": "2cdb2fffaf75da226c2d4eeeec650eccf4113726b0ffa53fd209aa7bd959e34c"
+        "descriptionHash": "f90bcd57fe185337e9a7d0415d4650b49576c9ace017b61bc475089a8d460736"
       },
       {
         "canonical": "--verbose",
@@ -2273,6 +2313,7 @@
         "granitehybrid",
         "jamba",
         "kimi-k3",
+        "kimi-k31",
         "kimi-linear",
         "lfm2",
         "lfm2moe",
@@ -2299,9 +2340,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "67107ac34f62882d8b53ea41ad68010ea635b9be",
-    "parameterCount": 261,
-    "snapshotHash": "449a1c51628ce54dd177744fcea461a2cf7bd1908ca1a0d1f899f79a0d571a45",
+    "commit": "a956a852c9c8bc1fb07206364838ddef299178c0",
+    "parameterCount": 266,
+    "snapshotHash": "349a9b62faf39aeff6ba6066aaaf14f5903d00b6296147d3e90b9aabfa19f883",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2338,6 +2379,14 @@
         ],
         "synopsisHash": "4edec9e67983682db31de60577f056777ad009c67059824025cf035b6d01ac18",
         "descriptionHash": "082f46ccd043e385a060cbdf2e0a487ebfd6ecad2ea0065c92d1e9966ba03aa8"
+      },
+      {
+        "canonical": "--allow-unauthenticated-tools",
+        "aliases": [
+          "--allow-unauthenticated-tools"
+        ],
+        "synopsisHash": "cecd44d7208781c72edfce05f48b61381d85a5de34ba73589c1713c16954b78d",
+        "descriptionHash": "907c9360181a58e24b4e4743f044944add02188467253312b08a10db0b39e237"
       },
       {
         "canonical": "--api-key",
@@ -2432,7 +2481,7 @@
           "-ctk"
         ],
         "synopsisHash": "0f944751b9a8412e99492ba217d28f1f9afb69d614367fa0cd331d93f168c0b1",
-        "descriptionHash": "335b0cefe6364e30abd2672fb733fcff3f34acf37377c9ec139e0d8bf105aecd"
+        "descriptionHash": "2d05adf23b5ff8d4505bd57e033d472646aa7006a3837fc1177902823421b20f"
       },
       {
         "canonical": "--cache-type-v",
@@ -2441,7 +2490,7 @@
           "-ctv"
         ],
         "synopsisHash": "ab875da89c0da289b41a680ec5bfa173d9433735e65bc45f12b22da2c4b2b3e5",
-        "descriptionHash": "a4eedfd3754a5364e3afd9a43268a9122bf9ea2717708a6ad816c0312b94ab9a"
+        "descriptionHash": "88537f4f6855cf46e9b8c4d6ba29abe1e5e5b1c35d300bfe1dbc3481b0248109"
       },
       {
         "canonical": "--chat-template",
@@ -2583,7 +2632,7 @@
           "--cors-origins"
         ],
         "synopsisHash": "38bf1814638ea7ad84b19333312b0db2be66f7db518be5d5d5adf9ba4d01876c",
-        "descriptionHash": "b717002495d81ec77df21ff852d170896de6cf633ff5e37f9e9b1ee12f2b99ad"
+        "descriptionHash": "7470b2266b530e71da32acd01dc49d44feeb7a2a9ac1218906f91520937e46ba"
       },
       {
         "canonical": "--cpu-mask",
@@ -2664,15 +2713,6 @@
         ],
         "synopsisHash": "81f85c6854c05905f809d480a8d68a465903dc849b192194346e2a2c6b4cb285",
         "descriptionHash": "27e69fbee55e90a82fb53af94757d2ee096d5197eb652f6b99a532b794f2c976"
-      },
-      {
-        "canonical": "--defrag-thold",
-        "aliases": [
-          "--defrag-thold",
-          "-dt"
-        ],
-        "synopsisHash": "6796f2f13539ee960ace0f1b571003098616bf88df09ec726a0357e298275479",
-        "descriptionHash": "ba37666f5663d4c0210030c31fbb195d1c4f7b50ae943171113dcaade3bbb705"
       },
       {
         "canonical": "--device",
@@ -3233,6 +3273,14 @@
         "descriptionHash": "88bc1fe36822f6f8d0076d4079a974786f1e13d0987771794da6e7a1f409ae78"
       },
       {
+        "canonical": "--media-allow-private-urls",
+        "aliases": [
+          "--media-allow-private-urls"
+        ],
+        "synopsisHash": "2f40dc68b246b426e73bedd921921123b0f597347bd3af33f13557ba7c7d9cd2",
+        "descriptionHash": "953a8448448bea38fe0ebd8682b5a44bd21622df47975eb69405b8158c016ad7"
+      },
+      {
         "canonical": "--media-path",
         "aliases": [
           "--media-path"
@@ -3386,6 +3434,14 @@
         "descriptionHash": "c0e148182bb88d0728bb459bc9218e116249242fb02d31df5c23205572f874a9"
       },
       {
+        "canonical": "--moe-cache-cpu-share",
+        "aliases": [
+          "--moe-cache-cpu-share"
+        ],
+        "synopsisHash": "c9e87295c31bee61ce06219f186471c5e20d42755e6dedf42b520c49cd4da629",
+        "descriptionHash": "12e21942dc437c5a15dd917fe879e3140c2e1b4f342cca69ea1b812cfb9a19c6"
+      },
+      {
         "canonical": "--moe-cache-mib",
         "aliases": [
           "--moe-cache-mib"
@@ -3494,6 +3550,15 @@
         ],
         "synopsisHash": "4fd65a0179a6edad624fee4cbf12451667bd488bf118e152215abc3bb5f46fe5",
         "descriptionHash": "20bfc97d94010283fefa2675f5890f29e3dfcddcebc1c05395a3654f7cf41c7b"
+      },
+      {
+        "canonical": "--ple",
+        "aliases": [
+          "--ple",
+          "--shard"
+        ],
+        "synopsisHash": "bf6545e1dc56d83a8d869c8ea4d6031a8be0bf4e09a7e972c4caa3884e70e26c",
+        "descriptionHash": "330424608d310a86208860bed6bac19b642f8d24354ecc56d6a28e21bdea6e2b"
       },
       {
         "canonical": "--poll",
@@ -3626,7 +3691,7 @@
           "--reasoning-preserve"
         ],
         "synopsisHash": "ec8323c80897d00b419d498eb1fee33d65836ba8da345f92273afed7b4141504",
-        "descriptionHash": "9c0a77e9a49b9d9a4325ce4f325a2e724b1dc338103cf11efb19705cd94dd649"
+        "descriptionHash": "319ef9537427f02d8993b2bf27a09d2d745e50d8291eec93ec9431738123eed5"
       },
       {
         "canonical": "--repack",
@@ -4041,7 +4106,7 @@
           "-ctkd"
         ],
         "synopsisHash": "1bfd928d2b8136d95700f4f71c539c0ebdac7241de9befbac1e94e549cba5b56",
-        "descriptionHash": "f913bb05dcf0fd82726abe80267814829cecdc4350d40c38402212f4c0de3439"
+        "descriptionHash": "92b91d54d22d4f58647dad88c6c6ce30bda88ab103f58c031793c694d13ccb60"
       },
       {
         "canonical": "--spec-draft-type-v",
@@ -4051,7 +4116,7 @@
           "-ctvd"
         ],
         "synopsisHash": "4eb62670d9a96a4217f4c19271bc751161ca1134aa7d4c8413d3f6ae441015c8",
-        "descriptionHash": "ce7a6da0a487b848d4dd836dee7c1676327b32509a5c0ff85ca4dd9d57b11f77"
+        "descriptionHash": "d4213525545af36ee7e13241f8003dd58e834b066fb02afb959ba94f26b52f7d"
       },
       {
         "canonical": "--spec-ngram-map-k-min-hits",
@@ -4194,7 +4259,7 @@
         "aliases": [
           "--spec-type"
         ],
-        "synopsisHash": "53b5acced798ead0c3483da7f20eaf635377be456ff1e284421fe1bad245f5bd",
+        "synopsisHash": "3656c2913f69d37772447834b57308ab643fa33ce04017a45e14ad9ecd466859",
         "descriptionHash": "bcc3ec824ed1b813315bba4919fd3fc034467140aa4567f06d32d38614ca7b1f"
       },
       {
@@ -4358,6 +4423,22 @@
         "descriptionHash": "7c05b7557aadcb7714a7314473b69c403c271e24b211a194600483471a280d2e"
       },
       {
+        "canonical": "--tts-lang",
+        "aliases": [
+          "--tts-lang"
+        ],
+        "synopsisHash": "5bfdc70127edee63226cba81df5305b24c7e70f4b03d2f257ece57310e073c12",
+        "descriptionHash": "800541d8058cb81023d04dad640f664ef5eb348744df96befb0d3684b4e66398"
+      },
+      {
+        "canonical": "--tts-voice",
+        "aliases": [
+          "--tts-voice"
+        ],
+        "synopsisHash": "2a03d409b456014fae4b095e09907292235a028ad30bae92cc8624294b208257",
+        "descriptionHash": "37fee26d58c2c1de51f3dc8becebb98ebddc6883f833092df48b6df76a867c69"
+      },
+      {
         "canonical": "--typical",
         "aliases": [
           "--typical",
@@ -4413,7 +4494,7 @@
           "--webui-mcp-proxy"
         ],
         "synopsisHash": "8e890a31163b4115f7f9a7f8286bdb7efdbafb3f1500b4f8b0524625eed778fa",
-        "descriptionHash": "2cdb2fffaf75da226c2d4eeeec650eccf4113726b0ffa53fd209aa7bd959e34c"
+        "descriptionHash": "f90bcd57fe185337e9a7d0415d4650b49576c9ace017b61bc475089a8d460736"
       },
       {
         "canonical": "--verbose",
@@ -4560,6 +4641,7 @@
         "granitehybrid",
         "jamba",
         "kimi-k3",
+        "kimi-k31",
         "kimi-linear",
         "lfm2",
         "lfm2moe",
@@ -4655,12 +4737,27 @@
       "--video-ffmpeg-dir",
       "--video-fps",
       "--video-timestamp-interval"
+    ],
+    "moeCacheCpuShare": [
+      "--moe-cache-cpu-share"
+    ],
+    "speechGeneration": [
+      "--tts-lang",
+      "--tts-voice"
     ]
   },
   "intentionalManualCommandOnly": {
     "experimentalPeerTunnel": [
       "--connect",
       "--connect-code"
+    ],
+    "extraModelShards": [
+      "--ple",
+      "--shard"
+    ],
+    "networkAccessOverrides": [
+      "--allow-unauthenticated-tools",
+      "--media-allow-private-urls"
     ]
   }
 }

@@ -70,9 +70,9 @@ Scan GGUF models, shards, and projectors; manage ModelScope and HuggingFace queu
 
 ### 实例配置 / Instance Configuration
 
-为每个 llama.cpp 实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整结构化选项，并依据所选 `llama-server --help` 进行运行时能力协商。当前上游稳定版 v0.9.0 基线跟踪 261 个参数条目。
+为每个 llama.cpp 实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整结构化选项，并依据所选 `llama-server --help` 进行运行时能力协商。当前上游稳定版 v1.0.0 基线跟踪 266 个参数条目。
 
-Choose model, engine, and port per llama.cpp instance, tune structured options with search, presets, and validation, and negotiate runtime capabilities against the selected `llama-server --help`. The current stable upstream v0.9.0 baseline tracks 261 parameter entries.
+Choose model, engine, and port per llama.cpp instance, tune structured options with search, presets, and validation, and negotiate runtime capabilities against the selected `llama-server --help`. The current stable upstream v1.0.0 baseline tracks 266 parameter entries.
 
 ![参数配置 / Parameter Configuration](public/docs/guide/06-configuration.png)
 
@@ -161,9 +161,9 @@ Built packages do not require Rust or Node.js. You need a supported OS, a compat
 
 ## 从源码构建 / Build from Source
 
-源码构建需要 Node.js 20.19.x 及更新的 20.x，或 Node.js 22.12 及以上版本、Rust stable 和对应平台的 Tauri 系统依赖。
+源码构建需要 Node.js 20.19.x 及更新的 20.x，或 Node.js 22.12 及以上版本、Rust stable（至少 1.89）和对应平台的 Tauri 系统依赖。
 
-Source builds require Node.js 20.x from 20.19, or Node.js 22.12 or newer, stable Rust, and platform-specific Tauri dependencies.
+Source builds require Node.js 20.x from 20.19, or Node.js 22.12 or newer, stable Rust (at least 1.89), and platform-specific Tauri dependencies.
 
 ```bash
 git clone https://github.com/jerrydong1988/llama-server-manager.git
@@ -178,6 +178,10 @@ npm run tauri dev
 ```bash
 npm run tauri build
 ```
+
+Rust 回归测试使用 `npm run test:rust`（先运行 `npm run build`）。该入口读取 Cargo JSON 产物清单后执行完整测试，兼容 Rust 1.100 的构建目录变化；可用 `npm run test:rust -- -j 2` 限制编译并发。
+
+Run Rust regressions with `npm run test:rust` after `npm run build`. It reads Cargo JSON artifacts before executing the full suite, including the Rust 1.100 build-layout changes. Use `npm run test:rust -- -j 2` to limit compilation concurrency.
 
 Ubuntu / Debian 构建依赖：
 

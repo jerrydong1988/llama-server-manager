@@ -14,7 +14,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
-const REPORTED_DEFAULTS_VERSION: u8 = 2;
+// Revision 3 also records the per-option KV type enums from --help.
+const REPORTED_DEFAULTS_VERSION: u8 = 3;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
 pub(crate) const PERSISTENCE_REVISION: u8 = 8;
 fn single_slot_scope() -> Vec<i32> {
@@ -51,7 +52,7 @@ impl ModelPersistenceScope {
         // An explicit-override config can retain values which the command builder
         // intentionally omits. Those values cannot qualify the effective launch.
         let emits = |keys: &[&str]| {
-            config.explicit_overrides.as_ref().map_or(true, |fields| {
+            config.explicit_overrides.as_ref().is_none_or(|fields| {
                 keys.iter()
                     .any(|key| fields.iter().any(|field| field.as_str() == *key))
             })
@@ -226,7 +227,7 @@ pub(crate) fn reviewed_multi_slot(
 // Recheck the runtime identity used by the final checkpoint fingerprint, after
 // the potentially long model hashing step. A probe is not a launch-time lease.
 pub(crate) fn persistence_runtime_matches(caps: &EngineCapabilities, digest: &str) -> bool {
-    caps.persistence_profile.as_deref().map_or(true, |id| {
+    caps.persistence_profile.as_deref().is_none_or(|id| {
         profile_for_artifacts(Some(digest)).is_some_and(|p| p.id == id)
     })
 }
@@ -550,6 +551,52 @@ fn defaults_from_help_block(flags: &[String], block: &str, defaults: &mut HashMa
     }
 }
 
+const KV_CACHE_FLAGS: &[&str] = &[
+    "-ctk", "--cache-type-k",
+    "-ctv", "--cache-type-v",
+    "-ctkd", "--spec-draft-type-k", "--cache-type-k-draft",
+    "-ctvd", "--spec-draft-type-v", "--cache-type-v-draft",
+];
+
+pub(crate) fn extract_kv_cache_types(output: &str) -> HashMap<String, Vec<String>> {
+    fn collect(flags: &[String], block: &str, result: &mut HashMap<String, Vec<String>>) {
+        let Some((_, values)) = block.split_once("allowed values:") else {
+            return;
+        };
+        let values = values.split('(').next().unwrap_or_default();
+        let types = values
+            .split(',')
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if types.is_empty() {
+            return;
+        }
+        for flag in flags.iter().filter(|flag| KV_CACHE_FLAGS.contains(&flag.as_str())) {
+            result.insert(flag.clone(), types.clone());
+        }
+    }
+    let mut result = HashMap::new();
+    let mut flags = Vec::new();
+    let mut block = String::new();
+    for line in output.lines() {
+        let trimmed = line.trim_start();
+        if line.len() - trimmed.len() <= 4 && trimmed.starts_with('-') {
+            collect(&flags, &block, &mut result);
+            flags = extract_supported_flags(trimmed);
+            block.clear();
+        }
+        block.push(' ');
+        block.push_str(trimmed);
+    }
+    collect(&flags, &block, &mut result);
+    result
+}
+
 /// Extract defaults reported by the selected executable for explanation only.
 /// Command generation never relies on this data because upstream help text can
 /// itself contain mistakes (b10068's --perf wording is one known example).
@@ -784,6 +831,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let supported_flags = extract_supported_flags(&help_output.text);
     let reported_defaults = extract_reported_defaults(&help_output.text);
     let speculative_types = extract_speculative_types(&help_output.text);
+    let kv_cache_types = extract_kv_cache_types(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
     let artifacts = if engine.kind == crate::gufo::EngineKind::LlamaCpp && cfg!(windows) && status == "detected" {
         crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir())
@@ -846,6 +894,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         reported_defaults,
         reported_defaults_version: REPORTED_DEFAULTS_VERSION,
         speculative_types,
+        kv_cache_types,
         context_checkpoint_persistence,
         persistence_revision: PERSISTENCE_REVISION,
         persistence_profile,
@@ -891,6 +940,11 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
     let count = match flag {
         "-m"
         | "--model"
+        | "--ple"
+        | "--shard"
+        | "--moe-cache-cpu-share"
+        | "--tts-lang"
+        | "--tts-voice"
         | "-a"
         | "--lora"
         | "--lora-scaled"
@@ -1067,6 +1121,8 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--cors-credentials"
         | "--no-cors-credentials"
         | "--ui-mcp-proxy"
+        | "--allow-unauthenticated-tools"
+        | "--media-allow-private-urls"
         | "--agent"
         | "--embedding"
         | "--reranking"
@@ -1129,9 +1185,7 @@ pub(crate) fn unsupported_command_flags(
     command: &[String],
     capabilities: &EngineCapabilities,
 ) -> Vec<String> {
-    if capabilities.status != "detected" {
-        return Vec::new();
-    }
+    let fully_detected = capabilities.status == "detected";
     let supported = capabilities
         .supported_flags
         .iter()
@@ -1144,14 +1198,8 @@ pub(crate) fn unsupported_command_flags(
         .collect::<BTreeSet<_>>();
     let mut unsupported = BTreeSet::new();
     for group in command_argument_groups(command) {
-        if !supported.contains(group.flag) {
+        if fully_detected && !supported.contains(group.flag) {
             unsupported.insert(group.flag.to_string());
-            continue;
-        }
-        // Older/forked engines can advertise the flag without printing its enum.
-        // Preserve the historical flag-level behavior unless the engine supplied
-        // an authoritative value list; checkpoint eligibility remains stricter.
-        if group.flag != "--spec-type" || reported_speculative_types.is_empty() {
             continue;
         }
         let value = group.tokens[0]
@@ -1159,6 +1207,23 @@ pub(crate) fn unsupported_command_flags(
             .map(|(_, value)| value)
             .or_else(|| group.tokens.get(1).map(String::as_str))
             .unwrap_or_default();
+        if KV_CACHE_FLAGS.contains(&group.flag) {
+            // Old/forked help without an enum retains existing types, but the new
+            // FP8 value requires explicit evidence from this exact executable.
+            let allowed = capabilities.kv_cache_types.get(group.flag);
+            if (fully_detected && allowed.is_some_and(|types| !types.iter().any(|kind| kind == value)))
+                || (value == "f8_e4m3" && (!fully_detected || allowed.is_none()))
+            {
+                unsupported.insert(format!("{}={value}", group.flag));
+            }
+            continue;
+        }
+        // Older/forked engines can advertise the flag without printing its enum.
+        // Preserve the historical flag-level behavior unless the engine supplied
+        // an authoritative value list; checkpoint eligibility remains stricter.
+        if !fully_detected || group.flag != "--spec-type" || reported_speculative_types.is_empty() {
+            continue;
+        }
         for speculative_type in crate::speculative::parse_speculative_types(value) {
             if !reported_speculative_types.contains(&speculative_type) {
                 unsupported.insert(format!("--spec-type={speculative_type}"));
@@ -1835,6 +1900,70 @@ mod tests {
 
         capabilities.speculative_types.clear();
         assert!(unsupported_command_flags(&command, &capabilities).is_empty());
+    }
+
+    #[test]
+    fn v1_kv_cache_enums_are_scoped_to_each_option_and_its_aliases() {
+        let help = "-ctk, --cache-type-k TYPE  KV cache data type for K\n\
+                    \x20        allowed values: f32, f16, bf16, f8_e4m3,\n\
+                    \x20                        q8_0, q4_0\n\
+                    \x20        (default: f16)\n\
+                    -ctv, --cache-type-v TYPE allowed values: f16, q8_0 (default: f16)\n\
+                    --spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE\n\
+                    \x20        allowed values: f16, f8_e4m3 (default: f16)\n\
+                    --spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE\n\
+                    \x20        allowed values: f16, f8_e4m3 (default: f16)\n\
+                    --unrelated TYPE allowed values: secret (default: secret)";
+        let values = extract_kv_cache_types(help);
+        assert_eq!(values["-ctk"], values["--cache-type-k"]);
+        assert!(values["-ctk"].contains(&"f8_e4m3".to_string()));
+        assert!(values["-ctk"].contains(&"q4_0".to_string()));
+        assert!(!values["-ctv"].contains(&"f8_e4m3".to_string()));
+        assert!(!values.contains_key("--unrelated"));
+        let mut capabilities = detected(KV_CACHE_FLAGS);
+        capabilities.kv_cache_types = values;
+        for flag in KV_CACHE_FLAGS {
+            for arguments in [vec![flag.to_string(), "f8_e4m3".into()], vec![format!("{flag}=f8_e4m3")]] {
+                let mut command = vec!["llama-server".into()];
+                command.extend(arguments);
+                let rejected = unsupported_command_flags(&command, &capabilities);
+                if ["-ctv", "--cache-type-v"].contains(flag) {
+                    assert_eq!(rejected, vec![format!("{flag}=f8_e4m3")]);
+                } else {
+                    assert!(rejected.is_empty(), "{flag}: {rejected:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v1_fp8_requires_a_complete_probe_while_legacy_types_remain_compatible() {
+        for status in ["detected", "partial", "failed", "unprobed"] {
+            let capabilities = EngineCapabilities { status: status.into(), ..detected(KV_CACHE_FLAGS) };
+            for flag in KV_CACHE_FLAGS {
+                let command = vec!["llama-server".into(), flag.to_string(), "f8_e4m3".into()];
+                assert_eq!(unsupported_command_flags(&command, &capabilities), vec![format!("{flag}=f8_e4m3")]);
+                let legacy = vec!["llama-server".into(), flag.to_string(), "q8_0".into()];
+                assert!(unsupported_command_flags(&legacy, &capabilities).is_empty());
+            }
+        }
+        assert!(extract_kv_cache_types("--cache-type-k TYPE (default: f16)").is_empty());
+        let mut old = detected(&["-ctk"]);
+        old.kv_cache_types = HashMap::from([("-ctk".into(), vec!["f16".into(), "q8_0".into()])]);
+        assert_eq!(unsupported_command_flags(&["llama-server".into(), "-ctk=f8_e4m3".into()], &old), vec!["-ctk=f8_e4m3"]);
+        old.status = "partial".into();
+        old.kv_cache_types.insert("-ctk".into(), vec!["f16".into(), "f8_e4m3".into()]);
+        assert!(unsupported_command_flags(&["llama-server".into(), "-ctk=q8_0".into()], &old).is_empty());
+        assert_eq!(unsupported_command_flags(&["llama-server".into(), "-ctk=f8_e4m3".into()], &old), vec!["-ctk=f8_e4m3"]);
+    }
+
+    #[test]
+    fn v1_removed_and_reviewed_custom_flags_follow_the_selected_engine() {
+        let command = ["llama-server", "--moe-cache-cpu-share", "0.25", "--tts-lang", "en", "--tts-voice", "speaker", "--defrag-thold", "0.1", "-dt", "0.1"].map(str::to_string);
+        let current = detected(&["--moe-cache-cpu-share", "--tts-lang", "--tts-voice"]);
+        assert_eq!(unsupported_command_flags(&command, &current), vec!["--defrag-thold", "-dt"]);
+        let old = detected(&["--defrag-thold", "-dt"]);
+        assert_eq!(unsupported_command_flags(&command, &old), vec!["--moe-cache-cpu-share", "--tts-lang", "--tts-voice"]);
     }
 
     #[test]
