@@ -397,8 +397,8 @@ mod multi_slot {
         let sandbox = TestSandbox::new("multi-sparse");
         let store = sandbox.store();
         let b = MultiBackend::new(&store, 4);
-        for i in 0..3 {
-            b.slots[i].configure(|s| s.prompt_tokens = 0);
+        for slot in &b.slots[..3] {
+            slot.configure(|s| s.prompt_tokens = 0);
         }
         let (c, cfg, fp) = coordinator(&store, 4, 900);
         c.restore_or_cold("instance-1", 900, &fp, false, &b)

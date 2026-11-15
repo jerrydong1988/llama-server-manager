@@ -822,7 +822,7 @@ mod tests {
         let mut max_x = 0;
         let mut max_y = 0;
         let mut found = false;
-        for (index, pixel) in icon.rgba().chunks_exact(4).enumerate() {
+        for (index, pixel) in icon.rgba().as_chunks::<4>().0.iter().enumerate() {
             if pixel[3] <= 128 {
                 continue;
             }

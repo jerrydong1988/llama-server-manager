@@ -74,9 +74,9 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
   if (body.includes('softprops/action-gh-release') || body.includes('gh release upload')) {
     failures.push(`${job} must not publish while build dependencies are present`)
   }
-  if (!body.includes('cargo test --manifest-path src-tauri/Cargo.toml --locked')) failures.push(`${job} does not run Rust tests`)
+  if (!body.includes('npm run test:rust')) failures.push(`${job} does not run Rust tests`)
   const frontendBuildIndex = body.indexOf('run: npm run build')
-  const rustTestIndex = body.indexOf('cargo test --manifest-path src-tauri/Cargo.toml --locked')
+  const rustTestIndex = body.indexOf('npm run test:rust')
   if (frontendBuildIndex < 0 || frontendBuildIndex > rustTestIndex) {
     failures.push(`${job} does not create frontendDist before compiling Rust tests`)
   }

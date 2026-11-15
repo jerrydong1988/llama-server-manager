@@ -161,9 +161,9 @@ Built packages do not require Rust or Node.js. You need a supported OS, a compat
 
 ## 从源码构建 / Build from Source
 
-源码构建需要 Node.js 20.19.x 及更新的 20.x，或 Node.js 22.12 及以上版本、Rust stable 和对应平台的 Tauri 系统依赖。
+源码构建需要 Node.js 20.19.x 及更新的 20.x，或 Node.js 22.12 及以上版本、Rust stable（至少 1.89）和对应平台的 Tauri 系统依赖。
 
-Source builds require Node.js 20.x from 20.19, or Node.js 22.12 or newer, stable Rust, and platform-specific Tauri dependencies.
+Source builds require Node.js 20.x from 20.19, or Node.js 22.12 or newer, stable Rust (at least 1.89), and platform-specific Tauri dependencies.
 
 ```bash
 git clone https://github.com/jerrydong1988/llama-server-manager.git
@@ -178,6 +178,10 @@ npm run tauri dev
 ```bash
 npm run tauri build
 ```
+
+Rust 回归测试使用 `npm run test:rust`（先运行 `npm run build`）。该入口读取 Cargo JSON 产物清单后执行完整测试，兼容 Rust 1.100 的构建目录变化；可用 `npm run test:rust -- -j 2` 限制编译并发。
+
+Run Rust regressions with `npm run test:rust` after `npm run build`. It reads Cargo JSON artifacts before executing the full suite, including the Rust 1.100 build-layout changes. Use `npm run test:rust -- -j 2` to limit compilation concurrency.
 
 Ubuntu / Debian 构建依赖：
 

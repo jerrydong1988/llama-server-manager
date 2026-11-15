@@ -74,7 +74,20 @@ fn macro_backports_preserve_valid_expansions_and_report_invalid_inputs() {
         .unwrap()
         .to_path_buf();
     let mut externs = Vec::new();
+    let reported: std::collections::HashMap<String, std::path::PathBuf> =
+        std::env::var("LSM_TEST_PROC_MACRO_ARTIFACTS")
+            .map(|value| serde_json::from_str(&value).expect("valid Cargo macro artifact manifest"))
+            .unwrap_or_default();
+    let mut library_dirs = std::collections::BTreeSet::from([deps.clone()]);
     for name in ["glib_macros", "gtk3_macros"] {
+        if !reported.is_empty() {
+            let library = reported.get(name).expect("Cargo reported both reviewed macro libraries");
+            assert!(library.is_file(), "missing Cargo artifact: {}", library.display());
+            library_dirs.insert(library.parent().unwrap().to_path_buf());
+            externs.push(format!("{name}={}", library.display()));
+            continue;
+        }
+        // Retain direct cargo-test support for legacy flat artifact layouts.
         let mut libraries: Vec<_> = fs::read_dir(&deps)
             .unwrap()
             .filter_map(Result::ok)
@@ -92,7 +105,7 @@ fn macro_backports_preserve_valid_expansions_and_report_invalid_inputs() {
             "{name}={}",
             libraries
                 .last()
-                .expect("macro library was built")
+                .expect("macro library not beside test binary; use npm run test:rust for Cargo artifact discovery")
                 .path()
                 .display()
         ));
@@ -121,9 +134,10 @@ fn macro_backports_preserve_valid_expansions_and_report_invalid_inputs() {
                 "--out-dir",
             ])
             .arg(&base)
-            .arg("-L")
-            .arg(format!("dependency={}", deps.display()))
             .arg(&source);
+        for directory in &library_dirs {
+            command.arg("-L").arg(format!("dependency={}", directory.display()));
+        }
         for item in &externs {
             command.arg("--extern").arg(item);
         }
