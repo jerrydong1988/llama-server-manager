@@ -1,4 +1,42 @@
 #[test]
+fn bundled_sqlite_is_patched_and_preserves_wal_transactions() {
+    use rusqlite::Connection;
+
+    // Check the library actually linked into the binary, including platform CI.
+    assert!(rusqlite::version_number() >= 3_054_000, "RUSTSEC-2026-0459: {}", rusqlite::version());
+    let temp_root = std::env::temp_dir();
+    let base = temp_root.join(format!("sqlite-wal-regression-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&base).unwrap();
+    let database = base.join("history.db");
+    let writer = Connection::open(&database).unwrap();
+    let mode: String = writer.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0)).unwrap();
+    assert_eq!(mode, "wal");
+    writer.execute_batch("PRAGMA wal_autocheckpoint=0; CREATE TABLE history(id INTEGER PRIMARY KEY, payload BLOB NOT NULL); INSERT INTO history VALUES(1, X'001122ff');").unwrap();
+    assert!(std::fs::metadata(base.join("history.db-wal")).unwrap().len() > 32);
+
+    let reader = Connection::open(&database).unwrap();
+    let payload = || reader.query_row("SELECT payload FROM history WHERE id=1", [], |row| row.get::<_, Vec<u8>>(0)).unwrap();
+    assert_eq!(payload(), [0, 0x11, 0x22, 0xff]);
+    writer.execute_batch("BEGIN IMMEDIATE; UPDATE history SET payload=X'99' WHERE id=1;").unwrap();
+    assert_eq!(payload(), [0, 0x11, 0x22, 0xff], "uncommitted data must stay isolated");
+    writer.execute_batch("ROLLBACK; BEGIN IMMEDIATE; INSERT INTO history VALUES(2, X'aabb'); COMMIT;").unwrap();
+    assert_eq!(payload(), [0, 0x11, 0x22, 0xff]);
+    let count: i64 = reader.query_row("SELECT count(*) FROM history", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 2);
+    drop(reader);
+    writer.close().unwrap();
+
+    let reopened = Connection::open(&database).unwrap();
+    let rows: Vec<Vec<u8>> = reopened.prepare("SELECT payload FROM history ORDER BY id").unwrap()
+        .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(rows, vec![vec![0, 0x11, 0x22, 0xff], vec![0xaa, 0xbb]]);
+    assert_eq!(reopened.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)).unwrap(), "ok");
+    reopened.close().unwrap();
+    assert_eq!(base.parent(), Some(temp_root.as_path()));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn urlpattern_identifier_backport_preserves_url_boundaries() {
     use urlpattern::{UrlPattern, UrlPatternInit, UrlPatternMatchInput};
     for name in ["id", "编号", "Δvalue", "_value", "$value"] {

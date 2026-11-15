@@ -2203,7 +2203,7 @@ fn take_queued_file_for_pause(
             .iter()
             .position(|file| {
                 file.task_id.as_deref() == Some(task_id)
-                    && run_id.map_or(true, |id| file.run_id.as_deref() == Some(id))
+                    && run_id.is_none_or(|id| file.run_id.as_deref() == Some(id))
                     && !is_terminal_download_file(file)
             })
             .map(|file_index| (index, file_index))

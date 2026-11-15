@@ -176,7 +176,7 @@ pub(super) fn patch_instance(target: &mut Value, changes: &Value) -> Result<(), 
 fn preserve_router_keys(current: &Value, patch: &mut Value) -> Result<(), Failure> {
     if let Some(keys) = patch.get_mut("api_keys").and_then(Value::as_array_mut) {
         for next in keys {
-            if !next.is_object() || next["id"].as_str().map_or(true, str::is_empty) {
+            if !next.is_object() || next["id"].as_str().is_none_or(str::is_empty) {
                 return Err(Failure::new(
                     "VALIDATION",
                     "API key entries require an object with a nonempty id",

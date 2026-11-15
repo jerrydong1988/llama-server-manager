@@ -3002,12 +3002,11 @@ fn recover_gui_checkpoint_process(
         let state = app.state::<AppState>();
         let operation = instance_operation_lock(state.inner(), &instance_id);
         let _operation = operation.lock().await;
-        if !state
+        if state
             .running
             .lock()
             .unwrap()
-            .get(&instance_id)
-            .is_some_and(|running| running.pid == expected_pid)
+            .get(&instance_id).is_none_or(|running| running.pid != expected_pid)
             || !state
                 .checkpoint_coordinator
                 .restore_restart_required(&instance_id, expected_pid)

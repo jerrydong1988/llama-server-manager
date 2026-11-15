@@ -341,7 +341,7 @@ async fn run(options: Options) -> Result<bool, String> {
         return Ok(true);
     }
     if options.words[0] == "schema" {
-        let operations=catalog::operations().into_iter().filter(|op|options.words.get(1).map_or(true, |name|name==op.name)).map(|op|json!({"operation":op.name,"description":op.description,"permission":op.permission,"schema":op.schema()})).collect::<Vec<_>>();
+        let operations=catalog::operations().into_iter().filter(|op|options.words.get(1).is_none_or(|name|name==op.name)).map(|op|json!({"operation":op.name,"description":op.description,"permission":op.permission,"schema":op.schema()})).collect::<Vec<_>>();
         if operations.is_empty() {
             return Err("unknown operation".into());
         }

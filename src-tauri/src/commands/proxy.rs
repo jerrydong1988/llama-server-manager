@@ -2584,7 +2584,7 @@ fn safe_context_window(health: &[TargetHealthSnapshot]) -> Option<u64> {
             target
                 .capabilities
                 .context_length
-                .map_or(true, |context| context == 0)
+                .is_none_or(|context| context == 0)
         })
     {
         return None;

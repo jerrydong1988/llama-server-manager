@@ -203,7 +203,7 @@ mod windows {
                 slashes += 1;
                 continue;
             }
-            out.extend(std::iter::repeat('\\').take(if c == '"' {
+            out.extend(std::iter::repeat_n('\\', if c == '"' {
                 slashes * 2 + 1
             } else {
                 slashes
@@ -211,7 +211,7 @@ mod windows {
             out.push(c);
             slashes = 0;
         }
-        out.extend(std::iter::repeat('\\').take(slashes * 2));
+        out.extend(std::iter::repeat_n('\\', slashes * 2));
         out.push('"');
         out
     }

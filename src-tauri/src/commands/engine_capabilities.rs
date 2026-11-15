@@ -52,7 +52,7 @@ impl ModelPersistenceScope {
         // An explicit-override config can retain values which the command builder
         // intentionally omits. Those values cannot qualify the effective launch.
         let emits = |keys: &[&str]| {
-            config.explicit_overrides.as_ref().map_or(true, |fields| {
+            config.explicit_overrides.as_ref().is_none_or(|fields| {
                 keys.iter()
                     .any(|key| fields.iter().any(|field| field.as_str() == *key))
             })
@@ -227,7 +227,7 @@ pub(crate) fn reviewed_multi_slot(
 // Recheck the runtime identity used by the final checkpoint fingerprint, after
 // the potentially long model hashing step. A probe is not a launch-time lease.
 pub(crate) fn persistence_runtime_matches(caps: &EngineCapabilities, digest: &str) -> bool {
-    caps.persistence_profile.as_deref().map_or(true, |id| {
+    caps.persistence_profile.as_deref().is_none_or(|id| {
         profile_for_artifacts(Some(digest)).is_some_and(|p| p.id == id)
     })
 }

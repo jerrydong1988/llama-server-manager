@@ -2389,8 +2389,7 @@ impl CheckpointStore {
             let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) else {
                 continue;
             };
-            let replace = newest.as_ref().map_or(
-                true,
+            let replace = newest.as_ref().is_none_or(
                 |(current, _): &(DateTime<chrono::FixedOffset>, LoadedGeneration)| {
                     created_at > *current
                 },
@@ -2512,7 +2511,7 @@ impl CheckpointStore {
                 if let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) {
                     let replace = newest_global
                         .as_ref()
-                        .map_or(true, |(newest, _, _)| created_at > *newest);
+                        .is_none_or(|(newest, _, _)| created_at > *newest);
                     if replace {
                         newest_global = Some((created_at, key.clone(), bytes));
                     }
