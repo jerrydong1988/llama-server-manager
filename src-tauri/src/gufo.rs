@@ -118,9 +118,16 @@ pub fn draft_tokens_ignored(help: &str) -> bool {
 pub fn command_for_draft_policy(command: &[String], ignored: bool) -> Vec<String> {
     let mut command = command.to_vec();
     if !ignored { return command; }
-    if let Some(index) = command.iter().position(|arg| arg == "--draft-tokens") {
-        let end = (index + 2).min(command.len());
-        command.drain(index..end);
+    // prepare() emits only value-taking long options. Skip their values so a
+    // literal alias or API key equal to --draft-tokens cannot be removed.
+    let mut index = 1;
+    while index < command.len() {
+        if command[index] == "--draft-tokens" {
+            let end = (index + 2).min(command.len());
+            command.drain(index..end);
+            break;
+        }
+        index += if command[index].starts_with("--") { 2 } else { 1 };
     }
     command
 }
@@ -438,6 +445,20 @@ mod tests {
         ] {
             assert!(!draft_tokens_ignored(help), "{help}");
         }
+    }
+
+    #[test]
+    fn removing_ignored_draft_option_preserves_literal_argument_values() {
+        let mut command: Vec<String> = [
+            "gufo.exe", "serve", "--api-key", "--draft-tokens", "llm",
+            "--model", "model.gguf", "--served-model-name", "--draft-tokens",
+            "--speculative", "mtp",
+        ].into_iter().map(str::to_string).collect();
+        let expected = command.clone();
+        assert_eq!(command_for_draft_policy(&command, true), expected);
+        command.extend(["--draft-tokens".into(), "3".into()]);
+        assert_eq!(command_for_draft_policy(&command, true), expected);
+        assert_eq!(command_for_draft_policy(&command, false), command);
     }
 
     #[cfg(windows)]
