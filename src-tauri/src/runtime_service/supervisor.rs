@@ -2349,6 +2349,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn gufo_runtime_restores_draft_policy_without_relaxing_command_validation() {
+        use super::validate_gufo_launch_command;
         let root = std::env::temp_dir().join(format!("lsm-gufo-runtime-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let model = root.join("model.gguf");
