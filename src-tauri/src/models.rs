@@ -274,6 +274,9 @@ pub struct EngineCapabilities {
     pub version_probe_detail: Option<String>,
     #[serde(default)]
     pub supported_flags: Vec<String>,
+    /// None marks a Gufo probe cached before draft policy detection existed.
+    #[serde(default)]
+    pub gufo_draft_tokens_ignored: Option<bool>,
     #[serde(default)]
     pub reported_defaults: HashMap<String, String>,
     #[serde(default)]
@@ -316,6 +319,7 @@ impl Default for EngineCapabilities {
             version_status: default_engine_version_status(),
             version_probe_detail: None,
             supported_flags: Vec::new(),
+            gufo_draft_tokens_ignored: None,
             reported_defaults: HashMap::new(),
             reported_defaults_version: 0,
             speculative_types: Vec::new(),

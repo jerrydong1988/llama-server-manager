@@ -2835,12 +2835,13 @@ async fn validate_gufo_capabilities(
     state: &AppState,
     config: &InstanceConfig,
     executable: &str,
-    command: &[String],
+    command: &mut Vec<String>,
 ) -> AppResult<Box<EngineCapabilities>> {
     let caps = match trusted_engine_capabilities(state, config, executable, true).await {
         EngineCapabilityResolution::Available(caps) if caps.status == "detected" && caps.version_status == "detected" => caps,
         _ => return Err(AppError::new("GUFO_PROBE_REQUIRED", "Probe the selected Gufo engine before launching", false)),
     };
+    *command = crate::gufo::command_for_draft_policy(command, caps.gufo_draft_tokens_ignored == Some(true));
     let unsupported: Vec<_> = command.iter()
         .filter(|arg| arg.starts_with("--") && !caps.supported_flags.contains(arg))
         .collect();
@@ -2873,12 +2874,12 @@ pub async fn generate_server_command(
     let mut timing = crate::operation_timing::OperationTiming::new("generate_server_command");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     let manual = uses_manual_command(&config);
-    let (config, _, command) = prepare_launch_checked(config, &engine_exe)?;
+    let (config, _, mut command) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
     timing.mark("prepare");
     if crate::gufo::is_gufo(&config) {
-        validate_gufo_capabilities(state.inner(), &config, &engine_exe, &command).await?;
+        validate_gufo_capabilities(state.inner(), &config, &engine_exe, &mut command).await?;
         return Ok(GeneratedServerCommand { command, unsupported_flags: Vec::new(), emitted_override_keys: config.explicit_overrides.clone().unwrap_or_default() });
     }
     if manual {
@@ -3065,11 +3066,11 @@ async fn start_server_impl(
     validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let manual = uses_manual_command(&config);
-    let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
+    let (config, workload, mut generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
     let (mut cmd, engine_capabilities) = if crate::gufo::is_gufo(&config) {
-        let caps = validate_gufo_capabilities(state.inner(), &config, &engine_exe, &generated_cmd).await?;
+        let caps = validate_gufo_capabilities(state.inner(), &config, &engine_exe, &mut generated_cmd).await?;
         (generated_cmd, Some(caps))
     } else if manual {
         (generated_cmd, None)
@@ -3140,6 +3141,8 @@ async fn start_server_impl(
                 instance_id: instance_id.clone(),
                 config: config.clone(),
                 engine_backend: engine_backend.clone(),
+                gufo_draft_tokens_ignored: engine_capabilities.as_ref()
+                    .is_some_and(|caps| caps.gufo_draft_tokens_ignored == Some(true)),
                 command: cmd.clone(),
                 command_display: cmd_display.clone(),
                 executable_sha256: crate::security::executable_sha256(std::path::Path::new(

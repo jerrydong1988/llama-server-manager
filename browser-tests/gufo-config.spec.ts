@@ -1,5 +1,85 @@
 import { expect, test } from '@playwright/test'
 
+for (const language of ['zh-CN', 'en-US']) {
+  test(`Gufo model-controlled drafts preserve legacy values in ${language}`, async ({ page }, testInfo) => {
+    await page.addInitScript(lang => {
+      localStorage.setItem('lang', lang)
+      localStorage.setItem('lastTab', 'instances')
+    }, language)
+    await page.goto('/?scenario=gufo')
+    await page.evaluate(async () => {
+      const modulePath = '/src/store.ts'
+      const { useAppStore } = await import(/* @vite-ignore */ modulePath)
+      const store = useAppStore.getState()
+      const instance = store.instances.find((item: { id: string }) => item.id === 'browser-test-instance')
+      store.updateInstance(instance.id, { config: { ...instance.config,
+        gufo: { ...instance.config.gufo, speculative: 'mtp', draft_tokens: 3 } } })
+      useAppStore.setState({ engines: store.engines.map((engine: object) => ({ ...engine,
+        version: 'gufo version development (unknown)',
+        capabilities: { status: 'detected', gufoDraftTokensIgnored: true, supportedFlags: ['--draft-tokens'] } })) })
+    })
+    await page.getByRole('button', { name: language === 'zh-CN' ? '配置参数' : 'Configure', exact: true }).last().click()
+    const form = page.getByTestId('gufo-config-page')
+    const drafts = page.getByLabel(language === 'zh-CN' ? '草稿 Token 数' : 'Draft tokens', { exact: true })
+    await expect(drafts).toHaveValue(language === 'zh-CN' ? '由模型决定' : 'Model controlled')
+    await expect(drafts).toHaveAttribute('readonly', '')
+    await expect(form.locator('input[id$="-draft_tokens"]')).toHaveCount(0)
+    const speculation = form.locator('section').filter({ has: page.getByRole('heading', {
+      name: language === 'zh-CN' ? '推测解码' : 'Speculative decoding', exact: true,
+    }) })
+    for (const width of [560, 1280]) {
+      await page.setViewportSize({ width, height: 1100 })
+      await expect(drafts).toBeVisible()
+      expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+      await speculation.scrollIntoViewIfNeeded()
+      await speculation.screenshot({ path: testInfo.outputPath(`gufo-model-owned-${width}.png`), animations: 'disabled' })
+    }
+    await form.locator('select[id$="-model_family"]').selectOption('qwen38_27b')
+    await expect(drafts).toHaveCount(0)
+    await form.locator('select[id$="-speculative"]').selectOption('dflash2')
+    await expect(drafts).toHaveValue(language === 'zh-CN' ? '由模型决定' : 'Model controlled')
+    await page.getByRole('button', { name: language === 'zh-CN' ? '校验并保存' : 'Validate and save', exact: true }).click()
+    await expect(page.getByRole('status')).toHaveText(language === 'zh-CN' ? '配置已保存' : 'Configuration saved')
+    expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].gufo.draft_tokens)).toBe(3)
+    await page.evaluate(async () => {
+      const modulePath = '/src/store.ts'
+      const { useAppStore } = await import(/* @vite-ignore */ modulePath)
+      useAppStore.setState((state: { engines: Array<{ capabilities: object }> }) => ({ engines: state.engines.map(engine => ({ ...engine,
+        capabilities: { ...engine.capabilities, gufoDraftTokensIgnored: false } })) }))
+    })
+    await expect(drafts).toHaveValue('3')
+    await expect(drafts).toBeEditable()
+    await drafts.fill('5')
+    await page.getByRole('button', { name: language === 'zh-CN' ? '校验并保存' : 'Validate and save', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'].gufo.draft_tokens)).toBe(5)
+  })
+}
+
+test('Gufo unknown draft policy can be probed without editing the saved value', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=gufo')
+  await page.evaluate(async () => {
+    const modulePath = '/src/store.ts'
+    const { useAppStore } = await import(/* @vite-ignore */ modulePath)
+    const store = useAppStore.getState()
+    const instance = store.instances.find((item: { id: string }) => item.id === 'browser-test-instance')
+    store.updateInstance(instance.id, { config: { ...instance.config,
+      gufo: { ...instance.config.gufo, speculative: 'mtp', draft_tokens: 4 } } })
+    useAppStore.setState({ engines: store.engines.map((engine: { capabilities: object }) => ({ ...engine,
+      capabilities: { ...engine.capabilities, gufoDraftTokensIgnored: undefined } })) })
+  })
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+  const drafts = page.getByLabel('草稿 Token 数', { exact: true })
+  await expect(drafts).toHaveValue('尚未检测')
+  await expect(drafts).toHaveAttribute('readonly', '')
+  await page.getByRole('button', { name: '检测引擎', exact: true }).click()
+  await expect(drafts).toHaveValue('4')
+  await expect(drafts).toBeEditable()
+})
+
 test('a failed Gufo save does not roll back a newer instance update', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')

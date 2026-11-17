@@ -92,6 +92,39 @@ pub fn is_gufo(config: &InstanceConfig) -> bool {
     config.engine_kind == EngineKind::Gufo
 }
 
+/// Read only this option's help block; neither the version string nor a nearby
+/// deprecated option establishes that --draft-tokens is ignored.
+pub fn draft_tokens_ignored(help: &str) -> bool {
+    let mut found = false;
+    let mut description = String::new();
+    for line in help.lines() {
+        let line = line.trim();
+        if line.starts_with('-') {
+            if found { break; }
+            found = line.split_whitespace().take_while(|token| token.starts_with('-'))
+                .any(|token| token.trim_end_matches(',') == "--draft-tokens");
+        } else if found && line.is_empty() {
+            break;
+        }
+        if found {
+            description.push(' ');
+            description.push_str(line);
+        }
+    }
+    description.to_ascii_lowercase().contains("deprecated and ignored")
+}
+
+/// Preserve the saved legacy value; suppress only the ignored launch argument.
+pub fn command_for_draft_policy(command: &[String], ignored: bool) -> Vec<String> {
+    let mut command = command.to_vec();
+    if !ignored { return command; }
+    if let Some(index) = command.iter().position(|arg| arg == "--draft-tokens") {
+        let end = (index + 2).min(command.len());
+        command.drain(index..end);
+    }
+    command
+}
+
 pub fn instance_directory(id: &str) -> PathBuf {
     crate::utils::get_data_dir().join("gufo").join(id)
 }
@@ -386,6 +419,60 @@ pub fn startup_grace(config: &InstanceConfig) -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draft_policy_uses_the_option_help_not_version_or_nearby_deprecations() {
+        for help in [
+            "  -d, --draft-tokens <N> Deprecated and ignored: each model sets its draft length\n",
+            "gufo version development (unknown)\n  -d, --draft-tokens <N>\n      Deprecated and ignored: each model sets its draft length\n  --model <PATH> Model\n",
+        ] {
+            assert!(draft_tokens_ignored(help));
+        }
+        for help in [
+            "", "gufo version 0.34.0",
+            "--draft-tokens <N> Maximum draft tokens (default: 7)\n--draft-policy <P> Deprecated and ignored\n",
+            "--draft-policy <P> Deprecated and ignored; use --draft-tokens\n",
+            "--draft-tokens <N> Deprecated; still controls draft length\n",
+            "--draft-tokens <N> Deprecated but not ignored\n",
+            "--draft-tokens <N> Maximum draft tokens\n\nOther deprecated and ignored options\n",
+        ] {
+            assert!(!draft_tokens_ignored(help), "{help}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn model_owned_drafts_omit_only_the_argument_and_preserve_legacy_settings() {
+        let root = std::env::temp_dir().join(format!("lsm-gufo-draft-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let model = root.join("model.gguf");
+        std::fs::write(&model, b"GGUF").unwrap();
+        for (family, mode, flag) in [
+            ("qwen38_flash_next", "mtp", "--mtp-model"),
+            ("qwen38_27b", "dflash2", "--dflash-model"),
+        ] {
+            let config = InstanceConfig {
+                id: "gufo-draft".into(), engine_kind: EngineKind::Gufo,
+                model_path: model.to_string_lossy().into_owned(), ctx_size: 32768,
+                gufo: GufoConfig {
+                    model_family: family.into(), speculative: mode.into(), draft_tokens: 3,
+                    mtp_model: model.to_string_lossy().into_owned(),
+                    dflash_model: model.to_string_lossy().into_owned(), ..Default::default()
+                }, ..Default::default()
+            };
+            let (normalized, legacy) = prepare(config, "gufo.exe").unwrap();
+            let current = command_for_draft_policy(&legacy, true);
+            assert_eq!(normalized.gufo.draft_tokens, 3);
+            assert!(!current.iter().any(|arg| arg == "--draft-tokens"));
+            assert!(current.windows(2).any(|pair| pair == [flag, model.to_str().unwrap()]));
+            assert!(current.windows(2).any(|pair| pair == ["--speculative", mode]));
+            assert_eq!(legacy.len(), current.len() + 2);
+            assert_eq!(command_for_draft_policy(&legacy, false), legacy);
+            assert!(legacy.windows(2).any(|pair| pair == ["--draft-tokens", "3"]));
+            assert_eq!(command_for_draft_policy(&current, true), current);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn gufo_rejects_occupied_port_without_touching_its_owner() {
