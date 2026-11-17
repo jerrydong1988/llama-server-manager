@@ -1039,6 +1039,9 @@ mod tests {
             legacy_status
                 .capabilities
                 .retain(|capability| capability != missing);
+            if missing == "gufo_engine_v3" {
+                legacy_status.capabilities.push("gufo_engine_v2".into());
+            }
             assert!(!has_required_runtime_capabilities(&legacy_status));
         }
     }

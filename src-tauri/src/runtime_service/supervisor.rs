@@ -438,6 +438,7 @@ impl RuntimeSupervisor {
                 KV_CHECKPOINT_CAPABILITY.to_string(),
                 ROUTER_USAGE_CAPABILITY.to_string(),
                 ROUTER_LISTENER_CAPABILITY.to_string(),
+                "gufo_engine_v2".to_string(),
                 "gufo_engine_v3".to_string(),
             ],
             config_revision,
