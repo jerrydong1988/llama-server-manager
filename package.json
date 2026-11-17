@@ -18,7 +18,7 @@
     "check:ipc-boundary": "node scripts/check-ipc-boundary.cjs",
     "check:supply-chain": "node scripts/check-npm-supply-chain.cjs",
     "check:supply-chain:installed": "node scripts/check-npm-supply-chain.cjs --installed-only && node scripts/check-npm-supply-chain.cjs --installed-only --node-modules vendor",
-    "check:rustsec-policy": "node scripts/check-rustsec-allowlist.cjs",
+    "check:rustsec-policy": "node scripts/check-rustsec-allowlist.cjs && node --test scripts/test-rustsec-workflow.cjs",
     "check:cross-platform-release": "node scripts/check-cross-platform-release.cjs",
     "check:browser-test": "tsc -p tsconfig.browser-test.json --noEmit && tsc -p tsconfig.browser-test.node.json --noEmit && node scripts/check-browser-test-isolation.cjs",
     "test:browser": "playwright test --config playwright.config.ts",
