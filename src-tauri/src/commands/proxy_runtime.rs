@@ -402,7 +402,7 @@ impl RouterRuntime {
         let Some(selected) = selected else {
             let now = now_ms();
             let has_ready_target = candidates.iter().any(|candidate| {
-                targets.get(&candidate.instance_id).map_or(true, |state| {
+                targets.get(&candidate.instance_id).is_none_or(|state| {
                     state.ready && state.circuit_open_until_ms <= now
                 })
             });

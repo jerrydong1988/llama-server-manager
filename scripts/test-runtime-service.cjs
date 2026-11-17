@@ -134,6 +134,7 @@ function testLaunchSpec(dataDir, backendPort) {
   const command = process.platform === 'win32'
     ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 120 127.0.0.1 >NUL']
     : ['/bin/sleep', '120']
+  command[0] = fs.realpathSync(command[0])
   return {
     instance_id: 'runtime-smoke-instance',
     config: {
@@ -155,6 +156,7 @@ function crashingLaunchSpec(dataDir, backendPort) {
   const command = process.platform === 'win32'
     ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 2 127.0.0.1 >NUL & exit /B 1']
     : ['/bin/sh', '-c', 'sleep 0.2; exit 1']
+  command[0] = fs.realpathSync(command[0])
   return {
     ...testLaunchSpec(dataDir, backendPort),
     command,
@@ -319,7 +321,7 @@ http.createServer((request, response) => {
       kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
         storage_limit_gib: 1, minimum_prompt_tokens: 1 },
     },
-    command: [process.execPath, fixturePath, String(port), eventsPath, '--slot-save-path', scratch],
+    command: [fs.realpathSync(process.execPath), fixturePath, String(port), eventsPath, '--slot-save-path', scratch],
   }
   inputSpec.executable_sha256 = crypto.createHash('sha256').update(fs.readFileSync(inputSpec.command[0])).digest('hex')
   inputSpec.command_display = inputSpec.command.join(' ')
@@ -427,7 +429,12 @@ async function main() {
   })
   const grantDir = path.join(dataDir, 'configs')
   fs.mkdirSync(grantDir, { recursive: true })
-  const engineRoots = [path.dirname(process.execPath), process.platform === 'win32' ? path.dirname(process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe') : '/bin'].map(p => fs.realpathSync(p))
+  // Resolve the executable before its parent: /bin/sleep may link outside /bin.
+  const engineRoots = [...new Set([
+    process.execPath,
+    testLaunchSpec(dataDir, 0).command[0],
+    crashingLaunchSpec(dataDir, 0).command[0],
+  ].map(executable => path.dirname(fs.realpathSync(executable))))]
   fs.writeFileSync(path.join(grantDir, 'authorized-paths.json'), JSON.stringify({ engine_roots: engineRoots }))
   const backendPort = await listen(backend)
   const proxyPort = await reserveLoopbackPort()

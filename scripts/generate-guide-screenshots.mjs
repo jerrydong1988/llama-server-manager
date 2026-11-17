@@ -1,12 +1,16 @@
 import { chromium } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { readFile, mkdir } from 'node:fs/promises'
+import { readFile, mkdir, mkdtemp, copyFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const outputDir = path.join(projectRoot, 'public', 'docs', 'guide')
+const publishedDir = path.join(projectRoot, 'public', 'docs', 'guide')
+// Capture outside Vite's watched public directory to avoid reloads and file races.
+const temporaryRoot = path.resolve(tmpdir())
+const outputDir = await mkdtemp(path.join(temporaryRoot, 'lsm-guide-capture-'))
 const baseUrl = 'http://127.0.0.1:4173'
 const appUrl = `${baseUrl}/?scenario=docs-screenshots`
 const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'))
@@ -24,6 +28,9 @@ const pageShots = [
   { id: 'perf', file: '09-performance.png', target: '[data-guide="perf-select"]' },
   { id: 'bigscreen', file: '10-monitoring-wall.png', target: '[data-guide="monitoring-wall"]' },
   { id: 'logs', file: '11-server-logs.png', target: '[data-guide="logs-clear"]' },
+  { id: 'config', file: '12-gufo-configuration.png', target: '[data-testid="gufo-config-page"]', scenario: 'gufo' },
+  { id: 'instances', file: '13-background-tasks.png', target: '[data-testid="background-tasks"]', scenario: 'default', tasks: true },
+  { id: 'storage', file: '14-storage-maintenance.png', target: '[data-storage-group="private-scratch"]', scenario: 'storage-maintenance' },
 ]
 
 const flows = [
@@ -86,8 +93,8 @@ async function waitForServer(serverProcess) {
 }
 
 function startServer() {
-  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  const child = spawn(command, ['run', 'dev:browser-test'], {
+  const viteCli = path.join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js')
+  const child = spawn(process.execPath, [viteCli, '--config', 'vite.browser-test.config.ts'], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -217,9 +224,21 @@ async function validatePng(filePath, expectedWidth, expectedHeight) {
   return bytes.length
 }
 
-await mkdir(outputDir, { recursive: true })
+await mkdir(publishedDir, { recursive: true })
 let serverProcess = null
 let browser
+let complete = false
+
+async function stopOwnedServer() {
+  const child = serverProcess
+  serverProcess = null
+  if (!child || child.exitCode != null || child.signalCode != null) return
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('documentation server did not exit')), 5_000)
+    child.once('exit', () => { clearTimeout(timeout); resolve() })
+    child.kill()
+  })
+}
 
 try {
   if (!(await serverResponds())) serverProcess = startServer()
@@ -245,15 +264,45 @@ try {
   await seedLogs(page)
 
   for (const shot of pageShots) {
+    if (shot.scenario) {
+      await page.goto(`${baseUrl}/?scenario=${shot.scenario}`, { waitUntil: 'domcontentloaded' })
+      await page.locator('[data-nav-id="instances"]').click()
+    }
     if (shot.id === 'config') {
       const configureButton = page.getByRole('button', { name: '配置参数', exact: true })
+      await configureButton.first().waitFor({ state: 'visible' })
+      if (shot.scenario === 'gufo') {
+        await page.evaluate(async () => {
+          const { useAppStore } = await import('/src/store.ts')
+          const store = useAppStore.getState()
+          const instance = store.instances.find(item => item.id === 'browser-test-instance')
+          store.updateInstance(instance.id, { name: 'Gufo Qwen3.8 示例', config: {
+            ...instance.config, name: 'Gufo Qwen3.8 示例', alias: 'qwen38-flash-next',
+            model_path: 'C:\\Models\\Qwen3.8-Flash-Next-Q4_K_M-00001-of-00002.gguf',
+          } })
+        })
+      }
       if (await configureButton.count() !== 1) {
-        throw new Error('expected one configuration shortcut for the selected documentation instance')
+        throw new Error(`expected one configuration shortcut for ${shot.file}, found ${await configureButton.count()}`)
       }
       await configureButton.click()
     } else {
       const navigation = page.locator(`[data-nav-id="${shot.id}"]`)
       if (await navigation.getAttribute('aria-current') !== 'page') await navigation.click()
+    }
+    if (shot.scenario === 'gufo') {
+      await page.getByLabel('思考预算（Token 数）', { exact: true }).fill('4096')
+      await page.getByRole('combobox', { name: '推测解码', exact: true }).selectOption('mtp')
+      await page.getByLabel('匹配的 MTP 模型', { exact: true }).fill('C:\\Models\\Qwen3.8-Flash-Next-MTP-Q4_0.gguf')
+    }
+    if (shot.tasks) {
+      await page.evaluate(() => {
+        const task = window.__MANAGEMENT_TASK_TEST__.tasks.find(item => item.id === 'task-succeeded')
+        task.result = { scanned_models: 28, added_models: 2, updated_models: 1 }
+      })
+      await page.getByRole('button', { name: '任务中心', exact: true }).click()
+      await page.getByRole('tab', { name: '后台任务', exact: true }).click()
+      await page.getByTestId('task-task-succeeded').click()
     }
     await page.waitForFunction(id => document.querySelector(`[data-nav-id="${id}"]`)?.getAttribute('aria-current') === 'page', shot.id)
     await page.locator(shot.target).waitFor({ state: 'visible' })
@@ -294,7 +343,22 @@ try {
     validation.push({ file: flow.file, bytes: await validatePng(path.join(outputDir, flow.file), 3840, 2400) })
   }
   process.stdout.write(`${JSON.stringify(validation, null, 2)}\n`)
+  await browser.close()
+  browser = null
+  await stopOwnedServer()
+  for (const { file } of validation) {
+    await copyFile(path.join(outputDir, file), path.join(publishedDir, file))
+  }
+  complete = true
 } finally {
   await browser?.close()
-  if (serverProcess && serverProcess.exitCode == null) serverProcess.kill()
+  await stopOwnedServer()
+  if (complete) {
+    if (path.dirname(path.resolve(outputDir)) !== temporaryRoot || !path.basename(outputDir).startsWith('lsm-guide-capture-')) {
+      throw new Error('Refusing to remove an unexpected capture directory')
+    }
+    await rm(outputDir, { recursive: true, force: true })
+  } else {
+    process.stderr.write(`Unfinished captures preserved at ${outputDir}\n`)
+  }
 }

@@ -99,8 +99,8 @@ fn validate(path: &Path) -> Result<(u64, String), String> {
         if count <= 0 || (count as u64) > (len.saturating_sub(consumed + 20)) / 8 {
             return Err("invalid n-gram count".into());
         }
-        for token in header[..16].chunks_exact(4) {
-            if i32::from_le_bytes(token.try_into().unwrap()) < -1 {
+        for token in header[..16].as_chunks::<4>().0 {
+            if i32::from_le_bytes(*token) < -1 {
                 return Err("invalid prefix token".into());
             }
         }

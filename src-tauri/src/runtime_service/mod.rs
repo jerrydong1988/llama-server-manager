@@ -830,7 +830,7 @@ pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServ
         for (instance_id, runtime_instance) in &status.running {
             let differs = running
                 .get(instance_id)
-                .map_or(true, |current| current.pid != runtime_instance.pid);
+                .is_none_or(|current| current.pid != runtime_instance.pid);
             if differs {
                 running.insert(instance_id.clone(), runtime_instance.clone());
                 changed = true;

@@ -6,24 +6,23 @@ KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves the qu
 
 ## 支持范围 / Supported Scope
 
-当前实验范围采用可验证的资格条件。以下条件必须同时成立。draft 构建资格以 [CHECKPOINT_ACCEPTANCE.md](CHECKPOINT_ACCEPTANCE.md) 和内置 persistence profile 为准；历史帮助文字不能单独授予资格。
+当前资格分为“标准支持范围”“兼容候选，尚需本机验证”“本机自检通过（实验性）”和“不支持”。内置审阅范围与本机验证是两条准入路径；具体模型、引擎完整运行库、配置、设备和环境必须匹配。历史帮助文字或相同版本号不能单独授予资格。
 
-- 实例使用本机、受管、结构化启动模式和一个文本 GGUF 逻辑模型；单文件和同目录内命名完整、索引连续的分片集均可。
-- 启用 prompt cache 和 slots API。默认范围为 `parallel = 1`；多 slot 必须命中[精确模型、构建与配置验收](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md)。当前四 slot 组合仅限固定 b11849/ROCm、Qwen 27B 或 Gemma 31B + MTP、总上下文 16384 和 f16 KV。
-- 单 slot 需启用 idle-slot cache，Cache RAM 为正数或 `-1`。已验证的四 slot 组合必须显式关闭 idle-slot cache，以免上游清空其它空闲 slot；此时不会把二级 RAM prompt cache 当作可持久化 slot。
-- 上游是无 TLS、无自定义 path/API prefix 的 loopback HTTP 端点。
-- 所选引擎明确公开 `--slots`、`--slot-save-path`、`--cache-ram` 和 `--cache-idle-slots`。
-- 滑动窗口模型默认要求受支持的 `--swa-full`；命中精确 windowed-SWA 验收范围时，遵守该范围的配置要求。
-- 推测解码关闭，或只使用当前引擎 `--help` 明确报告的类型。`ngram-*` 可从恢复后的 target prompt 重建；`draft-*` 还要求精确构建命中内置 persistence profile、类型和配置位于该 profile 的范围，且 `ctx_checkpoints > 0`。帮助文字本身不会授予 draft 资格。
-- 配置外部草稿模型时必须显式选择至少一个受支持的 `draft-*` 类型，且草稿 GGUF（包括完整分片集）必须可读取；`spec-default`、未知类型和外部 lookup cache 仍不支持检查点。
-- 模型架构必须可读。已知 hybrid/recurrent 架构默认关闭检查点；唯一保留的 hybrid 实验组合是已有跨进程验收记录的 `qwen35`，还须满足上述 context 持久化声明和 `ctx_checkpoints > 0`。`qwen35moe`、`qwen4exp` 等其它混合架构不会因此放行。上游基线同时记录 hybrid/recurrent 分类，新增架构必须重新审阅。
-- 不使用多模型 preset、router、Embedding、Reranker、LoRA 或 mmproj/multimodal。自定义参数只允许检查点安全分类器明确认可的纯加载 I/O 参数；当前包括取值为 `auto`、`on` 或 `off` 的 `--lazy-mode`、`-lzm` 与旧 `--tensor-read-lazy`。未知、缺值、非法、互相冲突或会改变推理状态的自定义参数仍会阻断，并在配置页显示具体标志。
+- 使用本机、受管、结构化启动的 llama.cpp 文本模型；完整 GGUF 分片集作为一个逻辑模型校验。Gufo 使用自己的缓存，不适用本功能。
+- 默认范围为单 slot。多 slot 必须命中精确内置范围或通过本机验证；当前本机验证器面向符合条件的 Windows/ROCm 组合，可评估 1、2、4 个 slot。四 slot 内置范围除早期 b11849 外还包含后续已审阅构建，具体模型和参数见各验收记录。
+- 启用 prompt cache、slots API 和引擎所需缓存能力。单 slot 通常要求 idle-slot cache 与正数或 `-1` 的 Cache RAM；多 slot 要关闭 idle-slot cache，保存和恢复完整 slot 集合。
+- 使用无 TLS、无自定义 API/path prefix 的 loopback HTTP 端点。RPC、多模型、向量业务、LoRA、多模态和外部 lookup state 等仍受结构性限制。
+- 滑动窗口或混合/循环架构默认保守处理；仅匹配已审阅范围或满足本机验证准入条件的组合才可使用，不能把一个模型的结果推广至整个架构。
+- `draft-*` 需要 target/draft context 持久化能力、正数 `ctx_checkpoints`、可读取的匹配草稿文件，以及具体推测组合的资格证据。混合 ngram/draft 要单独验证；`spec-default`、未知组合和未纳管的参数仍可能被拒绝。
+- 自定义参数以安全分类器为准，例如已审阅的 `--lazy-mode`、`-lzm`、`--tensor-read-lazy` 的 `auto`、`on`、`off`。页面会列出缺失条件和阻断标志。
+- 本机验证使用隔离目录、端口和真实 GPU 推理，包括保存进程退出后的整组恢复、实际生成与前缀复用。启用 `allow_local_validation` 开关本身不会生成合格凭据，需预留验证所需资源。
+- 资格绑定完整运行库与环境。修改 `LLAMA_KV_ROWS_DISABLE` 的存在或值会使原凭据失效；空值和 `0` 也表示禁用 KV rows。旧 schema 凭据需重新验证，模型、驱动、运行库或关键配置变化也需重新评估。
 
-The default scope supports one manager-owned local text-generation slot. The exact four-slot exception, including its required idle-cache setting, is documented in [MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md). Rebuildable `ngram-*` types use the original slot format; `draft-*` also requires an exact bundle persistence profile, its qualified type/configuration envelope, and positive `ctx_checkpoints`. Help text alone never qualifies a draft mode. Known hybrid/recurrent architectures are excluded except experimentally validated `qwen35` with both context requirements; this exception does not cover `qwen35moe` or `qwen4exp`. The upstream baseline tracks memory architecture classifications for review. Custom arguments remain fail-closed except validated lazy-loading aliases. External lookup state, automatic speculation, and multimodal state remain excluded. Sliding-window models require full SWA cache unless an exact reviewed windowed-SWA scope applies.
+Admission is either an embedded reviewed profile or an explicit local experimental qualification. The local validator evaluates eligible Windows/ROCm one-, two-, and four-slot tuples; it does not declare every tuple supported. Multi-slot state must be saved and restored as a complete set with idle-slot caching disabled. Draft and mixed speculation require exact persistence evidence, not a help marker. Structural exclusions and architecture checks still apply. Receipts bind model/runtime/configuration/hardware/environment identity, including presence and values of `LLAMA_KV_ROWS_DISABLE`; legacy receipts require revalidation.
 
-不符合条件只会关闭本次运行的 checkpoint；实例仍按原来的冷启动流程运行。配置页会显示稳定的资格原因，不会静默猜测兼容性。
+当前行为与本机验证范围见 [CHECKPOINT_ADMISSION_POLICY.md](CHECKPOINT_ADMISSION_POLICY.md)；已审阅组合见 [CHECKPOINT_ACCEPTANCE.md](CHECKPOINT_ACCEPTANCE.md)、[MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md)、[B11913_CHECKPOINT_ACCEPTANCE.md](B11913_CHECKPOINT_ACCEPTANCE.md) 和 [B12000_CHECKPOINT_ACCEPTANCE.md](B12000_CHECKPOINT_ACCEPTANCE.md)。[B12061_CHECKPOINT_EVALUATION.md](B12061_CHECKPOINT_EVALUATION.md) 的原生 API 证据不自动开放管理器保存恢复。
 
-An ineligible configuration disables checkpointing only for that run. The instance still cold-starts normally, and the configuration page reports the exact eligibility reason.
+An ineligible configuration disables checkpointing only for that run and reports the reason. Follow the admission policy for current behavior; historical acceptance reports certify only their recorded tuple. Native b12061 API evidence does not automatically admit Manager save/restore.
 
 ## 配置步骤 / Configuration
 
@@ -31,7 +30,7 @@ An ineligible configuration disables checkpointing only for that run. The instan
 2. 打开实例的“参数配置”，找到“KV / Prefill 缓存检查点”。
 3. 启用功能，并保持“受控停止时保存”和“路由前恢复”开启。
 4. 如果资格检查列出可修复的缓存/slot 条件，审阅内存影响后点击“应用必需设置”。
-5. 按当前资格检查处理 SWA、并行数和上下文要求；不要将另一模型组合的设置直接套用。
+5. 按当前资格处理 SWA、并行数和上下文要求。兼容候选需启用本机验证选项并运行隔离验证，确认“本机自检通过（实验性）”后再使用；不要直接套用另一模型组合的结果。
 6. 保存配置，从实例管理页启动实例。
 7. 让 DeepSeek Harness 使用“实例路由”页面提供的管理器代理地址，例如 `http://127.0.0.1:<proxy-port>/v1`，不要使用实例的直连端口。
 
@@ -71,7 +70,7 @@ Local B10688 plus the replayed and hardened llama.cpp PR #26004 passed a real cr
 
 启动时，管理器先等待引擎健康，再严格验证模型、引擎和状态相关配置的 fingerprint、manifest、文件类型、大小和 SHA-256。恢复响应和恢复后的 slot 状态还会再次核对。只有完成恢复或明确决定冷启动后，代理才允许该实例接收请求。
 
-On a controlled stop, the manager gates routing, drains requests, saves slot 0, verifies the payload, and atomically moves it into a manifest-last generation without duplicating the payload. On startup, it verifies the full compatibility fingerprint and payload before restore, validates the restore round trip, and only then opens the routing gate.
+On a controlled stop, the manager gates routing, drains requests, saves the qualified slot set, verifies every payload, and atomically moves it into a manifest-last generation without duplicating the payload. On startup, it verifies the full compatibility fingerprint and payload before restore, validates the restore round trip, and only then opens the routing gate.
 
 以下情况会回退冷启动；是否需要重建进程取决于 restore 是否已经发送：
 

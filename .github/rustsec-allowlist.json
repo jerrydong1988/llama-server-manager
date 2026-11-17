@@ -1,5 +1,5 @@
 {
-  "reviewBy": "2026-11-16",
+  "reviewBy": "2026-12-15",
   "upstream": "Tauri 2.11 Linux GTK3 GLib ABI-compatible security backport",
   "entries": [
     {
@@ -10,7 +10,7 @@
       "restriction": "ABI-compatible local backport of gtk-rs/gtk-rs-core#1343; checked by scripts/check-vendor-patches.cjs. Remove when Tauri adopts glib >=0.20."
     }
   ],
-  "reviewedAt": "2026-10-16",
-  "advisoryDatabaseCommit": "479c888ce4401313bca61ba4aba2d0f6244c4a09",
-  "reviewNotes": "RUSTSEC-2024-0411 through RUSTSEC-2024-0420 were withdrawn on 2026-08-14 and are no longer ignored. The only retained exception is the locally patched GLib advisory, guarded by source checks and Linux iterator regression tests. Rustls is updated to 0.23.46 for RUSTSEC-2026-0346 through RUSTSEC-2026-0349; no new advisory exceptions are added."
+  "reviewedAt": "2026-11-15",
+  "advisoryDatabaseCommit": "4ef2df8e806a65e2f1ecc14f56f51249062b23d6",
+  "reviewNotes": "Rechecked RUSTSEC-2024-0429 against gtk-rs/gtk-rs-core#1343 (05dff0ee696f9bcd8617cd48c4b812d046d440cb): the selected glib 0.18.5 backport uses a mutable C out-pointer. Tauri 2.11.5 still requires GTK3/glib 0.18. The optimized five-method iterator regression passed on Linux x64 and ARM64 for master e8de427. Updated rustix to 1.1.6 (RUSTSEC-2026-0486), tokio to 1.53.3 (RUSTSEC-2026-0386), and replaced yanked async-executor 1.14.0 with 1.14.1. No new exceptions. The zbus_names/zvariant/zvariant_derive maintenance advisories remain visible; replacing their Tauri-owned zbus 5 dependency requires an upstream migration. See src-tauri/vendor/README.md for review evidence and limits."
 }

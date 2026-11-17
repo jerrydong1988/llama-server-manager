@@ -22,8 +22,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-// v0.8.0 adds LFM3 to the hybrid denylist; persisted approvals must be reassessed.
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 7;
+// v0.9.0 adds Clover MoE and Metis 1.6 to the hybrid denylist.
+// Persisted eligibility must be reassessed before any checkpoint is restored.
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 8;
 const MAX_CHECKPOINT_SLOTS: u32 = 4;
 fn one_slot() -> u32 {
     1
@@ -373,6 +374,8 @@ fn is_known_hybrid_or_recurrent(architecture: &str) -> bool {
         "deepseek4",
         "minimax01",
         "glm5next",
+        "clovermoe",
+        "metis16",
     ];
     UNSUPPORTED_HINTS
         .iter()
@@ -2386,8 +2389,7 @@ impl CheckpointStore {
             let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) else {
                 continue;
             };
-            let replace = newest.as_ref().map_or(
-                true,
+            let replace = newest.as_ref().is_none_or(
                 |(current, _): &(DateTime<chrono::FixedOffset>, LoadedGeneration)| {
                     created_at > *current
                 },
@@ -2509,7 +2511,7 @@ impl CheckpointStore {
                 if let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) {
                     let replace = newest_global
                         .as_ref()
-                        .map_or(true, |(newest, _, _)| created_at > *newest);
+                        .is_none_or(|(newest, _, _)| created_at > *newest);
                     if replace {
                         newest_global = Some((created_at, key.clone(), bytes));
                     }
@@ -5024,6 +5026,9 @@ mod tests {
             "deepseek4",
             "deepseek41",
             "kimi_k3",
+            "kimi-k31",
+            "KIMI_K31",
+            "Kimi-K3.1",
             "bailingmoe3",
             "lfm2",
             "lfm3",
@@ -5034,6 +5039,10 @@ mod tests {
             "qwen4exp",
             "glm5-next",
             "GLM5_NEXT",
+            "clover_moe",
+            "CLOVER-MOE",
+            "metis16",
+            "Metis-1.6",
         ] {
             for persistence in [false, true] {
                 let result = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {

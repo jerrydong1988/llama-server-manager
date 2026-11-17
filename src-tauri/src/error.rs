@@ -30,8 +30,8 @@ impl AppError {
                 let end = start + matched.len();
                 let before = normalized[..start].chars().next_back();
                 let after = normalized[end..].chars().next();
-                before.map_or(true, |ch| !ch.is_ascii_alphanumeric() && ch != '_')
-                    && after.map_or(true, |ch| !ch.is_ascii_alphanumeric() && ch != '_')
+                before.is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
+                    && after.is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
             })
         };
         let (code, retryable) = if has_term("already")

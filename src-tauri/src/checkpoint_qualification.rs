@@ -36,7 +36,7 @@ pub(crate) fn candidate(config: &InstanceConfig, caps: &EngineCapabilities) -> b
         &config.cache_type_k
     };
     let emits = |field: &str| {
-        config.explicit_overrides.as_ref().map_or(true, |keys| {
+        config.explicit_overrides.as_ref().is_none_or(|keys| {
             keys.iter().any(|key| {
                 key == field
                     || matches!(
@@ -54,7 +54,7 @@ pub(crate) fn candidate(config: &InstanceConfig, caps: &EngineCapabilities) -> b
         && caps.context_checkpoint_persistence
         && crate::commands::engine_capabilities::hardware_scope(config)
         && matches!(config.parallel, 1 | 2 | 4)
-        && config.ctx_size % config.parallel as u32 == 0
+        && config.ctx_size.is_multiple_of(config.parallel as u32)
         && (1024..=32768).contains(&(config.ctx_size / config.parallel as u32))
         && (1..=32).contains(&config.ctx_checkpoints)
         && (1..=8).contains(&config.draft_tokens)
@@ -389,7 +389,7 @@ fn owns_listener(port: u16, expected_pid: u32) -> bool {
             if count
                 .checked_mul(row_size)
                 .and_then(|n| n.checked_add(4))
-                .map_or(true, |end| end > size as usize)
+                .is_none_or(|end| end > size as usize)
             {
                 return false;
             }
@@ -555,10 +555,10 @@ impl Probe {
         Ok(result)
     }
     fn inference_evidence(result: Value) -> Result<Value, String> {
-        if result["content"].as_str().map_or(true, |s| s.is_empty())
+        if result["content"].as_str().is_none_or(|s| s.is_empty())
             || result["tokens"]
                 .as_array()
-                .map_or(true, |tokens| tokens.is_empty())
+                .is_none_or(|tokens| tokens.is_empty())
         {
             return Err("validation did not produce text and token evidence".into());
         }
@@ -984,7 +984,7 @@ fn run_pair(
         if require_checkpoints
             && format["checkpoints"]
                 .as_array()
-                .map_or(true, |rows| rows.is_empty())
+                .is_none_or(|rows| rows.is_empty())
         {
             return Err("windowed/recurrent model did not persist its context checkpoints".into());
         }

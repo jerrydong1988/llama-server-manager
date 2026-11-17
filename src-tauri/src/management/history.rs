@@ -36,7 +36,7 @@ pub(super) fn remove(
     let selected = |task: &Task| match &selection {
         Selection::One(id) => task.id == *id,
         Selection::Finished(statuses) => FINISHED.contains(&task.status.as_str())
-            && statuses.map_or(true, |statuses| statuses.contains(&task.status)),
+            && statuses.is_none_or(|statuses| statuses.contains(&task.status)),
     };
     let deleted_ids: Vec<_> = tasks.iter().filter(|task| selected(task)).map(|task| task.id.clone()).collect();
     if !deleted_ids.is_empty() {

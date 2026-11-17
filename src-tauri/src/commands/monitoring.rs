@@ -656,7 +656,7 @@ pub(crate) fn ingest_external_frame(frame: MonitoringFrame) -> bool {
     if state
         .timeline
         .back()
-        .map_or(true, |latest| latest.ts < frame.ts)
+        .is_none_or(|latest| latest.ts < frame.ts)
     {
         state.push_frame(frame);
         true

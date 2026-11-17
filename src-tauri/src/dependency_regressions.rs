@@ -1,4 +1,42 @@
 #[test]
+fn bundled_sqlite_is_patched_and_preserves_wal_transactions() {
+    use rusqlite::Connection;
+
+    // Check the library actually linked into the binary, including platform CI.
+    assert!(rusqlite::version_number() >= 3_054_000, "RUSTSEC-2026-0459: {}", rusqlite::version());
+    let temp_root = std::env::temp_dir();
+    let base = temp_root.join(format!("sqlite-wal-regression-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&base).unwrap();
+    let database = base.join("history.db");
+    let writer = Connection::open(&database).unwrap();
+    let mode: String = writer.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0)).unwrap();
+    assert_eq!(mode, "wal");
+    writer.execute_batch("PRAGMA wal_autocheckpoint=0; CREATE TABLE history(id INTEGER PRIMARY KEY, payload BLOB NOT NULL); INSERT INTO history VALUES(1, X'001122ff');").unwrap();
+    assert!(std::fs::metadata(base.join("history.db-wal")).unwrap().len() > 32);
+
+    let reader = Connection::open(&database).unwrap();
+    let payload = || reader.query_row("SELECT payload FROM history WHERE id=1", [], |row| row.get::<_, Vec<u8>>(0)).unwrap();
+    assert_eq!(payload(), [0, 0x11, 0x22, 0xff]);
+    writer.execute_batch("BEGIN IMMEDIATE; UPDATE history SET payload=X'99' WHERE id=1;").unwrap();
+    assert_eq!(payload(), [0, 0x11, 0x22, 0xff], "uncommitted data must stay isolated");
+    writer.execute_batch("ROLLBACK; BEGIN IMMEDIATE; INSERT INTO history VALUES(2, X'aabb'); COMMIT;").unwrap();
+    assert_eq!(payload(), [0, 0x11, 0x22, 0xff]);
+    let count: i64 = reader.query_row("SELECT count(*) FROM history", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 2);
+    drop(reader);
+    writer.close().unwrap();
+
+    let reopened = Connection::open(&database).unwrap();
+    let rows: Vec<Vec<u8>> = reopened.prepare("SELECT payload FROM history ORDER BY id").unwrap()
+        .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(rows, vec![vec![0, 0x11, 0x22, 0xff], vec![0xaa, 0xbb]]);
+    assert_eq!(reopened.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)).unwrap(), "ok");
+    reopened.close().unwrap();
+    assert_eq!(base.parent(), Some(temp_root.as_path()));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn urlpattern_identifier_backport_preserves_url_boundaries() {
     use urlpattern::{UrlPattern, UrlPatternInit, UrlPatternMatchInput};
     for name in ["id", "编号", "Δvalue", "_value", "$value"] {
@@ -36,7 +74,20 @@ fn macro_backports_preserve_valid_expansions_and_report_invalid_inputs() {
         .unwrap()
         .to_path_buf();
     let mut externs = Vec::new();
+    let reported: std::collections::HashMap<String, std::path::PathBuf> =
+        std::env::var("LSM_TEST_PROC_MACRO_ARTIFACTS")
+            .map(|value| serde_json::from_str(&value).expect("valid Cargo macro artifact manifest"))
+            .unwrap_or_default();
+    let mut library_dirs = std::collections::BTreeSet::from([deps.clone()]);
     for name in ["glib_macros", "gtk3_macros"] {
+        if !reported.is_empty() {
+            let library = reported.get(name).expect("Cargo reported both reviewed macro libraries");
+            assert!(library.is_file(), "missing Cargo artifact: {}", library.display());
+            library_dirs.insert(library.parent().unwrap().to_path_buf());
+            externs.push(format!("{name}={}", library.display()));
+            continue;
+        }
+        // Retain direct cargo-test support for legacy flat artifact layouts.
         let mut libraries: Vec<_> = fs::read_dir(&deps)
             .unwrap()
             .filter_map(Result::ok)
@@ -54,7 +105,7 @@ fn macro_backports_preserve_valid_expansions_and_report_invalid_inputs() {
             "{name}={}",
             libraries
                 .last()
-                .expect("macro library was built")
+                .expect("macro library not beside test binary; use npm run test:rust for Cargo artifact discovery")
                 .path()
                 .display()
         ));
@@ -83,9 +134,10 @@ fn macro_backports_preserve_valid_expansions_and_report_invalid_inputs() {
                 "--out-dir",
             ])
             .arg(&base)
-            .arg("-L")
-            .arg(format!("dependency={}", deps.display()))
             .arg(&source);
+        for directory in &library_dirs {
+            command.arg("-L").arg(format!("dependency={}", directory.display()));
+        }
         for item in &externs {
             command.arg("--extern").arg(item);
         }

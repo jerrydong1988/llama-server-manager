@@ -18,13 +18,19 @@ const REQUIRED_SECTIONS = [
   '下载管理 / Download Manager',
   '引擎管理 / Engine Management',
   '实例管理 / Instance Management',
+  'Gufo 实例 / Gufo Instances',
   '参数配置 / Parameter Configuration',
   '集群管理 / Cluster Management',
   '实例路由 / Instance Routing',
+  '路由使用统计 / Router Usage Statistics',
   '性能监控 / Performance Monitoring',
   '监控大屏 / Monitoring Wall',
   '服务器日志 / Server Logs',
+  '后台任务 / Background Tasks',
+  '存储维护 / Storage Maintenance',
+  'CLI 与 MCP / CLI and MCP',
   '常见问题 / FAQ',
+  '帮助与反馈 / Guide and Support',
 ]
 
 const REQUIRED_IMAGES = [
@@ -39,6 +45,9 @@ const REQUIRED_IMAGES = [
   '09-performance.png',
   '10-monitoring-wall.png',
   '11-server-logs.png',
+  '12-gufo-configuration.png',
+  '13-background-tasks.png',
+  '14-storage-maintenance.png',
   'flow-01-first-run.png',
   'flow-02-start-and-diagnose.png',
   'flow-03-route-requests.png',
@@ -118,6 +127,25 @@ const tour = readText(TOUR_PATH, 'src/components/guide/guideTour.ts')
 const ui = readText(UI_PATH, 'src/components/ui.tsx')
 const guidePerformance = extractSection(guide, 'Performance Monitoring')
 const readmePerformance = extractSection(readme, 'Performance Monitoring')
+const upstreamBaseline = JSON.parse(readText(path.join(ROOT, 'scripts', 'llama-parameter-baseline.json'), 'llama.cpp baseline') || '{}')
+const upstreamVersion = upstreamBaseline.upstreamRelease
+const parameterCount = upstreamBaseline.releaseSnapshot?.parameterCount
+for (const [label, source] of [['README.md', readme], ['GUIDE.md', guide]]) {
+  requireMarkers(source, [
+    `当前上游稳定版 ${upstreamVersion} 基线跟踪 ${parameterCount} 个参数条目`,
+    `current stable upstream ${upstreamVersion} baseline tracks ${parameterCount} parameter entries`,
+    'Gufo', 'LLAMA_KV_ROWS_DISABLE', 'lsm service start',
+  ], label)
+  for (const obsolete of ['248 个参数条目', '248 parameter entries', '11 步引导', '11-step tour', '只保存当前 slot 0 前缀', 'stops save the current slot 0 prefix']) {
+    if (source.includes(obsolete)) errors.add(`${label} contains obsolete guidance: ${obsolete}`)
+  }
+}
+// The in-app reader accepts HTTPS and section anchors, not repository-relative links.
+for (const match of guide.matchAll(/(?<!!)\[[^\]]+\]\(([^)]+)\)/g)) {
+  if (!match[1].startsWith('https://') && !match[1].startsWith('#')) {
+    errors.add(`GUIDE.md link cannot open in the app: ${match[1]}`)
+  }
+}
 const expectedVersion = packageJson.version || 'unknown'
 const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
 const lockedVersion = packageLock.packages?.['']?.version || packageLock.version
@@ -231,6 +259,11 @@ for (const imagePath of imageReferences) {
   }
   if (!fs.existsSync(path.join(ROOT, normalized))) {
     errors.add(`Referenced guide image is missing: ${normalized}`)
+  } else {
+    const png = fs.readFileSync(path.join(ROOT, normalized))
+    if (png.length < 24 || png.subarray(1, 4).toString() !== 'PNG' || png.readUInt32BE(16) * 5 !== png.readUInt32BE(20) * 8) {
+      errors.add(`Guide screenshot must keep the reader's reserved 8:5 aspect ratio: ${normalized}`)
+    }
   }
 }
 

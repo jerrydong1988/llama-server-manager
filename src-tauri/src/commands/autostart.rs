@@ -217,7 +217,7 @@ fn windows_registration_matches(
 ) -> bool {
     !executable.is_empty()
         && command.contains(executable)
-        && data.map_or(true, |data| {
+        && data.is_none_or(|data| {
             command.contains(&format!(
                 "--data-dir {}",
                 crate::runtime_service::autostart::windows_quote_argument(data)

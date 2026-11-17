@@ -805,13 +805,12 @@ impl RuntimeSupervisor {
                     }
                     // A probe can outlive stop/start; publish only for its owner.
                     let lifecycle = supervisor.instance_lifecycle.lock().unwrap();
-                    if !supervisor
+                    if supervisor
                         .state
                         .lock()
                         .unwrap()
                         .running
-                        .get(&instance_id)
-                        .is_some_and(|current| current.pid == expected_pid)
+                        .get(&instance_id).is_none_or(|current| current.pid != expected_pid)
                     {
                         break;
                     }
@@ -845,13 +844,12 @@ impl RuntimeSupervisor {
                         initial_uptime.saturating_add(started.elapsed().as_secs()),
                     );
                     let lifecycle = supervisor.instance_lifecycle.lock().unwrap();
-                    if !supervisor
+                    if supervisor
                         .state
                         .lock()
                         .unwrap()
                         .running
-                        .get(&instance_id)
-                        .is_some_and(|current| current.pid == expected_pid)
+                        .get(&instance_id).is_none_or(|current| current.pid != expected_pid)
                     {
                         break;
                     }
@@ -944,10 +942,9 @@ impl RuntimeSupervisor {
         let _lifecycle = self.instance_lifecycle.lock().unwrap();
         let spec = {
             let state = self.state.lock().unwrap();
-            if !state
+            if state
                 .running
-                .get(instance_id)
-                .is_some_and(|running| running.pid == expected_pid)
+                .get(instance_id).is_none_or(|running| running.pid != expected_pid)
                 || !self
                     .checkpoint_coordinator
                     .restore_restart_required(instance_id, expected_pid)
@@ -1224,13 +1221,12 @@ impl RuntimeSupervisor {
     fn record_process_exit(&self, instance_id: &str, pid: u32, exit_code: Option<i32>) {
         // Serialize generation ownership with start/stop through all cleanup.
         let _lifecycle = self.instance_lifecycle.lock().unwrap();
-        if !self
+        if self
             .state
             .lock()
             .unwrap()
             .running
-            .get(instance_id)
-            .is_some_and(|running| running.pid == pid)
+            .get(instance_id).is_none_or(|running| running.pid != pid)
         {
             return;
         }
