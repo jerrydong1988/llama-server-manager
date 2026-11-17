@@ -19,6 +19,7 @@ mod multi_slot {
                     context_checkpoint_persistence: true,
                     reviewed_swa_checkpoint_reuse: false,
                     reviewed_multi_slot: true,
+                    scoped_qwen35moe_candidate: false,
                 },
                 engine_speculative_types: &[],
                 model_architecture: Some("llama"),

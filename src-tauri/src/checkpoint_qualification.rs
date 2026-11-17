@@ -14,8 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Older receipts did not bind LLAMA_KV_ROWS_DISABLE and cannot prove its absence.
-const SCHEMA: u32 = 3;
+// Schema 4 requires a quiescent all-slot save and matched concurrent replay.
+// Older receipts also cannot stand in for this stronger validation sequence.
+const SCHEMA: u32 = 4;
 static ACTIVE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -286,7 +287,8 @@ struct EngineProcess {
 }
 impl EngineProcess {
     fn spawn(argv: &[String], directory: &Path, label: &str) -> Result<Self, String> {
-        let mut command = crate::process_environment::external_command(&argv[0]);
+        let program = crate::engine_process::launch_path(&argv[0]);
+        let mut command = crate::process_environment::external_command(&program);
         command.args(&argv[1..]).current_dir(
             Path::new(&argv[0])
                 .parent()
@@ -422,7 +424,7 @@ struct Probe {
     client: reqwest::blocking::Client,
     base: String,
     port: u16,
-    owner_pid: std::cell::Cell<u32>,
+    owner_pid: std::sync::atomic::AtomicU32,
     key: String,
     deadline: Instant,
 }
@@ -438,7 +440,7 @@ impl Probe {
     }
     fn request(&self, endpoint: &str, body: Option<Value>) -> Result<Value, String> {
         self.check()?;
-        if !owns_listener(self.port, self.owner_pid.get()) {
+        if !owns_listener(self.port, self.owner_pid.load(std::sync::atomic::Ordering::SeqCst)) {
             return Err("validation port is not owned by this test process".into());
         }
         let url = format!("{}{endpoint}", self.base);
@@ -470,7 +472,7 @@ impl Probe {
         slots: i32,
         context: u32,
     ) -> Result<Value, String> {
-        self.owner_pid.set(process.child.id());
+        self.owner_pid.store(process.child.id(), std::sync::atomic::Ordering::SeqCst);
         let deadline = Instant::now() + Duration::from_secs(300);
         loop {
             self.check()?;
@@ -511,6 +513,23 @@ impl Probe {
     fn completion(&self, id: i32, prompt: &str, count: u32, cache: bool) -> Result<Value, String> {
         self.generate(id, prompt, count, cache, None)
     }
+    fn replay_all(&self, prompts: &[(i32, String)]) -> Result<Vec<Value>, String> {
+        // Identical occupied-slot layout and request concurrency on both sides.
+        // Sequential references taken while other slots are empty are not a
+        // valid comparator for a fresh process with every sequence restored.
+        let barrier = std::sync::Barrier::new(prompts.len());
+        std::thread::scope(|scope| {
+            let handles = prompts.iter().map(|(id, prompt)| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    self.completion(*id, prompt, 64, true)
+                })
+            }).collect::<Vec<_>>();
+            handles.into_iter().map(|h| h.join().map_err(|_| "validation replay worker failed".to_string())?)
+                .collect()
+        })
+    }
     fn generate(
         &self,
         id: i32,
@@ -523,6 +542,7 @@ impl Probe {
             "temperature":0,"seed":42,"cache_prompt":cache,"return_tokens":true,"ignore_eos":true});
         if let Some(grammar) = grammar {
             body["grammar"] = json!(grammar);
+            body["ignore_eos"] = json!(false);
         }
         Self::inference_evidence(self.request("/completion", Some(body))?)
     }
@@ -549,8 +569,27 @@ impl Probe {
         }
         if result["content"].as_str().map(str::trim) != Some(expected.to_string().as_str()) {
             return Err(format!(
-                "slot {id} numeric control did not retrieve the final record's code {expected}"
+                "slot {id} numeric control did not retrieve the final record's code {expected} (got {})",
+                result["content"].as_str().unwrap_or("<missing>")
             ));
+        }
+        Ok(result)
+    }
+    fn secret_answer(&self, id: i32, prompt: &str, live: &Value) -> Result<Value, String> {
+        // Keep the unconstrained replay as the token-equality oracle. A separate
+        // question checks slot identity without requiring a reasoning model to
+        // finish its explanation inside that replay's fixed token budget.
+        // All four secrets are legal; the grammar never chooses the right slot.
+        let prompt = format!("{prompt}{}\nStop repeating or explaining. Return only the secret word from the records for this slot. Answer:",
+            live["content"].as_str().ok_or("missing replay text")?);
+        let result = Self::inference_evidence(self.request("/completion", Some(json!({
+            "id_slot":id,"prompt":prompt,"n_predict":8,"temperature":0,"seed":42,
+            "cache_prompt":true,"return_tokens":true,"ignore_eos":false,
+            "grammar":"root ::= \"cobalt\" | \"amber\" | \"violet\" | \"silver\""
+        })))?)?;
+        let expected = ["cobalt", "amber", "violet", "silver"][id as usize];
+        if result["content"].as_str().map(str::trim) != Some(expected) {
+            return Err(format!("slot {id} did not retrieve its own secret {expected}"));
         }
         Ok(result)
     }
@@ -878,7 +917,7 @@ fn run_pair(
             .map_err(|e| e.to_string())?,
         base: format!("http://127.0.0.1:{port}"),
         port,
-        owner_pid: std::cell::Cell::new(0),
+        owner_pid: std::sync::atomic::AtomicU32::new(0),
         key,
         deadline: Instant::now() + Duration::from_secs(1200),
     };
@@ -932,6 +971,7 @@ fn run_pair(
     }
     let mut cases = Vec::new();
     let mut rewrites = Vec::new();
+    let mut prompts = Vec::new();
     let records = ((config.ctx_size / config.parallel as u32) / 32).clamp(32, 512);
     for id in 0..config.parallel {
         let marker = [391, 437, 493, 551][id as usize];
@@ -953,7 +993,10 @@ fn run_pair(
                 )
             })
             .collect::<String>();
-        let revised = format!("{revised_prefix}Slot {id}. What is the code in the LAST record? Return only the three digits. Answer:");
+        // A unique record label keeps the cold retrieval control unambiguous
+        // even with quantized KV. The long common prefix and edited tail remain;
+        // neither the question's answer prefix nor the grammar supplies the code.
+        let revised = format!("{revised_prefix}\nFINAL RECORD for slot {id}: code {revised_marker}; secret {secret}.\nEND OF RECORDS.\nCopy only the three-digit code from the FINAL RECORD for slot {id}. Answer:");
         let reference = probe.number_answer(id, &revised, false, revised_marker)?;
         rewrites.push((revised, reference));
         let warm = probe.completion(id, &prompt, 24, false)?;
@@ -961,6 +1004,11 @@ fn run_pair(
             "{prompt}{}\nNow repeat only the secret word from the records, separated by spaces. Answer:",
             warm["content"].as_str().ok_or("missing generated prefix")?
         );
+        prompts.push((id, continuation));
+    }
+    // No inference may occur between these saves: this is one complete,
+    // quiescent generation with every slot populated.
+    for (id, continuation) in &prompts {
         let filename = format!("slot-{id}.bin");
         let save = probe.request(
             &format!("/slots/{id}?action=save"),
@@ -968,7 +1016,7 @@ fn run_pair(
         )?;
         let path = root.join(&filename);
         let bytes = fs::metadata(&path).map_err(|e| e.to_string())?.len();
-        if save["id_slot"] != id
+        if save["id_slot"] != *id
             || save["filename"] != filename
             || bytes == 0
             || save["n_saved"].as_u64().unwrap_or(0) == 0
@@ -993,25 +1041,19 @@ fn run_pair(
             serde_json::to_vec_pretty(&format).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-        let live = probe.completion(id, &continuation, 64, true)?;
-        if !live["content"].as_str().is_some_and(|text| {
-            text.contains(secret)
-                && ["cobalt", "amber", "violet", "silver"]
-                    .iter()
-                    .filter(|other| **other != secret)
-                    .all(|other| !text.contains(other))
-        }) {
-            return Err(
-                "the uncached/live reference did not retrieve its slot-specific secret".into(),
-            );
-        }
+        cases.push((*id, filename, bytes, digest, save, continuation.clone(), Value::Null));
+    }
+    let live_results = probe.replay_all(&prompts)?;
+    let mut reference_secrets = Vec::new();
+    for (case, live) in cases.iter_mut().zip(live_results) {
+        reference_secrets.push(probe.secret_answer(case.0, &case.5, &live)?);
         if !crate::speculative::parse_speculative_types(&config.spec_type).is_empty()
             && (live["timings"]["draft_n"].as_u64().unwrap_or(0) == 0
                 || live["timings"]["draft_n_accepted"].as_u64().unwrap_or(0) == 0)
         {
             return Err("draft proposal/acceptance evidence is missing".into());
         }
-        cases.push((id, filename, bytes, digest, save, continuation, live));
+        case.6 = live;
     }
     if let Some((expected, following)) = reference {
         probe.completion(0, rollback_prompt, 128, false)?;
@@ -1064,10 +1106,13 @@ fn run_pair(
         restores.push(restored);
     }
     let mut slots = Vec::new();
-    for ((id, filename, _, digest, save, continuation, live), restored) in
-        cases.iter().zip(&restores)
+    let generated_results = probe.replay_all(&prompts)?;
+    let restored_secrets = cases.iter().zip(&generated_results)
+        .map(|(case, generated)| probe.secret_answer(case.0, &case.5, generated))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (((id, filename, _, digest, save, _, live), restored), generated) in
+        cases.iter().zip(&restores).zip(generated_results)
     {
-        let generated = probe.completion(*id, continuation, 64, true)?;
         fs::write(
             root.join(format!("restore-{id}.json")),
             serde_json::to_vec_pretty(&json!({"expected":live,"actual":generated}))
@@ -1099,7 +1144,7 @@ fn run_pair(
         let expected = [397, 443, 499, 557][*id as usize];
         let rewrite = probe.number_answer(*id, revised, true, expected)?;
         let recomputed = probe.number_answer(*id, revised, false, expected)?;
-        slots.push(json!({"draft_acceptance_before":draft_acceptance(live),"draft_acceptance_after":draft_acceptance(&generated),"counter_tolerance_tokens":original.draft_tokens,"acceptance_drop_tolerance":0.05,"rewrite":rewrite,"rewrite_reference":cold_reference,"recomputed":recomputed,"id":id,"passed":true,"save":save,"restore":restored,"live":live,"generated":generated,"file_sha256":digest}));
+        slots.push(json!({"draft_acceptance_before":draft_acceptance(live),"draft_acceptance_after":draft_acceptance(&generated),"counter_tolerance_tokens":original.draft_tokens,"acceptance_drop_tolerance":0.05,"secret_before":reference_secrets[*id as usize],"secret_after":restored_secrets[*id as usize],"rewrite":rewrite,"rewrite_reference":cold_reference,"recomputed":recomputed,"id":id,"passed":true,"save":save,"restore":restored,"live":live,"generated":generated,"file_sha256":digest}));
     }
     second.stop()?;
     processes.push(json!({"pid":second.child.id(),"role":"restored","exited":true}));
@@ -1165,12 +1210,13 @@ fn run_pair(
             return Err("clean recovery did not consume complete state".into());
         }
     }
-    for (id, _, _, _, _, continuation, live) in &cases {
+    for (case, generated) in cases.iter().zip(probe.replay_all(&prompts)?) {
         same_output(
-            live,
-            &probe.completion(*id, continuation, 64, true)?,
+            &case.6,
+            &generated,
             original.draft_tokens,
         )?;
+        probe.secret_answer(case.0, &case.5, &generated)?;
     }
     clean.stop()?;
     processes.push(json!({"pid":clean.child.id(),"role":"clean_recovery","exited":true}));
@@ -1264,8 +1310,10 @@ mod tests {
         };
         assert!(matches(&receipt, &fingerprint, &identity(None), 4));
         let mut legacy = receipt.clone();
-        legacy.schema = 2;
-        assert!(!matches(&legacy, &fingerprint, &identity(None), 4));
+        for schema in [2, 3] {
+            legacy.schema = schema;
+            assert!(!matches(&legacy, &fingerprint, &identity(None), 4));
+        }
         for value in ["", "0", "1"] {
             assert!(!matches(&receipt, &fingerprint, &identity(Some(value)), 4));
         }

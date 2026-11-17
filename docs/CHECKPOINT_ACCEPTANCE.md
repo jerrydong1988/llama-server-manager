@@ -31,6 +31,11 @@ limited to the same target/draft model. Qwen35 hybrid evidence does not qualify
 other hybrid architectures or GPUs. Registry entries establish the tested
 configuration envelope; they do not certify every model within that envelope.
 
+The [b12469 Qwen3.6-35B-A3B entry](B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md)
+is capability evidence for a restricted embedded-MTP candidate matrix, not a
+new blanket reviewed profile. Its five slot/KV pairs require local receipts;
+four-slot q8_0 remains excluded.
+
 ## Reproducible isolated acceptance
 
 Run `scripts/test-manager-cache-lifecycle-real.cjs` with absolute `--bin`,

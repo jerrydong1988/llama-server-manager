@@ -13,12 +13,14 @@ KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves the qu
 - 启用 prompt cache、slots API 和引擎所需缓存能力。单 slot 通常要求 idle-slot cache 与正数或 `-1` 的 Cache RAM；多 slot 要关闭 idle-slot cache，保存和恢复完整 slot 集合。
 - 使用无 TLS、无自定义 API/path prefix 的 loopback HTTP 端点。RPC、多模型、向量业务、LoRA、多模态和外部 lookup state 等仍受结构性限制。
 - 滑动窗口或混合/循环架构默认保守处理；仅匹配已审阅范围或满足本机验证准入条件的组合才可使用，不能把一个模型的结果推广至整个架构。
-- `draft-*` 需要 target/draft context 持久化能力、正数 `ctx_checkpoints`、可读取的匹配草稿文件，以及具体推测组合的资格证据。混合 ngram/draft 要单独验证；`spec-default`、未知组合和未纳管的参数仍可能被拒绝。
+- `draft-*` 需要 target/draft context 持久化能力、正数 `ctx_checkpoints`、可读取的匹配草稿文件（或精确登记的内置 MTP 模型），以及具体推测组合的资格证据。混合 ngram/draft 要单独验证；`spec-default`、未知组合和未纳管的参数仍可能被拒绝。
 - 自定义参数以安全分类器为准，例如已审阅的 `--lazy-mode`、`-lzm`、`--tensor-read-lazy` 的 `auto`、`on`、`off`。页面会列出缺失条件和阻断标志。
 - 本机验证使用隔离目录、端口和真实 GPU 推理，包括保存进程退出后的整组恢复、实际生成与前缀复用。启用 `allow_local_validation` 开关本身不会生成合格凭据，需预留验证所需资源。
 - 资格绑定完整运行库与环境。修改 `LLAMA_KV_ROWS_DISABLE` 的存在或值会使原凭据失效；空值和 `0` 也表示禁用 KV rows。旧 schema 凭据需重新验证，模型、驱动、运行库或关键配置变化也需重新评估。
 
 Admission is either an embedded reviewed profile or an explicit local experimental qualification. The local validator evaluates eligible Windows/ROCm one-, two-, and four-slot tuples; it does not declare every tuple supported. Multi-slot state must be saved and restored as a complete set with idle-slot caching disabled. Draft and mixed speculation require exact persistence evidence, not a help marker. Structural exclusions and architecture checks still apply. Receipts bind model/runtime/configuration/hardware/environment identity, including presence and values of `LLAMA_KV_ROWS_DISABLE`; legacy receipts require revalidation.
+
+精确登记的本地 b12469 + Qwen3.6-35B-A3B 内置 MTP 仅开放每槽 8K 预算下的单槽/2 槽 f16、q8_0 和 4 槽 f16 候选，仍需本机验证通过。4 槽 q8_0 不允许通过本机验证绕过限制；不得另选外挂草稿文件。完整身份、参数和验收边界见 [B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md](B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md)。
 
 当前行为与本机验证范围见 [CHECKPOINT_ADMISSION_POLICY.md](CHECKPOINT_ADMISSION_POLICY.md)；已审阅组合见 [CHECKPOINT_ACCEPTANCE.md](CHECKPOINT_ACCEPTANCE.md)、[MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md](MULTI_SLOT_CHECKPOINT_ACCEPTANCE.md)、[B11913_CHECKPOINT_ACCEPTANCE.md](B11913_CHECKPOINT_ACCEPTANCE.md) 和 [B12000_CHECKPOINT_ACCEPTANCE.md](B12000_CHECKPOINT_ACCEPTANCE.md)。[B12061_CHECKPOINT_EVALUATION.md](B12061_CHECKPOINT_EVALUATION.md) 的原生 API 证据不自动开放管理器保存恢复。
 

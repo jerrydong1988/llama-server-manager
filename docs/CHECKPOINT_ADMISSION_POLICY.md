@@ -38,6 +38,14 @@ multimodal, LoRA, custom-argument, external lookup-cache, RPC, and retention
 requirements still apply. Unknown runtime bundles must expose the required API
 capabilities and have the complete supported ROCm external-asset layout.
 
+The exact local b12469 bundle has a narrower, **local-validation-only** profile
+for the pinned Qwen3.6-35B-A3B embedded MTP model. It admits candidates with an
+8K per-slot budget: one/two slots with f16 or q8_0, and four slots with f16.
+Four-slot q8_0, external draft files and mixed speculative strategies remain
+unsupported even if local validation is enabled. Complete bundle identity fixes
+the missing help-marker capability detection; it does not grant a receipt.
+See [the bound identities and acceptance matrix](B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md).
+
 With `--kv-unified`, `ctx_size` is the shared pool capacity. Dividing it by the
 slot count describes the test's per-slot budget, not an independent hard context
 limit. The validator checks the actual slot count and reported shared capacity.
@@ -52,19 +60,22 @@ written, and existing engines are not stopped or switched.
 1. Run actual GPU inference. Require evidence of ROCm/HIP full layer offload.
    Each slot receives its own code and secret so a shared output cannot conceal
    swapped slot state.
-2. Save each slot and inspect bounded GGSQ v4, SCKP v1 and SDFT v1 appendices.
+2. Populate every slot, then save a quiescent complete generation before taking
+   matched concurrent live references. Inspect bounded GGSQ v4, SCKP v1 and SDFT v1 appendices.
    Windowed/recurrent models must produce checkpoints. Draft modes must include
    a nonempty live draft-context payload. Record speculative-blob lengths,
    including legitimate empty blobs.
 3. Fully exit the saving process. Start a fresh process, restore **all** slots
    before testing any of them, and require complete byte/token consumption.
-4. Require identical generated text/tokens. Record both draft counters and
+4. Replay with the same all-slot concurrency and require identical generated
+   text/tokens. Record both draft counters and
    acceptance rates; allow at most one configured draft batch of counter drift
    and at most five percentage points of acceptance-rate loss. This accommodates
    proposal-boundary variation without accepting a material regression. The
-   request must retrieve its slot's secret and reuse the saved prefix, allowing
+   unconstrained replay must reuse the saved prefix, allowing
    one token of boundary reevaluation. Startup and HTTP 200 do not count as this
-   evidence.
+   evidence. A separate short query must return its exact slot secret; its
+   grammar permits all four secrets and does not force the expected one.
 5. Rewrite the long prefix and retrieve its final record using a three-digit
    grammar that allows all 1,000 answers. Require the correct answer in the cold
    reference, cache-enabled rewrite and verified full recomputation; this avoids treating
@@ -82,10 +93,11 @@ The environment identity includes `LLAMA_KV_ROWS_DISABLE` by presence and exact
 value. Upstream disables KV rows whenever this variable exists, including an
 empty value or `0`. Adding, removing or changing it requires new local validation;
 restoring the original environment restores eligibility for an otherwise valid
-receipt. Windows variable names are compared case-insensitively. Receipt schema
-3 requires older experimental receipts to be revalidated: they cannot prove
-whether this previously ignored variable was present. Reviewed profiles and
-saved-state formats are unchanged; no new engine build is qualified.
+receipt. Windows variable names are compared case-insensitively. Schema 3 added
+this environment binding; schema 4 additionally requires coherent all-slot saves
+and concurrent references. Older experimental receipts require revalidation.
+Saved-state formats and earlier embedded reviewed profiles are unchanged; the
+b12469 capability entry requires its own local receipt.
 
 The Windows TCP listener owner is checked before each HTTP request; requests
 are rejected when the listener belongs to another local process. Cancellation

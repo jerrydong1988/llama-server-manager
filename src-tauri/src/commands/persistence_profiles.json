@@ -135,5 +135,61 @@
       }
     ],
     "evidence": "docs/B12000_CHECKPOINT_ACCEPTANCE.md"
+  },
+  {
+    "id": "windows-rocm-b12469-qwen36-embedded-mtp",
+    "managed_lookup_cache": false,
+    "base_artifact_sha256": "e46ab343dbb9e3ce4f8ace7f3f74fbe1b0e32c0154a8cf2c8bbcb66aa4ed9c4a",
+    "artifact_sha256": "f19c9d690e892321cd791825a1a8fedaa572c4e6dad9a1a1436436bb26677f19",
+    "launcher_sha256": "486d6f63dee4e14306cbba5f3096469bfa9faa16fda37e726df0e12ba7d5e0ed",
+    "draft_types": [
+      "draft-mtp"
+    ],
+    "max_context": 0,
+    "local_validation_only": true,
+    "model_scopes": [
+      {
+        "model_sha256": "6c6b816537abad90b250a0972b345466028d861ddfe316d5f0de31ca6440f781",
+        "draft_sha256": "",
+        "embedded_mtp": true,
+        "per_slot_context": 8192,
+        "contexts": [
+          8192,
+          16384
+        ],
+        "cache_types": [
+          "f16",
+          "q8_0"
+        ],
+        "parallel": [
+          1,
+          2
+        ],
+        "spec_types": [
+          "draft-mtp"
+        ],
+        "evidence": "docs/B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md"
+      },
+      {
+        "model_sha256": "6c6b816537abad90b250a0972b345466028d861ddfe316d5f0de31ca6440f781",
+        "draft_sha256": "",
+        "embedded_mtp": true,
+        "per_slot_context": 8192,
+        "contexts": [
+          32768
+        ],
+        "cache_types": [
+          "f16"
+        ],
+        "parallel": [
+          4
+        ],
+        "spec_types": [
+          "draft-mtp"
+        ],
+        "evidence": "docs/B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md"
+      }
+    ],
+    "evidence": "docs/B12469_QWEN36_CHECKPOINT_ACCEPTANCE.md"
   }
 ]

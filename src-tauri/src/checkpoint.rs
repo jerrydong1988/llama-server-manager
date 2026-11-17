@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 // v0.9.0 adds Clover MoE and Metis 1.6 to the hybrid denylist.
 // Persisted eligibility must be reassessed before any checkpoint is restored.
-pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 8;
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 9;
 const MAX_CHECKPOINT_SLOTS: u32 = 4;
 fn one_slot() -> u32 {
     1
@@ -238,6 +238,7 @@ pub struct EngineCheckpointCapabilities {
     // Set only by the manager after exact runtime/model/config qualification.
     pub reviewed_swa_checkpoint_reuse: bool,
     pub reviewed_multi_slot: bool,
+    pub scoped_qwen35moe_candidate: bool,
 }
 
 impl EngineCheckpointCapabilities {
@@ -256,6 +257,7 @@ impl EngineCheckpointCapabilities {
             context_checkpoint_persistence: false,
             reviewed_swa_checkpoint_reuse: false,
             reviewed_multi_slot: false,
+            scoped_qwen35moe_candidate: false,
         }
     }
 
@@ -275,6 +277,11 @@ impl EngineCheckpointCapabilities {
 
     pub const fn with_reviewed_multi_slot(mut self, supported: bool) -> Self {
         self.reviewed_multi_slot = supported;
+        self
+    }
+
+    pub const fn with_scoped_qwen35moe_candidate(mut self, supported: bool) -> Self {
+        self.scoped_qwen35moe_candidate = supported;
         self
     }
 }
@@ -609,6 +616,8 @@ pub fn evaluate_checkpoint_eligibility(
         // qwen35 has the reviewed hybrid checkpoint-serialization contract.
         // Other hybrid architectures remain cold until separately reviewed.
         Some("qwen35") if context.engine_capabilities.context_checkpoint_persistence => {}
+        Some("qwen35moe") if context.engine_capabilities.context_checkpoint_persistence
+            && context.engine_capabilities.scoped_qwen35moe_candidate => {}
         Some(architecture) if is_known_hybrid_or_recurrent(architecture) => push_reason(
             &mut reasons,
             CheckpointReasonCode::HybridRecurrentUnsupported,
@@ -4711,6 +4720,7 @@ mod tests {
                 context_checkpoint_persistence,
                 reviewed_swa_checkpoint_reuse: false,
                 reviewed_multi_slot: false,
+                scoped_qwen35moe_candidate: false,
             },
             engine_speculative_types: &[
                 "ngram-mod".into(),
@@ -5058,6 +5068,7 @@ mod tests {
                         context_checkpoint_persistence: persistence,
                         reviewed_swa_checkpoint_reuse: false,
                         reviewed_multi_slot: false,
+                        scoped_qwen35moe_candidate: false,
                     },
                     engine_speculative_types: &[],
                     model_architecture: Some(architecture),
@@ -5089,6 +5100,31 @@ mod tests {
             evaluate(&config).eligible,
             "ordinary full-attention state does not need rollback checkpoints"
         );
+    }
+
+    #[test]
+    fn scoped_moe_candidate_does_not_open_the_hybrid_family() {
+        let config = eligible_config();
+        for architecture in ["qwen35moe", "qwen3next", "qwen4exp"] {
+            for scoped in [false, true] {
+                let result = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+                    config: &config,
+                    workload: ModelWorkload::Inference,
+                    managed_local_engine: true,
+                    engine_capabilities: EngineCheckpointCapabilities {
+                        slots: true, slot_save_path: true, cache_ram: true, cache_idle_slots: true,
+                        context_checkpoint_persistence: true,
+                        scoped_qwen35moe_candidate: scoped,
+                        ..Default::default()
+                    },
+                    engine_speculative_types: &[],
+                    model_architecture: Some(architecture),
+                    model_artifacts_complete: true,
+                    model_has_swa: Some(false),
+                });
+                assert_eq!(result.eligible, scoped && architecture == "qwen35moe", "{architecture} {scoped}");
+            }
+        }
     }
 
     #[test]
@@ -5319,6 +5355,7 @@ mod tests {
                 context_checkpoint_persistence: true,
                 reviewed_swa_checkpoint_reuse: false,
                 reviewed_multi_slot: false,
+                scoped_qwen35moe_candidate: false,
             },
             engine_speculative_types: &[],
             model_architecture: Some("llama"),
@@ -5352,6 +5389,7 @@ mod tests {
                 context_checkpoint_persistence: true,
                 reviewed_swa_checkpoint_reuse: false,
                 reviewed_multi_slot: false,
+                scoped_qwen35moe_candidate: false,
             },
             ..base
         });
