@@ -31,7 +31,7 @@ import type {
 import { Badge, joinClassNames } from './ui'
 import { MiniSparkline, TrendChart } from './monitoring/MonitoringPrimitives'
 import { formatBytes, formatBytesPerSecond, formatDuration, formatMs, formatRate, formatTime } from './monitoring/monitoringFormat'
-import { DualThroughput, DualThroughputTrends, InferenceTasks } from './monitoring/InferencePanels'
+import { DualThroughput, DualThroughputTrends, InferenceTasks, useMonitoringClock } from './monitoring/InferencePanels'
 import { fleetInferenceTrend } from './monitoring/inferenceThroughput'
 import {
   buildActivityFeed,
@@ -136,13 +136,7 @@ export default function BigScreenPage() {
     () => runningInstances.map(instance => instance.id),
     [runningInstances],
   )
-  const trendEnd = useMemo(
-    () => Math.max(
-      Date.now(),
-      ...runningInstanceIds.map(instanceId => monitoringCurrentByInstance[instanceId]?.ts || 0),
-    ),
-    [monitoringCurrentByInstance, runningInstanceIds],
-  )
+  const trendEnd = useMonitoringClock()
   const trendStart = trendEnd - 5 * 60 * 1000
   const inferenceIds = runningInstances.filter(instance =>
     (monitoringCurrentByInstance[instance.id]?.workload || (instance.config.embedding || instance.config.reranking ? 'embedding' : 'inference')) === 'inference',
@@ -343,11 +337,13 @@ export default function BigScreenPage() {
   )
 
   const modelCount = models.filter(model => !model.is_shard && model.file_type === 'model').length
-  const statusLabel = serviceStatus.status === 'critical' ? labels.abnormal : serviceStatus.status === 'attention' ? labels.needsAttention : labels.normal
-  const statusTone: SignalTone = serviceStatus.status === 'critical' ? 'red' : serviceStatus.status === 'attention' ? 'amber' : 'emerald'
-  const statusDetail = serviceStatus.status === 'healthy'
-    ? labels.allServicesNormal
-    : (telemetryError || overview.last_write_error || `${serviceStatus.alertCount} ${labels.alerts}`)
+  const healthLabels = getInferenceLabels(lang)
+  const healthy = runningInstances.filter(instance => instance.healthCheck === 'ok').length
+  const failed = errorCount > 0 || runningInstances.some(instance => instance.healthCheck === 'fail')
+  const statusLabel = failed ? labels.abnormal : !runningInstances.length ? healthLabels.noInstances
+    : healthy < runningInstances.length ? healthLabels.pending : labels.normal
+  const statusTone: SignalTone = failed ? 'red' : !runningInstances.length ? 'slate' : healthy < runningInstances.length ? 'amber' : 'emerald'
+  const telemetryIssue = telemetryError || overview.last_write_error || (overview.dropped_writes > 0 ? healthLabels.telemetryIssue : null)
 
   return (
     <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-100 p-3 text-slate-950 dark:bg-slate-950 dark:text-slate-100" data-guide="monitoring-wall">
@@ -372,9 +368,9 @@ export default function BigScreenPage() {
       </header>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <WallKpi label={labels.serviceStatus} value={statusLabel} detail={statusDetail} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
+        <WallKpi label={labels.serviceStatus} value={statusLabel} detail={`${healthLabels.healthChecks} · ${healthy}/${runningInstances.length}`} tone={statusTone} icon={failed ? <AlertTriangle className="h-8 w-8" /> : <Server className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
-        {hasInference ? <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"><DualThroughput frames={dualFrames} lang={lang} compact /></div>
+        {hasInference ? <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"><DualThroughput frames={dualFrames} lang={lang} compact wall /></div>
           : <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />}
         <WallKpi label={labels.requestPressure} value={pressure.percent == null ? '--' : `${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
         <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
@@ -382,7 +378,7 @@ export default function BigScreenPage() {
 
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
         <WallPanel title={labels.realtimeThroughput} icon={<Activity className="h-5 w-5" />} action={<Badge tone="blue">{labels.range5m}</Badge>}>
-          {hasInference ? <DualThroughputTrends prefill={prefillTrend} decode={decodeTrend} start={trendStart} end={trendEnd} lang={lang} /> : <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
+          {hasInference ? <DualThroughputTrends prefill={prefillTrend} decode={decodeTrend} start={trendStart} end={trendEnd} lang={lang} wall /> : <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
             <div className="space-y-4">
               <div>
                 <div className="text-xs text-slate-500">{labels.currentThroughput}</div>
@@ -491,8 +487,8 @@ export default function BigScreenPage() {
           <span>{labels.sessions24h}: {overview.sessions_24h}</span>
           <span>{labels.lastUpdated}: {formatTime(lastUpdatedAt)}</span>
         </div>
-        <div className={serviceStatus.status === 'healthy' ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}>
-          {serviceStatus.status === 'healthy' ? labels.dataLinkNormal : statusDetail}
+        <div className={!telemetryIssue ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}>
+          {telemetryIssue || labels.dataLinkNormal}
         </div>
       </footer>
     </div>
@@ -532,7 +528,7 @@ function WallKpi({ label, value, detail, tone, icon }: { label: string; value: R
   )
 }
 
-function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { label: string; value: number | null; detail: string; tone: SignalTone; sparkline: number[]; icon: ReactNode }) {
+function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { label: string; value: number | null; detail: string; tone: SignalTone; sparkline: Array<number | null>; icon: ReactNode }) {
   const available = value != null && Number.isFinite(value)
   const safe = Math.max(0, Math.min(100, Math.round(available ? value : 0)))
   const toneClass = wallTone(tone)
