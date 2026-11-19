@@ -5,6 +5,13 @@ pub(crate) type Child = std::process::Child;
 #[cfg(windows)]
 pub(crate) use windows::Child;
 
+pub(crate) fn launch_path(path: &str) -> String {
+    #[cfg(windows)]
+    { windows::launch_path(path) }
+    #[cfg(not(windows))]
+    { path.to_owned() }
+}
+
 pub(crate) fn spawn(args: &[String], cwd: Option<&str>) -> std::io::Result<Child> {
     spawn_with_environment(args, cwd, &[])
 }
@@ -241,7 +248,7 @@ mod windows {
     // loaded executable path. That is invalid under Win32 verbatim semantics.
     // Use an ordinary short drive path only when canonicalization proves it
     // identifies the same file; retain long/device/UNC paths unchanged.
-    fn launch_path(path: &str) -> String {
+    pub(super) fn launch_path(path: &str) -> String {
         if let Some(short) = path.strip_prefix(r"\\?\") {
             if short.as_bytes().get(1) == Some(&b':')
                 && short.as_bytes().get(2) == Some(&b'\\')

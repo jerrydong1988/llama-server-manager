@@ -2351,20 +2351,18 @@ async fn assess_checkpoint_eligibility(
         .is_ok();
     let model_artifacts_complete = main_model_artifacts_complete && draft_model_artifacts_complete;
     let model_identities = if let Some(fingerprint) = final_fingerprint {
-        fingerprint
-            .draft_model_sha256
-            .as_ref()
-            .map(|draft| (fingerprint.model_sha256.clone(), draft.clone()))
+        Some((fingerprint.model_sha256.clone(), fingerprint.draft_model_sha256.clone().unwrap_or_default()))
     } else if engine_capabilities.is_some_and(|caps| {
         crate::commands::engine_capabilities::needs_checkpoint_model_identity(config, caps)
     }) {
         let store = state.checkpoint_coordinator.store().clone();
         let model = std::path::PathBuf::from(&config.model_path);
-        let draft = std::path::PathBuf::from(&config.draft_model_path);
+        let draft = (!config.draft_model_path.trim().is_empty())
+            .then(|| std::path::PathBuf::from(&config.draft_model_path));
         tokio::task::spawn_blocking(move || {
             Some((
                 store.model_artifact_sha256(&model).ok()?,
-                store.model_artifact_sha256(&draft).ok()?,
+                match draft { None => String::new(), Some(path) => store.model_artifact_sha256(&path).ok()? },
             ))
         })
         .await
@@ -2385,7 +2383,7 @@ async fn assess_checkpoint_eligibility(
     let engine_checkpoint_capabilities = engine_capabilities
         .map(|capabilities| {
             EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
-                .with_context_checkpoint_persistence(capabilities.context_checkpoint_persistence)
+                .with_context_checkpoint_persistence(crate::commands::engine_capabilities::reviewed_context_checkpoint_persistence(capabilities))
                 .with_reviewed_swa_checkpoint_reuse(reviewed_swa)
                 .with_reviewed_multi_slot(reviewed_multi)
         })
@@ -2433,7 +2431,8 @@ async fn assess_checkpoint_eligibility(
                 || engine.backend.eq_ignore_ascii_case("HIP")
         });
     let Some(caps) = engine_capabilities
-        .filter(|caps| is_rocm && crate::checkpoint_qualification::candidate(config, caps))
+        .filter(|caps| is_rocm && crate::checkpoint_qualification::candidate(config, caps)
+            && crate::commands::engine_capabilities::allows_local_checkpoint_validation(config, caps, model_digests))
     else {
         return reviewed;
     };
@@ -2458,8 +2457,10 @@ async fn assess_checkpoint_eligibility(
         workload,
         managed_local_engine: true,
         engine_capabilities: engine_checkpoint_capabilities
+            .with_context_checkpoint_persistence(caps.context_checkpoint_persistence)
             .with_reviewed_swa_checkpoint_reuse(true)
-            .with_reviewed_multi_slot(true),
+            .with_reviewed_multi_slot(true)
+            .with_scoped_qwen35moe_candidate(crate::commands::engine_capabilities::scoped_embedded_mtp_candidate(config, caps, model_digests)),
         engine_speculative_types: &caps.speculative_types,
         model_architecture: model_architecture.as_deref(),
         model_artifacts_complete,
@@ -2593,7 +2594,7 @@ pub async fn validate_checkpoint_locally(
             )
         })
         .is_some_and(|model| {
-            model.architecture.as_deref() == Some("qwen35")
+            matches!(model.architecture.as_deref(), Some("qwen35" | "qwen35moe"))
                 || (model.capabilities.has_swa == Some(true) && !config.swa_full)
         });
     let receipt = tokio::task::spawn_blocking(move || {

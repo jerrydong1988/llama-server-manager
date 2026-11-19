@@ -17,7 +17,10 @@ const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 // Revision 3 also records the per-option KV type enums from --help.
 const REPORTED_DEFAULTS_VERSION: u8 = 3;
 const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
-pub(crate) const PERSISTENCE_REVISION: u8 = 8;
+#[cfg(test)]
+#[path = "engine_capabilities_b12469_tests.rs"]
+mod b12469_tests;
+pub(crate) const PERSISTENCE_REVISION: u8 = 9;
 fn single_slot_scope() -> Vec<i32> {
     vec![1]
 }
@@ -35,6 +38,10 @@ struct ModelPersistenceScope {
     parallel: Vec<i32>,
     #[serde(default = "single_mtp_strategy")]
     spec_types: Vec<String>,
+    #[serde(default)]
+    embedded_mtp: bool,
+    #[serde(default)]
+    per_slot_context: Option<u32>,
     #[allow(dead_code)]
     evidence: String,
 }
@@ -86,7 +93,14 @@ impl ModelPersistenceScope {
         })
             && config.draft_tokens == 3
             && self.parallel.contains(&config.parallel)
-            && (config.parallel == 1 || config.ctx_size == 4096 * config.parallel as u32)
+            && match self.per_slot_context {
+                Some(size) => config.parallel > 0 && size.checked_mul(config.parallel as u32) == Some(config.ctx_size),
+                None => config.parallel == 1 || config.ctx_size == 4096 * config.parallel as u32,
+            }
+            && (!self.embedded_mtp || (config.draft_model_path.trim().is_empty()
+                && config.batch_size == 512 && config.ubatch_size == 512
+                && config.checkpoint_min_step == 512
+                && ["batch_size", "ubatch_size", "checkpoint_min_step"].iter().all(|key| emits(&[*key]))))
             && config.ctx_checkpoints == 2
             && !config.swa_full
             && config.kv_unified
@@ -118,6 +132,10 @@ struct PersistenceProfile {
     max_context: u32,
     #[serde(default)]
     model_scopes: Vec<ModelPersistenceScope>,
+    // Capability evidence permits only these candidates to run local validation;
+    // it is never a portable restore certificate for another machine/config.
+    #[serde(default)]
+    local_validation_only: bool,
     #[allow(dead_code)]
     evidence: String,
 }
@@ -156,6 +174,13 @@ fn persistence_evidence(help: &str, artifacts: Option<&str>) -> (bool, Option<St
     }
     // A help claim establishes SCKP support, not qualification of every advertised draft mode.
     (detects_context_checkpoint_persistence(help), None, Vec::new())
+}
+
+pub(crate) fn reviewed_context_checkpoint_persistence(caps: &EngineCapabilities) -> bool {
+    // Recognizing native serialization must not also admit every previously
+    // reviewed hybrid architecture through a local-validation-only bundle.
+    caps.context_checkpoint_persistence && !profiles().iter().any(|p|
+        p.local_validation_only && Some(p.id.as_str()) == caps.persistence_profile.as_deref())
 }
 
 #[cfg(test)]
@@ -208,12 +233,38 @@ pub(crate) fn reviewed_windowed_swa(
             .all(|kind| caps.speculative_types.contains(kind))
         && profiles()
             .iter()
-            .filter(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref())
+            .filter(|p| !p.local_validation_only && Some(p.id.as_str()) == caps.persistence_profile.as_deref())
             .any(|p| {
                 p.model_scopes.iter().any(|s| {
                     s.matches_config(config) && s.model_sha256 == model && s.draft_sha256 == draft
                 })
             })
+}
+
+pub(crate) fn scoped_embedded_mtp_candidate(
+    config: &crate::models::InstanceConfig,
+    caps: &EngineCapabilities,
+    models: Option<(&str, &str)>,
+) -> bool {
+    let Some((model, draft)) = models else { return false; };
+    cfg!(windows) && caps.persistence_revision == PERSISTENCE_REVISION
+        && caps.context_checkpoint_persistence && hardware_scope(config)
+        && caps.checkpoint_draft_types.iter().any(|k| k == "draft-mtp")
+        && caps.speculative_types.iter().any(|k| k == "draft-mtp")
+        && profiles().iter().any(|p| p.local_validation_only
+            && Some(p.id.as_str()) == caps.persistence_profile.as_deref()
+            && p.model_scopes.iter().any(|s| s.embedded_mtp && s.matches_config(config)
+                && s.model_sha256 == model && s.draft_sha256 == draft))
+}
+
+pub(crate) fn allows_local_checkpoint_validation(
+    config: &crate::models::InstanceConfig,
+    caps: &EngineCapabilities,
+    models: Option<(&str, &str)>,
+) -> bool {
+    !profiles().iter().any(|p| p.local_validation_only
+        && Some(p.id.as_str()) == caps.persistence_profile.as_deref())
+        || scoped_embedded_mtp_candidate(config, caps, models)
 }
 
 pub(crate) fn reviewed_multi_slot(
@@ -249,7 +300,7 @@ pub(crate) fn checkpoint_types_with_models(
         .iter()
         .find(|p| Some(p.id.as_str()) == caps.persistence_profile.as_deref());
     let profile_scope = profile
-        .is_some_and(|p| config.ctx_size > 0 && config.ctx_size <= p.max_context)
+        .is_some_and(|p| !p.local_validation_only && config.ctx_size > 0 && config.ctx_size <= p.max_context)
         && hardware_scope(config)
         && [
             &config.cache_type_k,
@@ -1414,15 +1465,18 @@ mod tests {
                 assert!(profile_for_artifacts(Some(base)).is_none());
                 assert!(requires_auxiliary_runtime(base));
             }
-            assert!(profile.max_context > 0 && profile.max_context <= 4096);
+            assert!(if profile.local_validation_only { profile.max_context == 0 } else { profile.max_context > 0 && profile.max_context <= 4096 });
             assert!(!profile.evidence.is_empty());
             for scope in &profile.model_scopes {
-                for digest in [&scope.model_sha256, &scope.draft_sha256] {
+                for digest in [&scope.model_sha256, &scope.draft_sha256].into_iter().filter(|d| !scope.embedded_mtp || !d.is_empty()) {
                     assert_eq!(digest.len(), 64);
                     assert!(digest.bytes().all(|c| c.is_ascii_hexdigit()));
                 }
                 assert!(!scope.contexts.is_empty());
-                assert!(scope.contexts.iter().all(|n| [4096, 16384].contains(n)));
+                assert!(scope.contexts.iter().all(|n| [4096, 8192, 16384, 32768].contains(n)));
+                if scope.embedded_mtp {
+                    assert!(profile.local_validation_only && scope.draft_sha256.is_empty());
+                }
                 assert!(!scope.cache_types.is_empty());
                 assert!(scope.cache_types.iter().all(|k| ["f16", "q8_0"].contains(&k.as_str())));
                 assert!(!scope.evidence.is_empty());
@@ -1747,7 +1801,7 @@ mod tests {
 
     #[test]
     fn multi_slot_scope_requires_exact_models_topology_and_emitted_shape() {
-        for profile in profiles() {
+        for profile in profiles().iter().filter(|p| !p.local_validation_only) {
             let caps = EngineCapabilities {
                 persistence_profile: Some(profile.id.clone()),
                 persistence_revision: PERSISTENCE_REVISION,

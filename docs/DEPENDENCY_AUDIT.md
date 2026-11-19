@@ -18,7 +18,7 @@ CI 在每次 `npm ci` **之前**运行 `scripts/check-npm-supply-chain.cjs`：
 
 ## Rust / Tauri 依赖
 
-CI 的质量检查使用固定提交 SHA 的 `RustSec/audit-check` 扫描 `src-tauri/Cargo.lock`。允许项必须与 `.github/rustsec-allowlist.json` 中带到期日期的精确清单一致；新增 RustSec 漏洞会阻止构建。
+CI 的质量检查通过 `--locked` 安装固定版本的 `cargo-audit 0.22.2`，直接扫描 `src-tauri/Cargo.lock`，并保留非零退出码。允许项必须与 `.github/rustsec-allowlist.json` 中带到期日期的精确清单一致；新增 RustSec 漏洞和工具执行错误会阻止构建。原报告 action 两次在审查结束后更新 GitHub Checks API 时返回 404，因此改由必需的 `quality` 任务直接承载审查结果；没有增加忽略项，维护状态告警仍显示在日志中。
 
 本次已将直接依赖 `reqwest` 从 0.11 升级到 0.12，并移除不再维护的 `rustls-pemfile 1.x` 依赖链；`mdns-sd` 也从 0.11 升级到当前兼容的 0.20。
 

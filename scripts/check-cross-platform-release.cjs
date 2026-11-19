@@ -11,7 +11,7 @@ const signingPolicy = fs.readFileSync('CODE_SIGNING_POLICY.md', 'utf8')
 const privacyPolicy = fs.readFileSync('PRIVACY.md', 'utf8')
 const signingGuide = fs.readFileSync('docs/RELEASE_SIGNING.md', 'utf8')
 const failures = []
-const rustsecNode24Commit = '858dc40f52ca2b8570b7a997c1c4e35c6fc9a432'
+const { rustsecWorkflow } = require('./lib/rustsec-workflow.cjs')
 const reviewedActionPins = new Map([
   ['actions/checkout', new Set(['3d3c42e5aac5ba805825da76410c181273ba90b1', '11d5960a326750d5838078e36cf38b85af677262'])],
   ['actions/create-github-app-token', new Set(['bcd2ba49218906704ab6c1aa796996da409d3eb1'])],
@@ -20,13 +20,9 @@ const reviewedActionPins = new Map([
   ['actions/setup-node', new Set(['249970729cb0ef3589644e2896645e5dc5ba9c38', '49933ea5288caeca8642d1e84afbd3f7d6820020'])],
   ['actions/upload-artifact', new Set(['043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'])],
   ['dtolnay/rust-toolchain', new Set(['4360b52568e2003a75bf9bc1d59f33a8e3fc893c'])],
-  ['RustSec/audit-check', new Set([rustsecNode24Commit])],
   ['signpath/github-action-submit-signing-request', new Set(['b9d91eadd323de506c0c81cf0c7fe7438f3360fd'])],
   ['Swatinem/rust-cache', new Set(['6323deb102c322ba6fcbdcafc7e3dddab59af2b6'])],
 ])
-const approvedRustsecAdvisories = [
-  'RUSTSEC-2024-0429',
-]
 
 function jobBody(name) {
   const marker = `  ${name}:`
@@ -105,24 +101,7 @@ if (qualityInstalledScanIndex < qualityDependencyInstallIndex) {
 if (!qualityJob.includes('node node_modules/playwright/cli.js install chromium') || qualityJob.includes('npx playwright')) {
   failures.push('quality job may fetch an undeclared Playwright package')
 }
-if (!qualityJob.includes(`RustSec/audit-check@${rustsecNode24Commit}`)) {
-  failures.push('quality job does not pin the reviewed Node 24 RustSec action commit')
-}
-if (!qualityJob.includes('working-directory: src-tauri')) {
-  failures.push('RustSec audit is not scoped to the Tauri Cargo.lock')
-}
-const rustsecIgnoreMatch = qualityJob.match(/^\s+ignore:\s*([^\r\n]+)$/m)
-const configuredAdvisories = rustsecIgnoreMatch
-  ? rustsecIgnoreMatch[1].split(',').map(value => value.trim()).filter(Boolean)
-  : []
-const uniqueConfiguredAdvisories = [...new Set(configuredAdvisories)].sort()
-const expectedAdvisories = [...approvedRustsecAdvisories].sort()
-if (JSON.stringify(uniqueConfiguredAdvisories) !== JSON.stringify(expectedAdvisories)) {
-  failures.push('RustSec audit exceptions do not exactly match the reviewed GLib backport exception')
-}
-if (configuredAdvisories.length !== uniqueConfiguredAdvisories.length) {
-  failures.push('RustSec audit exceptions contain duplicate advisory IDs')
-}
+try { rustsecWorkflow(workflow) } catch (error) { failures.push(error.message) }
 for (const forbidden of [
   'rustsec/audit-check@v2.0.0',
   'ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION',
