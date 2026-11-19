@@ -47,7 +47,7 @@ fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
         KV_CHECKPOINT_CAPABILITY,
         ROUTER_USAGE_CAPABILITY,
         ROUTER_LISTENER_CAPABILITY,
-        "gufo_engine_v2",
+        "gufo_engine_v3",
     ]
     .iter()
     .all(|required| {
@@ -996,7 +996,7 @@ mod tests {
                 KV_CHECKPOINT_CAPABILITY.into(),
                 ROUTER_USAGE_CAPABILITY.into(),
                 ROUTER_LISTENER_CAPABILITY.into(),
-                "gufo_engine_v2".into(),
+                "gufo_engine_v3".into(),
             ],
             config_revision: 1,
             background_enabled: false,
@@ -1034,11 +1034,14 @@ mod tests {
         old_router.capabilities.push("router_usage_v5".into());
         assert!(!has_required_runtime_capabilities(&old_router));
 
-        for missing in [RUNTIME_ERROR_ACK_CAPABILITY, ROUTER_LISTENER_CAPABILITY, "gufo_engine_v2"] {
+        for missing in [RUNTIME_ERROR_ACK_CAPABILITY, ROUTER_LISTENER_CAPABILITY, "gufo_engine_v3"] {
             let mut legacy_status = status.clone();
             legacy_status
                 .capabilities
                 .retain(|capability| capability != missing);
+            if missing == "gufo_engine_v3" {
+                legacy_status.capabilities.push("gufo_engine_v2".into());
+            }
             assert!(!has_required_runtime_capabilities(&legacy_status));
         }
     }

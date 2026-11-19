@@ -43,6 +43,15 @@ fn sorted_ids<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
     ids
 }
 
+fn validate_gufo_launch_command(spec: &RuntimeLaunchSpec) -> Result<(), String> {
+    if spec.config.id != spec.instance_id { return Err("Gufo instance identity mismatch".into()); }
+    let executable = spec.command.first().ok_or("runtime launch command is empty")?;
+    let (_, expected) = crate::gufo::prepare(spec.config.clone(), executable).map_err(|e| e.to_string())?;
+    let expected = crate::gufo::command_for_draft_policy(&expected, spec.gufo_draft_tokens_ignored);
+    if expected != spec.command { return Err("Gufo launch spec differs from its validated configuration".into()); }
+    Ok(())
+}
+
 fn is_instance_exit_error(error: &str, instance_id: &str) -> bool {
     error.starts_with(&format!(
         "instance {instance_id} exited unexpectedly (code "
@@ -430,6 +439,7 @@ impl RuntimeSupervisor {
                 ROUTER_USAGE_CAPABILITY.to_string(),
                 ROUTER_LISTENER_CAPABILITY.to_string(),
                 "gufo_engine_v2".to_string(),
+                "gufo_engine_v3".to_string(),
             ],
             config_revision,
             background_enabled,
@@ -971,9 +981,7 @@ impl RuntimeSupervisor {
             return Err("runtime launch command is empty".into());
         }
         if crate::gufo::is_gufo(&spec.config) {
-            if spec.config.id != spec.instance_id { return Err("Gufo instance identity mismatch".into()); }
-            let (_, expected) = crate::gufo::prepare(spec.config.clone(), &spec.command[0]).map_err(|e| e.to_string())?;
-            if expected != spec.command { return Err("Gufo launch spec differs from its validated configuration".into()); }
+            validate_gufo_launch_command(&spec)?;
             crate::gufo::ensure_port_available(&spec.config).map_err(|e| e.to_string())?;
         }
         // Persisted launch specs may predate newly supported secret flags.
@@ -2329,6 +2337,7 @@ mod tests {
                 ..InstanceConfig::default()
             },
             engine_backend: "test".into(),
+            gufo_draft_tokens_ignored: false,
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
             executable_sha256: String::new(),
@@ -2336,6 +2345,42 @@ mod tests {
             working_directory: None,
             checkpoint: None,
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gufo_runtime_restores_draft_policy_without_relaxing_command_validation() {
+        use super::validate_gufo_launch_command;
+        let root = std::env::temp_dir().join(format!("lsm-gufo-runtime-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let model = root.join("model.gguf");
+        std::fs::write(&model, b"GGUF").unwrap();
+        let mut spec = detach_spec();
+        spec.config.id = spec.instance_id.clone();
+        spec.config.engine_kind = crate::gufo::EngineKind::Gufo;
+        spec.config.model_path = model.to_string_lossy().into_owned();
+        spec.config.ctx_size = 32768;
+        spec.config.gufo.speculative = "mtp".into();
+        spec.config.gufo.mtp_model = spec.config.model_path.clone();
+        let (_, legacy) = crate::gufo::prepare(spec.config.clone(), "gufo.exe").unwrap();
+        spec.command = legacy;
+        assert!(validate_gufo_launch_command(&spec).is_ok());
+        let mut old_json = serde_json::to_value(&spec).unwrap();
+        old_json.as_object_mut().unwrap().remove("gufo_draft_tokens_ignored");
+        let old: RuntimeLaunchSpec = serde_json::from_value(old_json).unwrap();
+        assert!(!old.gufo_draft_tokens_ignored);
+        assert!(validate_gufo_launch_command(&old).is_ok());
+        spec.gufo_draft_tokens_ignored = true;
+        spec.command = crate::gufo::command_for_draft_policy(&spec.command, true);
+        let restored: RuntimeLaunchSpec = serde_json::from_value(serde_json::to_value(&spec).unwrap()).unwrap();
+        assert!(validate_gufo_launch_command(&restored).is_ok());
+        spec.gufo_draft_tokens_ignored = false;
+        assert!(validate_gufo_launch_command(&spec).is_err());
+        spec.gufo_draft_tokens_ignored = true;
+        let port = spec.command.iter().position(|arg| arg == "--port").unwrap() + 1;
+        spec.command[port] = "23456".into();
+        assert!(validate_gufo_launch_command(&spec).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn checkpoint_fingerprint() -> CheckpointFingerprint {

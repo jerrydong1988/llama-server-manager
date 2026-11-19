@@ -37,6 +37,8 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
   const engines = useAppStore(state => state.engines)
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
   const engine = resolveEffectiveEngine(local, engines, defaultEngineId)
+  const draftTokensIgnored = engine?.capabilities?.status === 'detected'
+    ? engine.capabilities.gufoDraftTokensIgnored ?? undefined : undefined
   const running = instance.status === 'running'
   const reasoningBudget = local.gufo.reasoning_budget ?? -1
   const set = <K extends keyof InstanceConfig>(key: K, value: InstanceConfig[K]) => {
@@ -98,6 +100,13 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
         checked={local.gufo[key]} onChange={event => gufo(key, event.target.checked)} />{label}
     </label>
   )
+  const probeDraftPolicy = async () => {
+    if (!engine || busy || running) return
+    setBusy(true); setError('')
+    try { await useAppStore.getState().probeEngineCapabilities(engine.id) }
+    catch (cause) { setError(String(cause)) }
+    finally { setBusy(false) }
+  }
   const validate = async (persist: boolean) => {
     if (saving.current || running) return
     if (!engine) { setError(copy.missing); return }
@@ -106,6 +115,7 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
     const store = useAppStore.getState()
     const previous = store.instances.find(item => item.id === instance.id)?.config
     try {
+      if (draftTokensIgnored === undefined) await store.probeEngineCapabilities(engine.id)
       const preview = await store.generateCommand(local, engine.exe)
       setCommand(preview.command.map((arg, index, all) => all[index - 1] === '--api-key' ? '"***"' : JSON.stringify(arg)).join(' '))
       if (!persist) return
@@ -155,8 +165,21 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
           <div className={`grid items-end gap-4 ${local.gufo.speculative === 'off' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
             {select('model_family', copy.family, [['qwen38_flash_next', 'Qwen3.8-Flash-Next'], ['qwen38_27b', 'Qwen3.8-27B']])}
             {select('speculative', copy.speculative, [['off', copy.off], local.gufo.model_family === 'qwen38_27b' ? ['dflash2', 'DFlash2'] : ['mtp', 'MTP']])}
-            {local.gufo.speculative !== 'off' && gufoField('draft_tokens', copy.drafts, true)}
+            {local.gufo.speculative !== 'off' && (draftTokensIgnored === false
+              ? gufoField('draft_tokens', copy.drafts, true)
+              : <div className="flex min-w-0 flex-col gap-2 text-sm">
+                <label htmlFor={`${id}-draft-policy`} className="font-medium leading-5">{copy.drafts}</label>
+                <TextInput id={`${id}-draft-policy`} readOnly aria-describedby={`${id}-draft-policy-hint`}
+                  value={draftTokensIgnored ? copy.modelOwnedDrafts : copy.draftPolicyUnknown} />
+              </div>)}
           </div>
+          {local.gufo.speculative !== 'off' && draftTokensIgnored !== false && <div className="space-y-2">
+            <p id={`${id}-draft-policy-hint`} className="max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {draftTokensIgnored ? copy.modelOwnedDraftsHint : copy.draftPolicyUnknownHint}
+            </p>
+            {draftTokensIgnored === undefined && <Button variant="secondary" disabled={busy || running || !engine}
+              onClick={() => void probeDraftPolicy()}>{busy ? copy.busy : copy.probeEngine}</Button>}
+          </div>}
           {local.gufo.speculative === 'mtp' && pathField('mtp_model')}
           {local.gufo.speculative === 'dflash2' && pathField('dflash_model')}
         </GufoSection>
