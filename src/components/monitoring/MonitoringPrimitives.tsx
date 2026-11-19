@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Activity, CheckCircle2 } from 'lucide-react'
 import type { ModelWorkload, RunningInferenceTask } from '../../store/types'
 import { Badge, joinClassNames } from '../ui'
@@ -98,25 +98,34 @@ export function MiniSparkline({
   tone = 'blue',
   className = '',
 }: {
-  values: number[]
+  values: Array<number | null>
   tone?: SignalTone
   className?: string
 }) {
-  const safeValues = values.length > 1 ? values.slice(-36) : [0, 0]
+  const recent = values.slice(-36)
+  const safeValues = recent.filter((value): value is number => value != null && Number.isFinite(value))
   const max = Math.max(...safeValues, 1)
   const min = Math.min(...safeValues, 0)
   const range = Math.max(max - min, 1)
   const width = 140
   const height = 36
-  const points = safeValues.map((value, index) => {
-    const x = safeValues.length === 1 ? 0 : (index / (safeValues.length - 1)) * width
+  const segments: { x: number; y: number }[][] = []
+  let segment: { x: number; y: number }[] = []
+  recent.forEach((value, index) => {
+    if (value == null || !Number.isFinite(value)) {
+      segment = []
+      return
+    }
+    if (!segment.length) segments.push(segment)
+    const x = recent.length === 1 ? width - 3 : 3 + (index / (recent.length - 1)) * (width - 6)
     const y = height - ((value - min) / range) * (height - 6) - 3
-    return `${x},${y}`
-  }).join(' ')
+    segment.push({ x, y })
+  })
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-9 w-full', toneText[tone], className)} aria-hidden="true">
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {segments.map((run, index) => run.length === 1 ? <circle key={index} cx={run[0].x} cy={run[0].y} r="2.5" fill="currentColor" />
+        : <polyline key={index} points={run.map(point => `${point.x},${point.y}`).join(' ')} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />)}
     </svg>
   )
 }
@@ -135,7 +144,7 @@ export function SignalMeter({
   detail: string
   tone?: SignalTone
   icon?: ReactNode
-  sparkline?: number[]
+  sparkline?: Array<number | null>
   compact?: boolean
 }) {
   const available = value != null && Number.isFinite(value)
@@ -170,9 +179,12 @@ export function TrendChart({
   className = '',
   unit,
   valueFormatter = formatAxisValue,
+  kind = 'line',
+  sharedTimeAxis = false,
+  partialLabel,
 }: {
   values?: Array<number | null>
-  points?: Array<{ ts: number; value: number | null }>
+  points?: Array<{ ts: number; value: number | null; state?: string; covered?: number; expected?: number }>
   rangeStart?: number
   rangeEnd?: number
   emptyText: string
@@ -180,14 +192,26 @@ export function TrendChart({
   className?: string
   unit?: string
   valueFormatter?: (value: number) => string
+  kind?: 'bars' | 'line'
+  sharedTimeAxis?: boolean
+  partialLabel?: string
 }) {
-  const chartPoints = points
+  const plot = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(900)
+  const chartPoints: NonNullable<typeof points> = points
     ? [...points].filter(point => Number.isFinite(point.ts)).sort((left, right) => left.ts - right.ts)
     : (values || []).map((value, index) => ({ ts: index, value }))
   const safeValues = chartPoints
-    .map(point => point.value)
+    .map(point => point.state === 'idle' ? null : point.value)
     .filter((value): value is number => value != null && Number.isFinite(value))
-  if (safeValues.length < 2) {
+  const empty = !safeValues.length && !sharedTimeAxis
+  useEffect(() => {
+    if (!plot.current) return
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(1, Math.round(entry.contentRect.width))))
+    observer.observe(plot.current)
+    return () => observer.disconnect()
+  }, [empty])
+  if (empty) {
     return (
       <div className={joinClassNames('flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400', className)}>
         <Activity className="mr-2 h-4 w-4" />
@@ -196,46 +220,55 @@ export function TrendChart({
     )
   }
 
-  const width = 900
-  const height = 260
+  const height = sharedTimeAxis ? 132 : 260
   const chartPaddingTop = 18
-  const chartPaddingBottom = points ? 30 : 18
+  const chartPaddingBottom = points && !sharedTimeAxis ? 30 : 12
   const axis = buildChartAxis(safeValues)
   const chartHeight = height - chartPaddingTop - chartPaddingBottom
   const domainStart = rangeStart ?? chartPoints[0]?.ts ?? 0
   const domainEnd = Math.max(rangeEnd ?? chartPoints[chartPoints.length - 1]?.ts ?? domainStart + 1, domainStart + 1)
-  const segments: string[] = []
+  const segments: string[][] = []
+  const bars = new Map<number, { x: number; y: number }>()
+  const partials: { x: number; y: number; detail: string }[] = []
+  const yAt = (value: number) => height - chartPaddingBottom - (value / axis.max) * chartHeight
   let segment: string[] = []
   for (const point of chartPoints) {
-    if (point.value == null || !Number.isFinite(point.value)) {
-      if (segment.length > 1) segments.push(segment.join(' '))
+    if (point.value == null || !Number.isFinite(point.value) || point.state === 'idle' || point.state === 'partial') {
+      if (segment.length) segments.push(segment)
       segment = []
-      continue
+      if (point.state !== 'partial' || point.value == null || !Number.isFinite(point.value)) continue
     }
     const x = Math.max(0, Math.min(width, ((point.ts - domainStart) / (domainEnd - domainStart)) * width))
-    const y = height - chartPaddingBottom - (point.value / axis.max) * chartHeight
-    segment.push(`${x},${y}`)
+    const y = yAt(point.value)
+    if (point.state === 'partial') partials.push({ x, y, detail: `${formatTimeLabel(point.ts)} · ${partialLabel ?? ''} ${point.covered}/${point.expected} · ${point.value} tok/s` })
+    else if (kind === 'bars') {
+      const column = Math.floor(x / 4)
+      if (y < (bars.get(column)?.y ?? Infinity)) bars.set(column, { x, y })
+    } else segment.push(`${x},${y}`)
   }
-  if (segment.length > 1) segments.push(segment.join(' '))
+  if (segment.length) segments.push(segment)
   const descendingTicks = [...axis.ticks].reverse()
 
   return (
-    <div className={joinClassNames('grid min-h-[260px] grid-cols-[68px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40', className)}>
-      <div className="flex h-[260px] flex-col justify-between py-[10px] pr-2 text-right font-mono text-[11px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
-        {descendingTicks.map(tick => <span key={tick}>{valueFormatter(tick)}</span>)}
+    <div data-chart-kind={kind} className={joinClassNames('grid grid-cols-[3rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40', className)}>
+      <div className="relative text-right font-mono text-[11px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
+        {descendingTicks.map(tick => <span key={tick} data-tick={tick} className="absolute right-2" style={{ top: yAt(tick), transform: 'translateY(-50%)' }}>{valueFormatter(tick)}</span>)}
       </div>
-      <div className="relative min-w-0 border-l border-slate-200 dark:border-slate-800">
+      <div ref={plot} className="relative min-w-0 border-l border-slate-200 dark:border-slate-800">
         {unit ? <span className="absolute right-3 top-2 z-10 rounded bg-slate-50/90 px-1 text-[11px] text-slate-500 dark:bg-slate-950/80 dark:text-slate-400">{unit}</span> : null}
-        <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-[260px] w-full', toneText[tone])} preserveAspectRatio="none" aria-hidden="true">
+        <svg viewBox={`0 0 ${width} ${height}`} style={{ height }} className={joinClassNames('w-full', toneText[tone])} preserveAspectRatio="none" aria-hidden="true">
           {axis.ticks.map(tick => {
-            const y = height - chartPaddingBottom - (tick / axis.max) * chartHeight
+            const y = yAt(tick)
             return <line key={tick} x1="0" y1={y} x2={width} y2={y} stroke="currentColor" className="text-slate-300 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
           })}
-          {segments.map((line, index) => (
-            <polyline key={`${index}-${line.slice(0, 16)}`} points={line} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-          ))}
+          {[...bars].map(([column, point]) => <rect key={column} x={Math.min(width - 3.5, Math.max(0, point.x - 1.75))} y={point.y} width="3.5" height={Math.max(1, yAt(0) - point.y)} fill="currentColor" />)}
+          {segments.map((line, index) => line.length > 1
+            ? <polyline key={index} points={line.join(' ')} fill="none" stroke="currentColor" vectorEffect="non-scaling-stroke" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            : <circle key={index} cx={line[0].split(',')[0]} cy={line[0].split(',')[1]} r="3.5" fill="currentColor" />)}
+          {partials.map((point, index) => <circle key={index} data-partial cx={point.x} cy={point.y} r="3" fill="none" stroke="currentColor" vectorEffect="non-scaling-stroke"><title>{point.detail}</title></circle>)}
         </svg>
-        {points ? (
+        {!safeValues.length && <span className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400">{emptyText}</span>}
+        {points && !sharedTimeAxis ? (
           <div className="pointer-events-none absolute inset-x-2 bottom-1 flex justify-between font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
             <span>{formatTimeLabel(domainStart)}</span>
             <span>{formatTimeLabel(domainEnd)}</span>

@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react'
 import type { InferenceRate, MonitoringFrame } from '../../store/types'
 import { TrendChart } from './MonitoringPrimitives'
 import { formatCompactNumber, formatRate } from './monitoringFormat'
-import type { MonitoringTrendPoint } from './monitoringViewModel'
-import { aggregateInferenceRates, currentInferenceRate, formatInferenceRate, freshInferenceRate } from './inferenceThroughput'
+import { activityBands, aggregateInferenceRates, currentInferenceRate, formatInferenceRate, freshInferenceRate, summarizeWallDecode, type ActivityState, type PhasePoint } from './inferenceThroughput'
 import { getInferenceLabels, inferenceRateDetail } from '../../i18n/inferenceMonitoring'
 
 export function useMonitoringClock() {
@@ -12,29 +11,56 @@ export function useMonitoringClock() {
   return now
 }
 
-export function DualThroughput({ frames, lang, compact = false }: { frames: (MonitoringFrame | undefined)[]; lang: string; compact?: boolean }) {
+export function DualThroughput({ frames, lang, compact = false, wall = false }: { frames: (MonitoringFrame | undefined)[]; lang: string; compact?: boolean; wall?: boolean }) {
   const now = useMonitoringClock()
   const labels = getInferenceLabels(lang)
   return <div data-inference-throughput className={compact ? 'space-y-2' : 'grid gap-3 sm:grid-cols-2'}>
-    {(['prefill', 'decode'] as const).map(phase => {
+    {(wall ? ['decode', 'prefill'] as const : ['prefill', 'decode'] as const).map(phase => {
       const rates = frames.map(frame => currentInferenceRate(frame, phase, now))
-      const rate = rates.length === 1 ? rates[0] : aggregateInferenceRates(rates)
+      const rate = rates.length === 1 && !wall ? rates[0] : aggregateInferenceRates(rates)
       return <div key={phase} data-phase={phase} data-rate-state={rate.state} className={compact ? 'min-w-0' : 'min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/50'}>
         <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{labels[phase]}</div>
-        <div className={`${compact ? 'text-xl' : 'mt-1 text-2xl'} font-semibold tabular-nums ${phase === 'prefill' ? 'text-violet-700 dark:text-violet-300' : 'text-blue-700 dark:text-blue-300'}`}>{formatInferenceRate(rate)}</div>
-        <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{inferenceRateDetail(rate, lang)}</div>
+        <div className={`${wall ? phase === 'decode' ? 'text-3xl' : 'text-base' : compact ? 'text-xl' : 'mt-1 text-2xl'} font-semibold tabular-nums ${phase === 'prefill' ? 'text-violet-700 dark:text-violet-300' : 'text-blue-700 dark:text-blue-300'}`}>{formatInferenceRate(rate)}</div>
+        <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{wall && rate.state === 'partial' ? `${labels.reported} · ${labels.coverage} ${rate.covered}/${rate.expected}` : inferenceRateDetail(rate, lang)}</div>
       </div>
     })}
   </div>
 }
 
-export function DualThroughputTrends({ prefill, decode, start, end, lang }: { prefill: MonitoringTrendPoint[]; decode: MonitoringTrendPoint[]; start: number; end: number; lang: string }) {
+const activityStyle: Record<ActivityState, string> = {
+  idle: 'bg-slate-300 dark:bg-slate-600',
+  prefill: 'bg-violet-500 dark:bg-violet-400',
+  decode: 'bg-blue-500 dark:bg-blue-400',
+  both: 'bg-[linear-gradient(to_bottom,#8b5cf6_50%,#3b82f6_50%)]',
+  unknown: 'text-slate-400 dark:text-slate-500 bg-[repeating-linear-gradient(125deg,transparent_0_3px,currentColor_3px_4px)]',
+}
+
+export function DualThroughputTrends({ prefill, decode, start, end, lang, wall = false }: { prefill: PhasePoint[]; decode: PhasePoint[]; start: number; end: number; lang: string; wall?: boolean }) {
   const labels = getInferenceLabels(lang)
-  return <div data-inference-trends className="space-y-4">
-    {(['prefill', 'decode'] as const).map(phase => <div key={phase}>
-      <div className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">{phase === 'prefill' ? 'Prefill' : 'Decode'} · tok/s</div>
-      <TrendChart points={phase === 'prefill' ? prefill : decode} rangeStart={start} rangeEnd={end} tone={phase === 'prefill' ? 'violet' : 'blue'} unit="tok/s" emptyText={labels.noTrend} />
-    </div>)}
+  const bands = activityBands(prefill, decode, start, end)
+  const time = (ts: number) => new Date(ts).toLocaleTimeString([], { hour12: false })
+  const names = { ...labels, prefill: 'Prefill', decode: 'Decode' }
+  return <div data-inference-trends className="space-y-3">
+    {(wall ? ['decode'] as const : ['prefill', 'decode'] as const).map(phase => {
+      const series = phase === 'prefill' ? prefill : wall ? summarizeWallDecode(decode) : decode
+      return <div key={phase}>
+        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 text-sm font-medium text-slate-700 dark:text-slate-200">{labels[phase]} · tok/s{wall && <span className="text-xs font-normal text-slate-500 dark:text-slate-400">{labels.activeMean}</span>}</div>
+        <TrendChart points={series} sharedTimeAxis partialLabel={labels.partial} kind={phase === 'prefill' ? 'bars' : 'line'} rangeStart={start} rangeEnd={end} tone={phase === 'prefill' ? 'violet' : 'blue'} emptyText={series.length && series.every(point => point.state === 'idle') ? labels.inactive : labels.noTrend} />
+      </div>
+    })}
+    <div aria-label={labels.activity} role="group">
+      <div className="mb-1 text-sm font-medium">{labels.activity}</div>
+      <div className="ml-[calc(3rem+2px)] mr-px">
+        <div className="flex h-3 overflow-hidden rounded-sm">
+          {bands.map(band => <span key={band.from} data-activity={band.state} data-partial={band.partial || undefined} title={`${time(band.from)}–${time(band.to)} · ${names[band.state]}${band.partial ? ' · ' + labels.partial : ''}`} style={{ width: `${100 * (band.to - band.from) / (end - start)}%` }} className={`${activityStyle[band.state]} ${band.partial ? 'border-b-2 border-dashed border-amber-700 dark:border-amber-300' : ''}`} />)}
+        </div>
+        <div className="mt-1 flex justify-between text-[11px] tabular-nums text-slate-500 dark:text-slate-400"><span>{time(start)}</span><span>{time((start + end) / 2)}</span><span>{time(end)}</span></div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+        {(['prefill', 'decode', 'both', 'idle', 'unknown'] as const).filter(state => bands.some(band => band.state === state)).map(state => <span key={state} className="inline-flex items-center gap-1"><i className={`h-2 w-3 ${activityStyle[state]}`} />{names[state]}</span>)}
+        {(prefill.some(point => point.state === 'partial') || decode.some(point => point.state === 'partial')) && <span>○ {labels.partial}</span>}
+      </div>
+    </div>
   </div>
 }
 
