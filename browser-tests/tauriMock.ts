@@ -270,6 +270,7 @@ if (BROWSER_SCENARIO === 'gufo' || BROWSER_SCENARIO === 'gufo-delayed-config-sav
   engine.kind = 'gufo'
   engine.name = 'Gufo'
   engine.exe = 'C:\\browser-test\\engine\\gufo.exe'
+  if (engine.capabilities) engine.capabilities.gufoDraftTokensIgnored = false
   instanceConfig.engine_kind = 'gufo'
   instanceConfig.ctx_size = 32768
   instanceConfig.explicit_overrides = []
