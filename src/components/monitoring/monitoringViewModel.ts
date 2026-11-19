@@ -57,7 +57,7 @@ export type ResourceSignal = {
   value: number | null
   detail: string
   tone: SignalTone
-  sparkline: number[]
+  sparkline: Array<number | null>
 }
 
 function validThroughput(value?: number | null): value is number {
@@ -378,9 +378,7 @@ export function buildResourceSignals(options: {
     .filter(sample => sample.ts >= latestHistoryTs - 5 * 60 * 1000)
     .slice(-150)
   const percentHistory = (selector: (sample: SystemMetricsSample) => number | null) => (
-    resourceHistory
-      .map(selector)
-      .filter((value): value is number => value != null && Number.isFinite(value))
+    resourceHistory.map(selector)
   )
   const cpuValue = validNumber(options.system?.system_cpu_percent ?? options.system?.cpu_percent)
   const gpuValue = validNumber(options.system?.gpu_percent)

@@ -1,5 +1,4 @@
-import type { InferenceRate, MonitoringFrame, TelemetrySampleSummary } from '../../store/types'
-import type { MonitoringTrendPoint } from './monitoringViewModel'
+import type { InferenceRate, InferenceThroughput, MonitoringFrame, TelemetrySampleSummary } from '../../store/types'
 
 export const unavailableRate = (): InferenceRate => ({
   value: null, state: 'unavailable', source: 'none', sampledAt: null, windowMs: null, covered: 0, expected: 1,
@@ -37,42 +36,101 @@ export function aggregateInferenceRates(rates: InferenceRate[]): InferenceRate {
   }
 }
 
-function withSamplingGaps(points: MonitoringTrendPoint[]): MonitoringTrendPoint[] {
+type Phase = 'prefill' | 'decode'
+export type PhasePoint = Pick<InferenceRate, 'value' | 'state' | 'covered' | 'expected'> & { ts: number; active: boolean }
+
+function phaseReading(inference: InferenceThroughput | null | undefined, phase: Phase, ts: number) {
+  const rate = freshInferenceRate(inference?.[phase], ts)
+  const active = rate.state === 'live' || (rate.state === 'partial' && (rate.value ?? 0) > 0)
+    || !!inference?.tasks?.some(task => task.phase === phase)
+  return { rate, active }
+}
+
+function withSamplingGaps(points: PhasePoint[]): PhasePoint[] {
   return points.flatMap((point, index) => index > 0 && point.ts - points[index - 1].ts > 8000
-    ? [{ ts: points[index - 1].ts + 1, value: null }, point] : [point])
+    ? [{ ...unavailableRate(), ts: points[index - 1].ts + 1000, active: false }, point] : [point])
 }
 
 export function inferenceTrend(
   frames: MonitoringFrame[], samples: TelemetrySampleSummary[], phase: 'prefill' | 'decode', start: number,
-): MonitoringTrendPoint[] {
-  const points = new Map<number, MonitoringTrendPoint>()
-  const add = (ts: number, rate?: InferenceRate) => {
+): PhasePoint[] {
+  const points = new Map<number, PhasePoint>()
+  const add = (ts: number, inference?: InferenceThroughput | null) => {
     if (ts < start) return
-    const reading = freshInferenceRate(rate, ts)
-    points.set(ts, { ts, value: reading.state === 'live' || reading.state === 'idle' ? reading.value : null })
+    const { rate, active } = phaseReading(inference, phase, ts)
+    points.set(ts, { ...rate, ts, active })
   }
-  for (const sample of samples) add(sample.ts, sample.inference?.[phase])
-  for (const frame of frames) add(frame.ts, frame.inference?.[phase])
+  for (const sample of samples) add(sample.ts, sample.inference)
+  for (const frame of frames) add(frame.ts, frame.inference)
   return withSamplingGaps([...points.values()].sort((a, b) => a.ts - b.ts))
 }
 
 export function fleetInferenceTrend(
   byInstance: Record<string, MonitoringFrame[]>, ids: string[], phase: 'prefill' | 'decode', start: number,
-): MonitoringTrendPoint[] {
-  const buckets = new Map<number, Map<string, InferenceRate>>()
+): PhasePoint[] {
+  const buckets = new Map<number, Map<string, ReturnType<typeof phaseReading>>>()
   for (const id of ids) {
     for (const frame of byInstance[id] || []) {
       if (frame.ts < start) continue
-      const ts = Math.floor(frame.ts / 3000) * 3000
-      const bucket = buckets.get(ts) || new Map<string, InferenceRate>()
-      bucket.set(id, freshInferenceRate(frame.inference?.[phase], frame.ts))
+      const ts = Math.max(start, Math.floor(frame.ts / 1000) * 1000)
+      const bucket = buckets.get(ts) || new Map<string, ReturnType<typeof phaseReading>>()
+      bucket.set(id, phaseReading(frame.inference, phase, frame.ts))
       buckets.set(ts, bucket)
     }
   }
   return withSamplingGaps([...buckets].sort(([a], [b]) => a - b).map(([ts, readings]) => {
-    const rate = aggregateInferenceRates(ids.map(id => readings.get(id) || unavailableRate()))
-    return { ts, value: rate.state === 'live' || rate.state === 'idle' ? rate.value : null }
+    const rate = aggregateInferenceRates(ids.map(id => readings.get(id)?.rate || unavailableRate()))
+    return { ...rate, ts, active: [...readings.values()].some(reading => reading.active) }
   }))
+}
+
+export type ActivityState = 'prefill' | 'decode' | 'both' | 'idle' | 'unknown'
+
+export function summarizeWallDecode(points: PhasePoint[]) {
+  const summary: PhasePoint[] = []
+  let count = 0
+  let currentWindow: number | undefined
+  for (const point of points) {
+    const bucket = Math.floor(point.ts / 15_000)
+    const last = summary[summary.length - 1]
+    if (point.state !== 'live' || point.value == null) {
+      summary.push(point)
+      currentWindow = undefined
+    } else if (bucket === currentWindow && last?.value != null) {
+      count += 1
+      last.ts += (point.ts - last.ts) / count
+      last.value += (point.value - last.value) / count
+    } else {
+      currentWindow = bucket
+      count = 1
+      summary.push({ ...point })
+    }
+  }
+  return summary
+}
+
+export function activityBands(prefill: PhasePoint[], decode: PhasePoint[], start: number, end: number) {
+  const bands: { from: number; to: number; state: ActivityState; partial: boolean }[] = []
+  const add = (from: number, to: number, state: ActivityState, partial = false) => {
+    if (to <= from) return
+    const last = bands[bands.length - 1]
+    if (last?.to === from && last.state === state && last.partial === partial) last.to = to
+    else bands.push({ from, to, state, partial })
+  }
+  let cursor = start
+  for (const [index, input] of prefill.entries()) {
+    const output = decode[index]
+    if (input.ts > end || !output || output.ts !== input.ts) continue
+    add(cursor, input.ts, 'unknown')
+    const state = input.active && output.active ? 'both' : input.active ? 'prefill' : output.active ? 'decode'
+      : input.state === 'idle' && output.state === 'idle' ? 'idle' : 'unknown'
+    const next = prefill[index + 1]?.ts
+    const to = Math.min(end, next ?? input.ts + 1000)
+    add(Math.max(start, input.ts), to, state, input.state === 'partial' || output.state === 'partial')
+    cursor = to
+  }
+  add(cursor, end, 'unknown')
+  return bands
 }
 
 export function formatInferenceRate(rate: InferenceRate): string {

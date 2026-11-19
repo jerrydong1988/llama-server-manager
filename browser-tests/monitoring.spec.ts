@@ -24,6 +24,18 @@ test('performance monitoring keeps global resources independent from the selecte
   await expect(resources).not.toContainText('98%')
   await expect(page.getByText('25.8 tok/s', { exact: true }).first()).toBeVisible()
   const throughputPanel = page.getByRole('heading', { name: '吞吐趋势' }).locator('xpath=ancestor::section[1]')
+  await expect(throughputPanel.locator('[data-chart-kind="bars"] rect').first()).toBeVisible()
+  await expect(throughputPanel.locator('[data-chart-kind="line"] circle:not([data-partial])').first()).toBeVisible()
+  await expect(throughputPanel.locator('circle[data-partial]').first()).toBeVisible()
+  for (const state of ['both', 'idle', 'unknown', 'prefill', 'decode']) {
+    await expect(throughputPanel.locator(`[data-activity="${state}"]`).first()).toBeVisible()
+  }
+  const zeroOffset = await throughputPanel.locator('[data-chart-kind="line"]').evaluate(chart => {
+    const label = chart.querySelector('[data-tick="0"]')!.getBoundingClientRect()
+    const baseline = chart.querySelector('svg line')!.getBoundingClientRect()
+    return Math.abs(label.y + label.height / 2 - baseline.y)
+  })
+  expect(zeroOffset).toBeLessThan(1)
   const liveLine = throughputPanel.locator('polyline').first()
   await expect(liveLine).toBeVisible()
   const yCoordinates = (await liveLine.getAttribute('points'))
@@ -65,6 +77,11 @@ test('big screen uses the same global resource snapshot and live task throughput
 
   const screenHeading = page.locator('[data-guide="monitoring-header"]').getByRole('heading', { name: '大屏模式', exact: true })
   await expect(screenHeading).toBeVisible({ timeout: 15_000 })
+  const trends = page.locator('[data-inference-trends]')
+  await expect(trends.locator('[data-chart-kind="bars"]')).toHaveCount(0)
+  await expect(trends.locator('[data-chart-kind="line"]')).toBeVisible()
+  await expect(trends.locator('[data-activity="idle"]').first()).toBeVisible()
+  await expect(page.locator('[data-inference-throughput]').first().locator('[data-phase]').first()).toHaveAttribute('data-phase', 'decode')
   const resources = page.getByRole('heading', { name: '资源压力' }).locator('xpath=ancestor::section[1]')
   await expect(resources).toContainText('9%')
   await expect(resources).toContainText('12%')
@@ -72,6 +89,26 @@ test('big screen uses the same global resource snapshot and live task throughput
   await expect(resources).toContainText('75%')
   await expect(resources).not.toContainText('99%')
   await expect(page.getByText('25.8 tok/s', { exact: true }).first()).toBeVisible()
+})
+
+test('wallboard keeps a reporting subtotal separate from instance health', async ({ page }) => {
+  await page.clock.setFixedTime(Date.now())
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'bigscreen')
+  })
+  await page.goto('/?scenario=monitoring')
+  const current = page.locator('[data-inference-throughput]').first().locator('[data-phase="decode"]')
+  await expect(current).toContainText('25.8 tok/s')
+  await page.evaluate(async () => {
+    const mock = window.__TAURI_BROWSER_TEST__
+    await mock.emitEvent('server-started', { instanceId: 'browser-stopped-instance', pid: 4712, port: 18082, host: '127.0.0.1', command: 'mock' })
+    for (const instanceId of ['browser-stopped-instance', 'browser-test-instance']) await mock.emitEvent('health-status', { instanceId, status: 'ok' })
+  })
+  await expect(current).toHaveAttribute('data-rate-state', 'partial')
+  await expect(current).toContainText('25.8 tok/s')
+  await expect(current).toContainText('完整上报实例 1/2')
+  await expect(page.getByText('实例健康检查 · 2/2')).toBeVisible()
 })
 
 for (const tab of ['perf', 'bigscreen']) {
@@ -135,6 +172,7 @@ for (const tab of ['perf', 'bigscreen']) {
       await expect(page.locator('[data-inference-trends]')).toBeVisible()
       const overflow = await page.locator('[data-inference-throughput], [data-inference-trends]').evaluateAll(elements => elements.filter(element => element.scrollWidth > element.clientWidth + 2).length)
       expect(overflow).toBe(0)
+      await page.locator('[data-inference-trends]').screenshot({ path: testInfo.outputPath(`${tab}-${width}-chart.png`) })
       await page.screenshot({ path: testInfo.outputPath(`${tab}-${width}-dark.png`), fullPage: true })
       await page.getByRole('button', { name: language === 'zh-CN' ? '切换到明亮模式' : 'Switch to light mode', exact: true }).click()
       await page.screenshot({ path: testInfo.outputPath(`${tab}-${width}-light.png`), fullPage: true })

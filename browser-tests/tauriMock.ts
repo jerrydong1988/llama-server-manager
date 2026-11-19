@@ -1001,15 +1001,21 @@ const monitoringOverview = {
 }
 const monitoringSeries = Array.from({ length: 101 }, (_, index) => {
   const offset = 100 - index
-  const throughput = IS_DOCS_SCENARIO ? 39.8 + (index % 6) * 1.7 : monitoringFrame.throughput
+  const throughput = IS_DOCS_SCENARIO ? 39.8 + (index % 6) * 1.7 : index === 100 ? monitoringFrame.throughput : 24 + (index % 6) * 1.7
+  const ts = monitoringNow - offset * 3_000
+  const step = index % 24
+  const phaseRate = (value: number | null, active: boolean, source: 'log' | 'slots') => {
+    const state = step === 0 ? 'unavailable' : !active ? 'idle' : step === 21 ? 'partial' : 'live'
+    return { state, value: state === 'unavailable' ? null : state === 'idle' ? 0 : value, source, sampledAt: ts, windowMs: 3000, covered: state === 'unavailable' ? 0 : 1, expected: state === 'partial' ? 2 : 1 } as const
+  }
   return {
     ...clone(monitoringFrame),
     ts: monitoringNow - offset * 3_000,
     throughput,
     outputTokensPerSecond: throughput,
     inference: {
-      prefill: { value: 800 + (index % 6) * 100, state: 'live' as const, source: 'log' as const, sampledAt: monitoringNow - offset * 3_000, windowMs: 3000, covered: 1, expected: 1 },
-      decode: { value: throughput, state: 'live' as const, source: 'slots' as const, sampledAt: monitoringNow - offset * 3_000, windowMs: 3000, covered: 1, expected: 1 },
+      prefill: phaseRate(800 + (index % 6) * 100, step === 1 || step === 13, 'log'),
+      decode: phaseRate(throughput, step === 1 || (step >= 3 && step <= 9) || (step >= 15 && step <= 22), 'slots'),
       tasks: [],
     },
     system: {
