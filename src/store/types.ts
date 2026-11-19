@@ -83,6 +83,7 @@ export interface EngineCapabilities {
   versionStatus?: EngineVersionStatus | string
   versionProbeDetail?: string
   supportedFlags: string[]
+  gufoDraftTokensIgnored?: boolean | null
   reportedDefaults?: Record<string, string>
   reportedDefaultsVersion?: number
   speculativeTypes?: string[]

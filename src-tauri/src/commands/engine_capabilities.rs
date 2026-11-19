@@ -812,6 +812,8 @@ pub(crate) fn capabilities_match_executable(
     capabilities: &EngineCapabilities,
 ) -> bool {
     capabilities.persistence_revision == PERSISTENCE_REVISION
+        && (crate::gufo::EngineKind::for_executable(executable) != crate::gufo::EngineKind::Gufo
+            || capabilities.gufo_draft_tokens_ignored.is_some())
         && !capabilities.executable_fingerprint.is_empty()
         && capabilities.executable_fingerprint == executable_fingerprint(executable)
         && (capabilities.persistence_profile.is_none() ||
@@ -891,6 +893,8 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         },
         version_probe_detail: first_nonempty_line(&version_output.text),
         supported_flags,
+        gufo_draft_tokens_ignored: (engine.kind == crate::gufo::EngineKind::Gufo)
+            .then(|| crate::gufo::draft_tokens_ignored(&help_output.text)),
         reported_defaults,
         reported_defaults_version: REPORTED_DEFAULTS_VERSION,
         speculative_types,
@@ -1663,6 +1667,26 @@ mod tests {
             supported_flags: flags.iter().map(|flag| (*flag).to_string()).collect(),
             ..EngineCapabilities::default()
         }
+    }
+
+    #[test]
+    fn gufo_cached_probes_need_explicit_draft_policy_evidence() {
+        let root = std::env::temp_dir().join(format!("lsm-gufo-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let exe = root.join(if cfg!(windows) { "gufo.exe" } else { "gufo" });
+        std::fs::write(&exe, b"fixture").unwrap();
+        let executable = exe.to_str().unwrap();
+        let mut caps = EngineCapabilities {
+            persistence_revision: PERSISTENCE_REVISION,
+            executable_fingerprint: executable_fingerprint(executable),
+            ..EngineCapabilities::default()
+        };
+        assert!(!capabilities_match_executable(executable, &caps));
+        for ignored in [false, true] {
+            caps.gufo_draft_tokens_ignored = Some(ignored);
+            assert!(capabilities_match_executable(executable, &caps));
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

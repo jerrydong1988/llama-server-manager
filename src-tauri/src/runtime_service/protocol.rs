@@ -26,6 +26,10 @@ pub struct RuntimeLaunchSpec {
     pub instance_id: String,
     pub config: InstanceConfig,
     pub engine_backend: String,
+    /// Captured by the capability-validated Gufo foreground launch. Old specs
+    /// retain their explicit draft argument until launched again from the GUI.
+    #[serde(default)]
+    pub gufo_draft_tokens_ignored: bool,
     pub command: Vec<String>,
     pub command_display: String,
     /// Captured only by a validated foreground launch; legacy replay fails closed.
