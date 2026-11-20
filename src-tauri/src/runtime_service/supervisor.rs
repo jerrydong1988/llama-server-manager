@@ -351,6 +351,19 @@ struct RuntimeProxy {
     task: tokio::task::JoinHandle<()>,
 }
 
+fn publish_bound_proxy(
+    status: &mut ProxyStatus,
+    last_error: &mut Option<String>,
+    bound_addr: String,
+) {
+    if status.last_error.is_some() && status.last_error == *last_error {
+        *last_error = None;
+    }
+    status.last_error = None;
+    status.bound_addr = bound_addr;
+    status.running = true;
+}
+
 #[derive(Clone)]
 struct StopIntent {
     preserve_desired: bool,
@@ -1563,7 +1576,8 @@ impl RuntimeSupervisor {
     }
 
     fn record_proxy_runtime_error(&self, message: String) {
-        self.proxy_status.lock().unwrap().last_error = Some(message.clone());
+        let mut status = self.proxy_status.lock().unwrap();
+        status.last_error = Some(message.clone());
         *self.last_error.lock().unwrap() = Some(message);
     }
 
@@ -1577,17 +1591,6 @@ impl RuntimeSupervisor {
             .as_deref()
             .is_some_and(|error| is_instance_exit_error(error, instance_id))
         {
-            *last_error = None;
-        }
-    }
-
-    fn clear_recovered_proxy_error(&self) {
-        let mut last_error = self.last_error.lock().unwrap();
-        if last_error.as_deref().is_some_and(|error| {
-            error.starts_with("proxy server error:")
-                || error.starts_with("failed to restart routing service:")
-                || error.starts_with("failed to restore routing service:")
-        }) {
             *last_error = None;
         }
     }
@@ -1609,15 +1612,12 @@ impl RuntimeSupervisor {
                 if !supervisor.state.lock().unwrap().proxy_config.enabled {
                     break;
                 }
-                match supervisor.start_proxy().await {
-                    Ok(_) => {
-                        supervisor.clear_recovered_proxy_error();
-                        break;
-                    }
-                    Err(error) => {
-                        supervisor.record_proxy_runtime_error(format!(
-                            "failed to restart routing service: {error}"
-                        ));
+                match supervisor
+                    .start_proxy_with_context(Some("failed to restart routing service"))
+                    .await
+                {
+                    Ok(_) => break,
+                    Err(_) => {
                         retry_delay = std::time::Duration::from_secs(10);
                     }
                 }
@@ -1626,6 +1626,13 @@ impl RuntimeSupervisor {
     }
 
     pub async fn start_proxy(self: &Arc<Self>) -> Result<ProxyStatus, String> {
+        self.start_proxy_with_context(None).await
+    }
+
+    async fn start_proxy_with_context(
+        self: &Arc<Self>,
+        context: Option<&str>,
+    ) -> Result<ProxyStatus, String> {
         let mut runtime = self.proxy_runtime.lock().await;
         if runtime
             .as_ref()
@@ -1637,6 +1644,17 @@ impl RuntimeSupervisor {
             let _ = finished.task.await;
         }
 
+        let result = self.bind_proxy(&mut runtime).await;
+        if let (Some(context), Err(error)) = (context, &result) {
+            self.record_proxy_runtime_error(format!("{context}: {error}"));
+        }
+        result
+    }
+
+    async fn bind_proxy(
+        self: &Arc<Self>,
+        runtime: &mut Option<RuntimeProxy>,
+    ) -> Result<ProxyStatus, String> {
         let (persisted_config, instances) = {
             let state = self.state.lock().unwrap();
             (state.proxy_config.clone(), state.instances.clone())
@@ -1677,9 +1695,11 @@ impl RuntimeSupervisor {
         }
         {
             let mut status = self.proxy_status.lock().unwrap();
-            status.running = true;
-            status.bound_addr = bound_addr;
-            status.last_error = None;
+            publish_bound_proxy(
+                &mut status,
+                &mut self.last_error.lock().unwrap(),
+                bound_addr,
+            );
         }
         let (shutdown, receiver) = tokio::sync::oneshot::channel();
         let source: Arc<dyn ProxyDataSource> = self.clone();
@@ -1889,16 +1909,16 @@ impl RuntimeSupervisor {
         if !restore_failures.is_empty() {
             *self.last_error.lock().unwrap() = Some(restore_failures.join("; "));
         }
-        if proxy_enabled {
-            if let Err(error) = self.start_proxy().await {
-                self.record_proxy_runtime_error(format!(
-                    "failed to restore routing service: {error}"
-                ));
-                // Login recovery can race with a temporarily occupied port or a
-                // network stack that is not ready yet. Keep the persisted intent
-                // and retry in the runtime instead of requiring the GUI to reopen.
-                self.schedule_proxy_restart();
-            }
+        if proxy_enabled
+            && self
+                .start_proxy_with_context(Some("failed to restore routing service"))
+                .await
+                .is_err()
+        {
+            // Login recovery can race with a temporarily occupied port or a
+            // network stack that is not ready yet. Keep the persisted intent
+            // and retry in the runtime instead of requiring the GUI to reopen.
+            self.schedule_proxy_restart();
         }
         Ok(())
     }
@@ -2219,6 +2239,32 @@ mod tests {
             .open(directory.join("checkpoint-spec-output.json"))
             .unwrap();
         serde_json::to_writer(output, &spec).unwrap();
+    }
+
+    #[test]
+    fn bound_proxy_publishes_recovery_without_acknowledging_other_errors() {
+        let bind_error = "failed to restart routing service: address in use";
+        for (previous, expected) in [
+            (bind_error, None),
+            ("instance stopped", Some("instance stopped")),
+        ] {
+            let mut status = crate::models::ProxyStatus {
+                running: false,
+                bound_addr: String::new(),
+                active_routes: 0,
+                healthy_routes: 0,
+                unhealthy_routes: 0,
+                in_flight_requests: 0,
+                total_requests: 0,
+                admission: None,
+                last_error: Some(bind_error.to_string()),
+            };
+            let mut last_error = Some(previous.to_string());
+            super::publish_bound_proxy(&mut status, &mut last_error, "127.0.0.1:10000".into());
+            assert!(status.running);
+            assert!(status.last_error.is_none());
+            assert_eq!(last_error.as_deref(), expected);
+        }
     }
 
     #[test]

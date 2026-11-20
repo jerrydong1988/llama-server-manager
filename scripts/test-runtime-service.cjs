@@ -697,6 +697,8 @@ async function main() {
     if (restored.reply?.payload?.proxy?.running !== false) {
       throw new Error(`runtime ignored the occupied routing port during recovery: ${JSON.stringify(restored)}`)
     }
+    assert.match(restored.reply.payload.last_error, /failed to (restore|restart) routing service:/)
+    assert.equal(restored.reply.payload.proxy.last_error, restored.reply.payload.last_error)
     await closeServer(proxyBlocker)
     for (let attempt = 0; attempt < 80; attempt += 1) {
       restored = await request(
@@ -714,6 +716,7 @@ async function main() {
     if (restored.reply?.payload?.last_error) {
       throw new Error(`runtime retained a stale routing recovery error: ${JSON.stringify(restored)}`)
     }
+    assert.equal(restored.reply.payload.proxy.last_error, null)
     const routedAfterUpgrade = await httpRequest(proxyPort, '/v1/chat/completions', {
       method: 'POST',
       headers: {
