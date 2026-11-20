@@ -1,3 +1,6 @@
+mod launch_plan;
+
+use launch_plan::{LaunchPlan, LaunchPurpose};
 use crate::checkpoint::{
     build_checkpoint_fingerprint, evaluate_checkpoint_eligibility, CheckpointEligibility,
     CheckpointEligibilityContext, CheckpointFingerprint, CheckpointReasonCode,
@@ -2826,13 +2829,7 @@ async fn validate_gufo_capabilities(
         EngineCapabilityResolution::Available(caps) if caps.status == "detected" && caps.version_status == "detected" => caps,
         _ => return Err(AppError::new("GUFO_PROBE_REQUIRED", "Probe the selected Gufo engine before launching", false)),
     };
-    *command = crate::gufo::command_for_draft_policy(command, caps.gufo_draft_tokens_ignored == Some(true));
-    let unsupported: Vec<_> = command.iter()
-        .filter(|arg| arg.starts_with("--") && !caps.supported_flags.contains(arg))
-        .collect();
-    if !unsupported.is_empty() {
-        return Err(AppError::new("GUFO_PARAMETER_UNSUPPORTED", format!("Gufo does not advertise: {unsupported:?}"), false));
-    }
+    *command = crate::gufo::apply_launch_capabilities(command, &caps)?;
     Ok(caps)
 }
 
@@ -2867,66 +2864,11 @@ async fn generate_server_command_with_probe_policy(
 ) -> AppResult<GeneratedServerCommand> {
     let mut timing = crate::operation_timing::OperationTiming::new("generate_server_command");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
-    let manual = uses_manual_command(&config);
-    let (config, _, mut command) = prepare_launch_checked(config, &engine_exe)?;
-    validate_tls_configuration(&config)?;
-    validate_public_bind_auth(&config)?;
-    timing.mark("prepare");
-    if crate::gufo::is_gufo(&config) {
-        validate_gufo_capabilities(state.inner(), &config, &engine_exe, &mut command).await?;
-        return Ok(GeneratedServerCommand { command, unsupported_flags: Vec::new(), emitted_override_keys: config.explicit_overrides.clone().unwrap_or_default() });
-    }
-    if manual {
-        timing.finish("success");
-        return Ok(GeneratedServerCommand {
-            command,
-            unsupported_flags: Vec::new(),
-            emitted_override_keys: Vec::new(),
-        });
-    }
-    let capabilities =
-        match trusted_engine_capabilities(state.inner(), &config, &engine_exe, true).await {
-            EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
-            EngineCapabilityResolution::Missing => None,
-            EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
-        };
-    timing.mark("capabilities");
-    if require_complete_probe
-        && !capabilities.as_ref().is_some_and(|caps| caps.status == "detected")
-    {
-        return Err(AppError::new(
-            "ENGINE_PREVIEW_PROBE_REQUIRED",
-            "A complete engine capability probe is required to preview all configured arguments.",
-            true,
-        ));
-    }
-    validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
-    let command = adapt_managed_arguments_for_capabilities(&command, capabilities.as_deref());
-    let unsupported_flags = unsupported_command_flags(
-        &command,
-        capabilities.as_deref().unwrap_or(&EngineCapabilities::default()),
-    );
-    let blocked = blocked_security_flags(&command, capabilities.as_deref());
-    if !blocked.is_empty() {
-        return Err(AppError::new(
-            "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
-            format!(
-                "当前引擎尚未确认支持以下安全参数：{}。请先完成引擎能力探测。",
-                blocked.join(", ")
-            ),
-            false,
-        ));
-    }
-    let command = command_for_capabilities(&command, capabilities.as_deref());
-    validate_effective_launch_security(&config, &command)?;
-    let emitted_override_keys =
-        emitted_override_keys(&config, &engine_exe, capabilities.as_deref(), &command);
+    let purpose = if require_complete_probe { LaunchPurpose::CompletePreview } else { LaunchPurpose::Preview };
+    let plan = LaunchPlan::resolve(state.inner(), config, &engine_exe, purpose, &mut timing).await?;
+    let preview = plan.into_preview(&engine_exe);
     timing.finish("success");
-    Ok(GeneratedServerCommand {
-        command,
-        unsupported_flags,
-        emitted_override_keys,
-    })
+    Ok(preview)
 }
 
 #[tauri::command]
