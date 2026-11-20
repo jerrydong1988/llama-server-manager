@@ -2173,48 +2173,27 @@ async fn trusted_engine_capabilities(
     EngineCapabilityResolution::Stale
 }
 
-fn validate_configured_engine(
+fn bind_launch_engine(
     state: &AppState,
-    config: &InstanceConfig,
-    engine_exe: &str,
-) -> AppResult<()> {
-    if config.engine_id.trim().is_empty() {
-        return Err(AppError::new(
-            "CONFIGURED_ENGINE_REQUIRED",
-            "实例必须引用已扫描并确认的 llama-server 引擎。",
-            false,
-        ));
+    config: &mut InstanceConfig,
+    expected_executable: Option<&str>,
+) -> AppResult<(String, String)> {
+    let (id, directory, executable, backend) = crate::engine_selection::with_instance_engine(
+        state, config.engine_kind, &config.engine_id,
+        |engine| (engine.id.clone(), engine.dir.clone(), engine.exe.clone(), engine.backend.clone()),
+    )?;
+    if let Some(expected) = expected_executable {
+        if !paths_equal(&normalized_engine_path(expected), &normalized_engine_path(&executable)) {
+            return Err(AppError::new("CONFIGURED_ENGINE_MISMATCH",
+                "请求启动的引擎与实例配置引用的引擎不一致。", false));
+        }
     }
-    let requested_path = normalized_engine_path(engine_exe);
-    let engines = state.engines.lock().unwrap();
-    let Some(engine) = engines.iter().find(|engine| {
-        paths_equal(
-            std::path::Path::new(&engine.id),
-            std::path::Path::new(&config.engine_id),
-        )
-    }) else {
-        return Err(AppError::new(
-            "CONFIGURED_ENGINE_NOT_FOUND",
-            "实例配置引用的 llama-server 引擎已不存在，请重新选择引擎。",
-            false,
-        ));
-    };
-    if config.engine_kind != engine.kind {
-        return Err(AppError::new("ENGINE_KIND_MISMATCH", "Instance and engine types differ", false));
-    }
-    if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
-        return Err(AppError::new(
-            "CONFIGURED_ENGINE_MISMATCH",
-            "请求启动的引擎与实例配置引用的引擎不一致。",
-            false,
-        ));
-    }
-    let authorized_root =
-        crate::security::require_authorized_engine_root(std::path::Path::new(&engine.dir))
-            .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
-    crate::security::require_path_within_root(std::path::Path::new(engine_exe), &authorized_root)
+    let root = crate::security::require_authorized_engine_root(std::path::Path::new(&directory))
         .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
-    Ok(())
+    crate::security::require_path_within_root(std::path::Path::new(&executable), &root)
+        .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
+    config.engine_id = id;
+    Ok((executable, backend))
 }
 
 fn stale_engine_error() -> AppError {
@@ -2843,13 +2822,13 @@ pub async fn generate_server_command(
 }
 
 async fn generate_server_command_with_probe_policy(
-    config: InstanceConfig,
+    mut config: InstanceConfig,
     engine_exe: String,
     state: tauri::State<'_, AppState>,
     require_complete_probe: bool,
 ) -> AppResult<GeneratedServerCommand> {
     let mut timing = crate::operation_timing::OperationTiming::new("generate_server_command");
-    validate_configured_engine(state.inner(), &config, &engine_exe)?;
+    let (engine_exe, _) = bind_launch_engine(state.inner(), &mut config, Some(&engine_exe))?;
     let purpose = if require_complete_probe { LaunchPurpose::CompletePreview } else { LaunchPurpose::Preview };
     let plan = LaunchPlan::resolve(state.inner(), config, &engine_exe, purpose, &mut timing).await?;
     let preview = plan.into_preview(&engine_exe);
@@ -2887,8 +2866,7 @@ pub async fn get_checkpoint_eligibility(
 pub async fn start_server(
     instance_id: String,
     config: InstanceConfig,
-    engine_exe: String,
-    engine_backend: String,
+    engine_exe: Option<String>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> AppResult<()> {
@@ -2906,7 +2884,6 @@ pub async fn start_server(
         instance_id,
         config,
         engine_exe,
-        engine_backend,
         state,
         app,
         false,
@@ -2964,8 +2941,7 @@ fn recover_gui_checkpoint_process(
             start_server_impl(
                 instance_id.clone(),
                 config,
-                engine.exe,
-                engine.backend,
+                Some(engine.exe),
                 state.clone(),
                 app.clone(),
                 true,
@@ -2985,15 +2961,14 @@ fn recover_gui_checkpoint_process(
 
 async fn start_server_impl(
     instance_id: String,
-    config: InstanceConfig,
-    engine_exe: String,
-    engine_backend: String,
+    mut config: InstanceConfig,
+    engine_exe: Option<String>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
     cold_recovery: bool,
 ) -> AppResult<()> {
     let mut timing = crate::operation_timing::OperationTiming::new("start_server");
-    validate_configured_engine(state.inner(), &config, &engine_exe)?;
+    let (engine_exe, engine_backend) = bind_launch_engine(state.inner(), &mut config, engine_exe.as_deref())?;
     validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let LaunchPlan { config, workload, command: mut cmd, capabilities: engine_capabilities, .. } =
@@ -8073,6 +8048,16 @@ mod perf_parser_tests {
 #[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
 pub mod ipc {
     use super::*;
+
+    // Preserve the existing pre-start save of a legacy unbound instance. Bound
+    // instances take the normal start path without another inventory roundtrip.
+    #[tauri::command]
+    pub fn resolve_default_instance_engine(
+        engine_kind: crate::gufo::EngineKind,
+        state: tauri::State<'_, AppState>,
+    ) -> AppResult<String> {
+        Ok(crate::engine_selection::with_instance_engine(state.inner(), engine_kind, "", |engine| engine.id.clone())?)
+    }
 
     #[tauri::command]
     pub async fn generate_server_command(

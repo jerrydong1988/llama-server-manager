@@ -9,6 +9,7 @@ mod commands;
 mod dependency_regressions;
 mod error;
 mod engine_process;
+mod engine_selection;
 mod gufo;
 mod lookup_cache_store;
 mod external_artifacts;
@@ -742,7 +743,9 @@ fn main() {
             probe_engine_capabilities,
             get_checkpoint_status, list_checkpoint_statuses, clear_checkpoint,
             load_app_data, get_cached_scan,
-            generate_server_command, get_checkpoint_eligibility, validate_checkpoint_locally, cancel_checkpoint_validation, start_server, stop_server, delete_instance_log, open_browser,
+            generate_server_command,
+            crate::commands::server::ipc::resolve_default_instance_engine,
+            get_checkpoint_eligibility, validate_checkpoint_locally, cancel_checkpoint_validation, start_server, stop_server, delete_instance_log, open_browser,
             save_config, load_config, delete_instance_config,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, check_local_files, delete_managed_local_file,

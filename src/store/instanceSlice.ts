@@ -1,4 +1,5 @@
-import { invokeApp as invoke } from '../lib/ipc'
+import { AppInvokeError, invokeApp as invoke } from '../lib/ipc'
+import { generateServerCommand, resolveDefaultInstanceEngine, startServer, stopServer } from '../lib/instanceIpc'
 import { message } from '@tauri-apps/plugin-dialog'
 import {
   loadAppBootstrap,
@@ -10,7 +11,7 @@ import { getManagementRevision, hasUnsavedManagementChanges, managementSignature
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
-import type { AppState, CheckpointStatus, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
+import type { AppState, CheckpointStatus, InstanceConfig, LogEntry } from './types'
 import { resolveEffectiveEngine } from './engineResolution'
 import { pathsEqual } from '../utils/path'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
@@ -234,12 +235,9 @@ export function createInstanceSlice(
     generateCommand: async (config: InstanceConfig, engineExe: string, requireCompleteProbe = false) => {
       const normalized = normalizeStoredConfig(config, get().models)
       const matchingEngine = get().engines.find(engine => pathsEqual(engine.exe, engineExe))
-      if (!normalized.config.engine_id && matchingEngine) {
-        normalized.config = { ...normalized.config, engine_id: matchingEngine.id }
-      }
       const generate = async () => {
         try {
-          return await invoke<GeneratedServerCommand>('generate_server_command', { config: normalized.config, engineExe, requireCompleteProbe })
+          return await generateServerCommand({ config: normalized.config, engineExe, requireCompleteProbe })
         } catch (error) {
           if (isStaleEngineCapabilityError(error)) invalidateEngineCapabilities(set, engineExe)
           throw error
@@ -249,7 +247,7 @@ export function createInstanceSlice(
         return await generate()
       } catch (error) {
         const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
-        if (!requireCompleteProbe || !matchingEngine || !pathsEqual(matchingEngine.id, normalized.config.engine_id)
+        if (!requireCompleteProbe || !matchingEngine || (normalized.config.engine_id && !pathsEqual(matchingEngine.id, normalized.config.engine_id))
           || !['ENGINE_PREVIEW_PROBE_REQUIRED', 'GUFO_PROBE_REQUIRED', 'ENGINE_CAPABILITIES_STALE'].includes(String(code))) throw error
         const probed = await get().probeEngineCapabilities(matchingEngine.id)
         if (probed.capabilities?.status !== 'detected' || (probed.kind === 'gufo' && probed.capabilities.versionStatus !== 'detected')) {
@@ -266,7 +264,7 @@ export function createInstanceSlice(
         instanceLifecycle: { ...state.instanceLifecycle, [id]: 'starting' },
       }))
       try {
-        const { instances, models, engines, defaultEngineId } = get()
+        const { instances, models } = get()
         const instance = instances.find((item) => item.id === id)
         if (!instance) {
           message('Instance not found.', { title: 'Error', kind: 'error' })
@@ -275,18 +273,13 @@ export function createInstanceSlice(
         }
 
         const normalized = normalizeStoredConfig(instance.config, models)
-        const engine = resolveEffectiveEngine(normalized.config, engines, defaultEngineId)
         timing.mark('prepare')
-
-        if (!engine) {
-          message(normalized.config.engine_id
-            ? 'The configured llama-server engine is no longer available. Select another engine before starting.'
-            : 'No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' })
-          outcome = 'cancelled'
-          return
-        }
         if (!normalized.config.engine_id) {
-          normalized.config = { ...normalized.config, engine_id: engine.id }
+          const engineId = await resolveDefaultInstanceEngine(normalized.config.engine_kind)
+          if (get().instances.find(item => item.id === id)?.config !== instance.config) {
+            throw new AppInvokeError({ code: 'CONFLICT', message: 'Instance settings changed while selecting the engine. Retry starting the instance.', retryable: true })
+          }
+          normalized.config = { ...normalized.config, engine_id: engineId }
         }
         if (normalized.changes.length > 0 || !pathsEqual(normalized.config.engine_id, instance.config.engine_id)) {
           set((state) => ({
@@ -300,16 +293,16 @@ export function createInstanceSlice(
         await configSaveCoordinator.waitForIdle()
         timing.mark('save-queue')
 
-        await invoke('start_server', {
-          instanceId: id,
-          config: normalized.config,
-          engineExe: engine.exe,
-          engineBackend: engine.backend,
-        })
+        await startServer({ instanceId: id, config: normalized.config })
         timing.mark('backend-start')
         get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
         outcome = 'success'
       } catch (error) {
+        if (error instanceof AppInvokeError && ['CONFIGURED_ENGINE_REQUIRED', 'CONFIGURED_ENGINE_NOT_FOUND'].includes(error.code)) {
+          message(error.message, { title: 'Error', kind: 'error' })
+          outcome = 'cancelled'
+          return
+        }
         if (isStaleEngineCapabilityError(error)) {
           const state = get()
           const instance = state.instances.find(item => item.id === id)
@@ -338,7 +331,7 @@ export function createInstanceSlice(
         instanceLifecycle: { ...state.instanceLifecycle, [id]: 'stopping' },
       }))
       try {
-        await invoke('stop_server', { instanceId: id })
+        await stopServer(id)
         timing.mark('backend-stop')
         get().updateInstance(id, { status: 'stopped', healthCheck: 'pending' })
         outcome = 'success'

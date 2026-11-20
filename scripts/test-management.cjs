@@ -212,6 +212,10 @@ async function run() {
 
   const sharedMcp = await managementClient({ cli, app: executable, data }).mcp()
   try {
+    const legacyPreview = await sharedMcp.tool('instances.validate', { id: 'shared-managed' })
+    assert.equal(fs.realpathSync.native(legacyPreview.command[0]), fs.realpathSync.native(engine))
+    assert.equal((await call('instances.get', { id: 'shared-managed' })).data.config.engine_id, '',
+      'preview can resolve the default for legacy configs without persisting a binding')
     const before = (await call('instances.get', { id: 'shared-managed' })).data
     await mutate('instances.update', { id: 'shared-managed', revision: before.revision,
       patch: { name: 'Renamed shared preset', engine_id: engineId, temp: 0.72, host: '127.0.0.1', port: sharedPort } })
