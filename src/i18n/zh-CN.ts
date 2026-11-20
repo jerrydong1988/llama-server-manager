@@ -513,6 +513,8 @@
   },
 
   instanceWorkspace: {
+    preparingCommand: '正在准备命令…',
+    incompleteCommandProbe: '未能完整检测所选引擎。请在引擎管理中查看检测结果，然后重试。',
     instances: '\u5B9E\u4F8B', running: '\u8FD0\u884C\u4E2D', runningTitle: '\u8FD0\u884C\u4E2D', stoppedTitle: '\u5DF2\u505C\u6B62',
     errored: '\u5F02\u5E38', autoStart: '\u81EA\u52A8\u542F\u52A8', all: '\u5168\u90E8', offline: '\u79BB\u7EBF', healthy: '\u6B63\u5E38',
     pending: '\u68C0\u67E5\u4E2D', checkingPort: '\u68C0\u67E5\u7AEF\u53E3\u4E2D...', portAvailable: '\u7AEF\u53E3\u53EF\u7528', portInUse: '\u7AEF\u53E3\u5DF2\u88AB\u5360\u7528',

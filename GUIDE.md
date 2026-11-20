@@ -274,14 +274,14 @@ An instance combines a model, engine, port, and independent configuration into a
 - 状态依次可能为已停止、启动中、运行中或错误。
 - “测试连接”使用实例鉴权设置检查健康或模型接口。
 - “打开 API 页面”会把通配监听地址转换为本机可访问地址。
-- 命令预览可复制完整启动参数，便于复现问题。
+- 实例管理的“生成命令”按组展示实际启动参数。已保存的引擎能力缺失或过期时，会先重新检测该引擎；无法完整检测时显示错误，不把保守模式的最小命令当作完整预览。继承的默认值不会被强行写入命令。
 - 可重命名、排序或删除实例；删除前会原生确认。
 
 - Startup generates the command and validates ports and required paths.
 - Status may be stopped, starting, running, or error.
 - Test Connection checks health or model endpoints using the instance authentication settings.
 - Open API maps wildcard bind hosts to a local browser address.
-- Command Preview copies the complete launch command for diagnosis.
+- In Instances, Command Preview groups actual launch arguments. If engine capability evidence is missing or stale, the manager probes the selected engine first. Incomplete detection produces an error rather than a misleading minimal command. Inherited defaults are not added to the command.
 - Instances can be renamed, reordered, or deleted with confirmation.
 
 ![启动、健康检查、性能和日志诊断流程 / Start, health, performance, and log diagnosis](public/docs/guide/flow-02-start-and-diagnose.png)
