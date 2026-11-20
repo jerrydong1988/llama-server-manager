@@ -2819,20 +2819,6 @@ fn resolve_checkpoint_startup(
     coordinator.gate_allows_routing(instance_id)
 }
 
-async fn validate_gufo_capabilities(
-    state: &AppState,
-    config: &InstanceConfig,
-    executable: &str,
-    command: &mut Vec<String>,
-) -> AppResult<Box<EngineCapabilities>> {
-    let caps = match trusted_engine_capabilities(state, config, executable, true).await {
-        EngineCapabilityResolution::Available(caps) if caps.status == "detected" && caps.version_status == "detected" => caps,
-        _ => return Err(AppError::new("GUFO_PROBE_REQUIRED", "Probe the selected Gufo engine before launching", false)),
-    };
-    *command = crate::gufo::apply_launch_capabilities(command, &caps)?;
-    Ok(caps)
-}
-
 pub(crate) fn probe_config_readiness(
     client: &reqwest::blocking::Client,
     endpoint: &str,
@@ -3010,59 +2996,8 @@ async fn start_server_impl(
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
-    let manual = uses_manual_command(&config);
-    let (config, workload, mut generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
-    validate_tls_configuration(&config)?;
-    validate_public_bind_auth(&config)?;
-    let (mut cmd, engine_capabilities) = if crate::gufo::is_gufo(&config) {
-        let caps = validate_gufo_capabilities(state.inner(), &config, &engine_exe, &mut generated_cmd).await?;
-        (generated_cmd, Some(caps))
-    } else if manual {
-        (generated_cmd, None)
-    } else {
-        let engine_capabilities =
-            match trusted_engine_capabilities(state.inner(), &config, &engine_exe, false).await {
-                EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
-                EngineCapabilityResolution::Missing => None,
-                EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
-            };
-        validate_custom_argument_capabilities(&config, engine_capabilities.as_deref())?;
-        let generated_cmd = adapt_managed_arguments_for_capabilities(
-            &generated_cmd,
-            engine_capabilities.as_deref(),
-        );
-        {
-            let unsupported = unsupported_command_flags(
-                &generated_cmd,
-                engine_capabilities.as_deref().unwrap_or(&EngineCapabilities::default()),
-            );
-            if !unsupported.is_empty() {
-                return Err(AppError::new(
-                    "ENGINE_PARAMETER_UNSUPPORTED",
-                    format!(
-                        "当前 llama-server 不支持以下已启用参数：{}。请返回参数配置清除这些参数，或更换兼容的引擎版本。",
-                        unsupported.join(", ")
-                    ),
-                    false,
-                ));
-            }
-        }
-        let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_deref());
-        if !blocked.is_empty() {
-            return Err(AppError::new(
-                "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
-                format!(
-                    "当前引擎尚未确认支持以下安全参数：{}。请先完成引擎能力探测。",
-                    blocked.join(", ")
-                ),
-                false,
-            ));
-        }
-        (
-            command_for_capabilities(&generated_cmd, engine_capabilities.as_deref()),
-            engine_capabilities,
-        )
-    };
+    let LaunchPlan { config, workload, command: mut cmd, capabilities: engine_capabilities, .. } =
+        LaunchPlan::resolve(state.inner(), config, &engine_exe, LaunchPurpose::Start, &mut timing).await?;
     let mut checkpoint_plan = prepare_checkpoint_launch_plan(
         state.inner(),
         &instance_id,

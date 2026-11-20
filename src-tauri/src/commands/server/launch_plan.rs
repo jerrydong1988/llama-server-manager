@@ -8,27 +8,37 @@ use super::{
 use crate::error::{AppError, AppResult};
 use crate::models::{AppState, EngineCapabilities, InstanceConfig};
 use crate::operation_timing::OperationTiming;
+use crate::vector_policy::ModelWorkload;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum LaunchPurpose {
     Preview,
     CompletePreview,
+    Start,
+}
+
+impl LaunchPurpose {
+    fn allows_preview_cache(self) -> bool {
+        self != Self::Start
+    }
 }
 
 pub(super) struct LaunchPlan {
-    config: InstanceConfig,
-    command: Vec<String>,
-    capabilities: Option<Box<EngineCapabilities>>,
+    pub(super) config: InstanceConfig,
+    pub(super) workload: ModelWorkload,
+    pub(super) command: Vec<String>,
+    pub(super) capabilities: Option<Box<EngineCapabilities>>,
     unsupported_flags: Vec<String>,
 }
 
 impl LaunchPlan {
     fn base(config: InstanceConfig, executable: &str) -> AppResult<Self> {
-        let (config, _, command) = prepare_launch_checked(config, executable)?;
+        let (config, workload, command) = prepare_launch_checked(config, executable)?;
         validate_tls_configuration(&config)?;
         validate_public_bind_auth(&config)?;
         Ok(Self {
             config,
+            workload,
             command,
             capabilities: None,
             unsupported_flags: Vec::new(),
@@ -49,7 +59,13 @@ impl LaunchPlan {
         if uses_manual_command(&plan.config) {
             return Ok(plan);
         }
-        let evidence = trusted_engine_capabilities(state, &plan.config, executable, true).await;
+        let evidence = trusted_engine_capabilities(
+            state,
+            &plan.config,
+            executable,
+            purpose.allows_preview_cache(),
+        )
+        .await;
         timing.mark("capabilities");
         plan.with_capabilities(evidence, purpose)
     }
@@ -94,6 +110,10 @@ impl LaunchPlan {
         let adapted = adapt_managed_arguments_for_capabilities(&self.command, caps);
         self.unsupported_flags =
             unsupported_command_flags(&adapted, caps.unwrap_or(&EngineCapabilities::default()));
+        if purpose == LaunchPurpose::Start && !self.unsupported_flags.is_empty() {
+            return Err(AppError::new("ENGINE_PARAMETER_UNSUPPORTED",
+                format!("当前 llama-server 不支持以下已启用参数：{}。请返回参数配置清除这些参数，或更换兼容的引擎版本。", self.unsupported_flags.join(", ")), false));
+        }
         let blocked = blocked_security_flags(&adapted, caps);
         if !blocked.is_empty() {
             return Err(AppError::new(
@@ -106,7 +126,10 @@ impl LaunchPlan {
             ));
         }
         self.command = command_for_capabilities(&adapted, caps);
-        validate_effective_launch_security(&self.config, &self.command)?;
+        // Start validates the final argv after adding any managed checkpoint arguments.
+        if purpose != LaunchPurpose::Start {
+            validate_effective_launch_security(&self.config, &self.command)?;
+        }
         Ok(self)
     }
 
@@ -169,6 +192,41 @@ mod tests {
                 .unwrap();
             assert_eq!(err.code, "ENGINE_CAPABILITIES_STALE");
         }
+    }
+
+    #[test]
+    fn start_requires_fresh_identity_and_rejects_flags_reported_in_preview() {
+        assert!(LaunchPurpose::Preview.allows_preview_cache());
+        assert!(LaunchPurpose::CompletePreview.allows_preview_cache());
+        assert!(!LaunchPurpose::Start.allows_preview_cache());
+        let evidence = || {
+            EngineCapabilityResolution::Available(Box::new(EngineCapabilities {
+                status: "detected".into(),
+                supported_flags: vec!["-m".into(), "-a".into(), "--port".into(), "--host".into()],
+                ..EngineCapabilities::default()
+            }))
+        };
+        let preview = managed()
+            .with_capabilities(evidence(), LaunchPurpose::CompletePreview)
+            .unwrap();
+        assert!(preview
+            .unsupported_flags
+            .iter()
+            .any(|flag| flag == "--temp"));
+        let err = managed()
+            .with_capabilities(evidence(), LaunchPurpose::Start)
+            .err()
+            .unwrap();
+        assert_eq!(err.code, "ENGINE_PARAMETER_UNSUPPORTED");
+        assert!(err.message.contains("--temp"));
+        assert_eq!(
+            managed()
+                .with_capabilities(EngineCapabilityResolution::Stale, LaunchPurpose::Start)
+                .err()
+                .unwrap()
+                .code,
+            "ENGINE_CAPABILITIES_STALE"
+        );
     }
 
     #[test]
