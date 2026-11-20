@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.58 · Windows / macOS / Linux
+> v2.9.59 · Windows / macOS / Linux
 
 本说明介绍 llama.cpp 与 Windows Gufo 的模型、引擎、实例、路由、监控、后台任务和存储维护。应用内“使用说明”随安装包离线提供本文件和图片；更新应用后才会获得新版内置手册。截图使用隔离的演示数据。
 
