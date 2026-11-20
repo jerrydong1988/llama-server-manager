@@ -18,7 +18,7 @@ const en = {
   seed: 'Seed (−1: random)', repeatPenalty: 'Repeat penalty', repeatLast: 'Repeat last N', frequency: 'Frequency penalty', presence: 'Presence penalty',
   auto: 'Automatic', off: 'Off', on: 'On', limit: 'Fixed limit', save: 'Validate and save', preview: 'Preview command',
   saved: 'Configuration saved', busy: 'Validating…', missing: 'Select a scanned Gufo engine in Instances first.',
-  running: 'Stop this instance before changing its configuration.', back: 'Back to instances', loading: 'Loading model',
+  running: 'Stop this instance before changing its configuration.', loading: 'Loading model',
 }
 const zh: typeof en = {
   title: 'Gufo 参数配置', description: '配置本地 Gufo 模型实例；修改前请先停止实例。',
@@ -40,6 +40,6 @@ const zh: typeof en = {
   seed: '随机种子（−1：随机）', repeatPenalty: '重复惩罚', repeatLast: '重复检测范围', frequency: '频率惩罚', presence: '存在惩罚',
   auto: '自动', off: '关闭', on: '开启', limit: '固定上限', save: '校验并保存', preview: '预览命令',
   saved: '配置已保存', busy: '正在校验…', missing: '请先在实例管理中选择已扫描的 Gufo 引擎。',
-  running: '请先停止实例，再修改配置。', back: '返回实例管理', loading: '模型加载中',
+  running: '请先停止实例，再修改配置。', loading: '模型加载中',
 }
 export const gufoCopy = (lang: string) => lang.startsWith('zh') ? zh : en

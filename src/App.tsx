@@ -385,7 +385,13 @@ function AppInner() {
       version={version}
       navigation={navigation}
       activeId={activeTab}
-      onNavigate={setActiveTab}
+      onNavigate={tab => {
+        const { instanceListView, setActiveConfigInstanceId } = useAppStore.getState()
+        if (activeTab === 'instances' && tab === 'config' && instanceListView.selectedId) {
+          setActiveConfigInstanceId(instanceListView.selectedId)
+        }
+        setActiveTab(tab)
+      }}
       pageDescription={pageContext[activeTab] || shellCopy.pageDescriptions.fallback}
       statusChips={statusChips}
       updateInfo={updateInfo}

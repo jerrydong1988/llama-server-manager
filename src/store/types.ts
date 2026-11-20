@@ -633,6 +633,12 @@ export interface AppState {
   defaultEngineId: string | null
   modelDirs: string[]
   engineDirs: string[]
+  instanceListView: {
+    selectedId: string | null
+    search: string
+    statusFilter: 'all' | 'running' | 'stopped'
+    engineFilter: string
+  }
   activeConfigInstanceId: string | null
   activeTab: string
   darkMode: boolean

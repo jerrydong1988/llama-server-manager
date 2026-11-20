@@ -4,9 +4,7 @@ import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../stor
 import { useI18n } from '../i18n'
 import { getConfigPageLabels, getConfigTemplates, type ConfigTemplate } from '../i18n/configPageCopy'
 import { validateConfig, type Warning } from '../validators'
-import {
-  BasicSection, ReasoningSection, PerformanceSection, AdvancedSection,
-} from './ConfigPage/sections'
+import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
 import { pathBasename } from '../utils/path'
 import { formatHostPort } from '../utils/network'
@@ -35,7 +33,7 @@ import { CheckpointPanel } from './ConfigPage/CheckpointPanel'
 import { applyCheckpointRequirements } from './ConfigPage/checkpointRequirements'
 import { useConfigDraft } from './ConfigPage/useConfigDraft'
 import { useGuideTourStore } from './guide/guideTourStore'
-
+import { BackToInstancesButton } from './ConfigPage/BackToInstancesButton'
 import { GufoConfigPage } from './ConfigPage/GufoConfigPage'
 
 const ConfigPage = () => {
@@ -155,7 +153,7 @@ const LlamaConfigPage = () => {
   }, [guideConfigPending])
 
   saveShortcutRef.current = async () => {}
-  if (!local) return <div className="space-y-5"><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
+  if (!local) return <div className="space-y-5"><BackToInstancesButton /><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
 
   const overrideKeys = explicitOverrideKeys(local)
   const reviewOverrideKeys = canonicalConfigFields(overrideKeys)
@@ -472,7 +470,7 @@ const LlamaConfigPage = () => {
   return (
     <div className="space-y-5">
       <Surface as="section" id="config-page-actions">
-        <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-col gap-4 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-300">
               <SlidersHorizontal className="h-5 w-5" />
@@ -489,19 +487,22 @@ const LlamaConfigPage = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2 xl:shrink-0">
             {!manualMode && <Badge tone="slate">{labels.unsavedChanges} {configChanges.length}</Badge>}
             {!manualMode && <Badge tone="blue">{labels.emittedParams} {emittedParams.size}</Badge>}
-            <Button
-              onClick={save}
-              disabled={saveDisabled}
-              variant="primary"
-              data-guide="config-save"
-              icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-              className="shrink-0"
-            >
-              {saving ? savingLabel : saved ? t.configPage.saved : t.configPage.save}
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <BackToInstancesButton disabled={saving} />
+              <Button
+                onClick={save}
+                disabled={saveDisabled}
+                variant="primary"
+                data-guide="config-save"
+                icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                className="shrink-0"
+              >
+                {saving ? savingLabel : saved ? t.configPage.saved : t.configPage.save}
+              </Button>
+            </div>
           </div>
         </div>
       </Surface>

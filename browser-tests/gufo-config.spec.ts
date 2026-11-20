@@ -136,7 +136,7 @@ test('Gufo config exposes supported fields, persists the draft, and separates ca
   expect(saved.gufo).toMatchObject({ model_family: 'qwen38_27b', speculative: 'dflash2', cache_ram_mode: 'off', cache_disk: true, startup_timeout_seconds: 900, reasoning_budget: 4096 })
   const preview = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.find(call => call.command === 'generate_server_command'))
   expect(preview?.payload).toMatchObject({ config: { gufo: { reasoning_budget: 4096 } } })
-  await page.getByRole('button', { name: '返回实例管理', exact: true }).click()
+  await page.getByRole('button', { name: '返回实例列表', exact: true }).click()
   await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
   await expect(page.getByLabel('思考预算（Token 数）', { exact: true })).toHaveValue('4096')
   await page.setViewportSize({ width: 900, height: 900 })

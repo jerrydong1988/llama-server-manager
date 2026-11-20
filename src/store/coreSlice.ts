@@ -92,7 +92,12 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
     setActiveTab: (tab) => {
-      set({ activeTab: tab })
+      const { activeConfigInstanceId, instanceListView } = get()
+      if (tab === 'config' && activeConfigInstanceId && activeConfigInstanceId !== instanceListView.selectedId) {
+        set({ activeTab: tab, instanceListView: { ...instanceListView, selectedId: activeConfigInstanceId } })
+      } else {
+        set({ activeTab: tab })
+      }
       try {
         localStorage.setItem('lastTab', tab)
       } catch {}
