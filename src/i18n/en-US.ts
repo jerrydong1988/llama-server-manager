@@ -510,6 +510,8 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
   },
 
   instanceWorkspace: {
+    preparingCommand: 'Preparing command…',
+    incompleteCommandProbe: 'Could not fully detect the selected engine. Check its probe results in Engines, then try again.',
     instances: 'instances', running: 'running', runningTitle: 'Running', stoppedTitle: 'Stopped',
     errored: 'Errored', autoStart: 'Auto Start', all: 'All', offline: 'Offline', healthy: 'Healthy',
     pending: 'Pending', checkingPort: 'Checking port...', portAvailable: 'Port is available',

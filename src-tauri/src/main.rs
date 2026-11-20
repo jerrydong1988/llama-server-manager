@@ -67,8 +67,9 @@ use crate::commands::scanner::{
     open_engine_folder, open_model_folder, preview_model_deletion, read_gguf_metadata,
     rename_engine, scan_engines, scan_models,
 };
+use crate::commands::server::ipc::generate_server_command;
 use crate::commands::server::{
-    check_port, delete_instance_log, generate_server_command, get_checkpoint_eligibility, validate_checkpoint_locally, cancel_checkpoint_validation,
+    check_port, delete_instance_log, get_checkpoint_eligibility, validate_checkpoint_locally, cancel_checkpoint_validation,
     get_metrics, get_slots, get_system_health, get_system_metrics, open_browser, start_server,
     stop_server, test_connection,
 };

@@ -231,17 +231,32 @@ export function createInstanceSlice(
       get().setCheckpointStatus(status)
       return status
     },
-    generateCommand: async (config: InstanceConfig, engineExe: string) => {
+    generateCommand: async (config: InstanceConfig, engineExe: string, requireCompleteProbe = false) => {
       const normalized = normalizeStoredConfig(config, get().models)
       const matchingEngine = get().engines.find(engine => pathsEqual(engine.exe, engineExe))
       if (!normalized.config.engine_id && matchingEngine) {
         normalized.config = { ...normalized.config, engine_id: matchingEngine.id }
       }
+      const generate = async () => {
+        try {
+          return await invoke<GeneratedServerCommand>('generate_server_command', { config: normalized.config, engineExe, requireCompleteProbe })
+        } catch (error) {
+          if (isStaleEngineCapabilityError(error)) invalidateEngineCapabilities(set, engineExe)
+          throw error
+        }
+      }
       try {
-        return await invoke<GeneratedServerCommand>('generate_server_command', { config: normalized.config, engineExe })
+        return await generate()
       } catch (error) {
-        if (isStaleEngineCapabilityError(error)) invalidateEngineCapabilities(set, engineExe)
-        throw error
+        const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+        if (!requireCompleteProbe || !matchingEngine || !pathsEqual(matchingEngine.id, normalized.config.engine_id)
+          || !['ENGINE_PREVIEW_PROBE_REQUIRED', 'GUFO_PROBE_REQUIRED', 'ENGINE_CAPABILITIES_STALE'].includes(String(code))) throw error
+        const probed = await get().probeEngineCapabilities(matchingEngine.id)
+        if (probed.capabilities?.status !== 'detected' || (probed.kind === 'gufo' && probed.capabilities.versionStatus !== 'detected')) {
+          if (probed.capabilities?.error) throw new Error(probed.capabilities.error)
+          throw error
+        }
+        return generate()
       }
     },
     startInstance: (id) => runInstanceStart(id, async () => {

@@ -41,13 +41,8 @@ const CHECKPOINT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_mil
 const LAZY_MODE_SHORT_FLAG: &str = "-lzm";
 const LEGACY_TENSOR_READ_LAZY_FLAG: &str = "--tensor-read-lazy";
 
-struct CachedEngineMatch {
-    checked_at: std::time::Instant,
-    matches: bool,
-}
-
 static ENGINE_PREVIEW_MATCH_CACHE: LazyLock<
-    Mutex<std::collections::HashMap<String, CachedEngineMatch>>,
+    Mutex<std::collections::HashMap<String, std::time::Instant>>,
 > = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 struct CappedLogState {
@@ -2117,47 +2112,36 @@ async fn trusted_engine_capabilities(
         path_identity_key(std::path::Path::new(engine_exe)),
         capabilities.executable_fingerprint
     );
-    let cached_match = allow_preview_cache.then(|| {
-        ENGINE_PREVIEW_MATCH_CACHE
+    let cached_match = allow_preview_cache
+        && ENGINE_PREVIEW_MATCH_CACHE
             .lock()
             .unwrap()
             .get(&cache_key)
-            .and_then(|cached| {
-                (cached.checked_at.elapsed() <= ENGINE_PREVIEW_MATCH_CACHE_TTL)
-                    .then_some(cached.matches)
-            })
-    });
-    let matches = match cached_match.flatten() {
-        Some(matches) => matches,
-        None => {
-            let executable = engine_exe.to_string();
-            let capabilities_for_check = capabilities.clone();
-            let matches = tokio::task::spawn_blocking(move || {
-                capabilities_match_executable(&executable, &capabilities_for_check)
-            })
-            .await
-            .unwrap_or(false);
-            if allow_preview_cache {
-                let mut cache = ENGINE_PREVIEW_MATCH_CACHE.lock().unwrap();
-                if cache.len() >= MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES {
-                    if let Some(oldest) = cache
-                        .iter()
-                        .min_by_key(|(_, cached)| cached.checked_at)
-                        .map(|(key, _)| key.clone())
-                    {
-                        cache.remove(&oldest);
-                    }
+            .is_some_and(|checked_at| checked_at.elapsed() <= ENGINE_PREVIEW_MATCH_CACHE_TTL);
+    let matches = if cached_match {
+        true
+    } else {
+        let executable = engine_exe.to_string();
+        let capabilities_for_check = capabilities.clone();
+        let matches = tokio::task::spawn_blocking(move || {
+            capabilities_match_executable(&executable, &capabilities_for_check)
+        })
+        .await
+        .unwrap_or(false);
+        if allow_preview_cache && matches {
+            let mut cache = ENGINE_PREVIEW_MATCH_CACHE.lock().unwrap();
+            if cache.len() >= MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES {
+                if let Some(oldest) = cache
+                    .iter()
+                    .min_by_key(|(_, checked_at)| **checked_at)
+                    .map(|(key, _)| key.clone())
+                {
+                    cache.remove(&oldest);
                 }
-                cache.insert(
-                    cache_key,
-                    CachedEngineMatch {
-                        checked_at: std::time::Instant::now(),
-                        matches,
-                    },
-                );
             }
-            matches
+            cache.insert(cache_key, std::time::Instant::now());
         }
+        matches
     };
     if matches {
         return EngineCapabilityResolution::Available(Box::new(capabilities));
@@ -2872,6 +2856,15 @@ pub async fn generate_server_command(
     engine_exe: String,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<GeneratedServerCommand> {
+    generate_server_command_with_probe_policy(config, engine_exe, state, false).await
+}
+
+async fn generate_server_command_with_probe_policy(
+    config: InstanceConfig,
+    engine_exe: String,
+    state: tauri::State<'_, AppState>,
+    require_complete_probe: bool,
+) -> AppResult<GeneratedServerCommand> {
     let mut timing = crate::operation_timing::OperationTiming::new("generate_server_command");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     let manual = uses_manual_command(&config);
@@ -2898,6 +2891,15 @@ pub async fn generate_server_command(
             EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
         };
     timing.mark("capabilities");
+    if require_complete_probe
+        && !capabilities.as_ref().is_some_and(|caps| caps.status == "detected")
+    {
+        return Err(AppError::new(
+            "ENGINE_PREVIEW_PROBE_REQUIRED",
+            "A complete engine capability probe is required to preview all configured arguments.",
+            true,
+        ));
+    }
     validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
     let command = adapt_managed_arguments_for_capabilities(&command, capabilities.as_deref());
     let unsupported_flags = unsupported_command_flags(
@@ -8199,9 +8201,12 @@ pub mod ipc {
     pub async fn generate_server_command(
         config: InstanceConfig,
         engine_exe: String,
+        require_complete_probe: Option<bool>,
         state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<GeneratedServerCommand> {
-        super::generate_server_command(config, engine_exe, state).await
+        super::generate_server_command_with_probe_policy(
+            config, engine_exe, state, require_complete_probe.unwrap_or(false),
+        ).await
     }
 
     #[tauri::command]

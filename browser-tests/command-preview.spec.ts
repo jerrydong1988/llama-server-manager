@@ -69,6 +69,32 @@ test('preview preserves literal argv, repeated options and all secret aliases', 
 })
 
 test.describe('command preview UI', () => {
+  for (const scenario of ['llama', 'stale', 'gufo', 'partial']) {
+    test(`instance preview recovers capability evidence once: ${scenario}`, async ({ page }) => {
+      await page.addInitScript(() => {
+        localStorage.setItem('lastTab', 'instances')
+        localStorage.setItem('lang', 'en-US')
+      })
+      await page.goto(`/?scenario=preview-probe-${scenario}`)
+      await page.getByRole('button', { name: 'Cmd', exact: true }).last().click()
+      if (scenario === 'partial') {
+        await expect(page.getByText(/Incomplete help output/)).toBeVisible()
+        await expect(page.locator('[data-command-groups]')).toHaveCount(0)
+      } else {
+        const groups = page.locator('[data-command-groups]')
+        await expect(groups).toBeVisible()
+        if (scenario === 'gufo') {
+          await expect(groups.getByText('--speculative', { exact: true })).toBeVisible()
+          await expect(groups).not.toContainText('--draft-tokens')
+        } else await expect(groups.getByText('--temp', { exact: true })).toBeVisible()
+      }
+      const calls = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.map(call => call.command))
+      expect(calls.filter(name => name === 'probe_engine_capabilities')).toHaveLength(1)
+      expect(calls.filter(name => name === 'generate_server_command')).toHaveLength(scenario === 'partial' ? 1 : 2)
+      expect(calls).not.toContain('start_server')
+    })
+  }
+
   test.afterEach(async ({ page }) => {
     await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
   })

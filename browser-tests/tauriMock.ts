@@ -266,7 +266,7 @@ const instanceConfig: InstanceConfig = {
   explicit_overrides: ['temp', 'top_k', 'kv_unified', 'kv_unified_mode', 'models_autoload', 'image_min_tokens'],
 }
 
-if (BROWSER_SCENARIO === 'gufo' || BROWSER_SCENARIO === 'gufo-delayed-config-save') {
+if (BROWSER_SCENARIO === 'gufo' || BROWSER_SCENARIO === 'gufo-delayed-config-save' || BROWSER_SCENARIO === 'preview-probe-gufo') {
   engine.kind = 'gufo'
   engine.name = 'Gufo'
   engine.exe = 'C:\\browser-test\\engine\\gufo.exe'
@@ -1258,6 +1258,8 @@ mockIPC((command, payload) => {
       const engineId = String(args.engineId ?? '')
       const target = engines.find(candidate => candidate.id === engineId)
       if (!target) throw new Error(`browser test engine not found: ${engineId}`)
+      if (BROWSER_SCENARIO === 'preview-probe-partial') return { ...target, capabilities: { ...target.capabilities, status: 'partial', error: 'Incomplete help output' } }
+      if (BROWSER_SCENARIO === 'preview-probe-gufo' && target.capabilities) target.capabilities.gufoDraftTokensIgnored = true
       if (!BROWSER_SCENARIO?.startsWith('engine-probe-batch')) return clone(target)
 
       control.activeProbeCount += 1
@@ -1558,8 +1560,18 @@ mockIPC((command, payload) => {
     case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
     case 'generate_server_command': {
       if (BROWSER_SCENARIO === 'command-error') throw new Error('Browser test command generation failed')
+      if (BROWSER_SCENARIO?.startsWith('preview-probe-') && !control.calls.some(call => call.command === 'probe_engine_capabilities')) {
+        if (BROWSER_SCENARIO === 'preview-probe-gufo') throw { code: 'GUFO_PROBE_REQUIRED', message: 'Gufo needs a probe' }
+        if (BROWSER_SCENARIO === 'preview-probe-stale') throw { code: 'ENGINE_CAPABILITIES_STALE', message: 'Stale executable evidence' }
+        if (args.requireCompleteProbe) throw { code: 'ENGINE_PREVIEW_PROBE_REQUIRED', message: 'Full help required' }
+        return { command: [engine.exe, '-m', MODEL_PATH, '--host', '127.0.0.1', '--port', '8080'], unsupportedFlags: [], emittedOverrideKeys: [] }
+      }
       const config = args.config as InstanceConfig
       const generated = generatedCommand(config)
+      if (BROWSER_SCENARIO === 'preview-probe-gufo') {
+        generated.command = [engine.exe, 'serve', '--host', config.host, '--port', String(config.port), 'llm', '--model', config.model_path, '--speculative', 'mtp']
+        if (!engine.capabilities?.gufoDraftTokensIgnored) generated.command.push('--draft-tokens', '4')
+      }
       if (control.commandOverride) generated.command = [...control.commandOverride]
       control.lastGenerated = clone(generated)
       syncAutomationProbe()

@@ -685,7 +685,7 @@ export interface AppState {
   renameEngine: (id: string, name: string) => void
   openEngineFolder: (dir: string) => Promise<void>
 
-  generateCommand: (config: InstanceConfig, engineExe: string) => Promise<GeneratedServerCommand>
+  generateCommand: (config: InstanceConfig, engineExe: string, requireCompleteProbe?: boolean) => Promise<GeneratedServerCommand>
   startInstance: (id: string) => Promise<void>
   stopInstance: (id: string) => Promise<void>
   openBrowser: (instanceId: string, host: string, port: number, useTls?: boolean, apiPrefix?: string) => Promise<void>
