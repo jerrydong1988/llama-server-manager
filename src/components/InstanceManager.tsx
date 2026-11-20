@@ -17,7 +17,7 @@ import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engi
 import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
 import { usePortAvailability } from './InstanceManager/usePortAvailability'
-import { useInstanceSelection } from './InstanceManager/useInstanceSelection'
+import { updateInstanceListView, useInstanceSelection } from './InstanceManager/useInstanceSelection'
 import { useGuideTourStore } from './guide/guideTourStore'
 import { CheckpointStatusCard } from './InstanceManager/CheckpointStatusCard'
 import { CommandPreviewModal } from './InstanceManager/CommandPreviewModal'
@@ -60,9 +60,6 @@ const InstanceManager = () => {
   const [editName, setEditName] = useState('')
   const editingCanceledRef = useRef(false)
   const [enginePickerForId, setEnginePickerForId] = useState('')
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all')
-  const [engineFilter, setEngineFilter] = useState('all')
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -113,26 +110,15 @@ const InstanceManager = () => {
     return 'bg-amber-500'
   }
 
-  const filteredInstances = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return instances.filter(inst => {
-      if (statusFilter === 'running' && inst.status !== 'running') return false
-      if (statusFilter === 'stopped' && inst.status === 'running') return false
-      if (engineFilter !== 'all' && !pathsEqual(inst.config.engine_id || defaultEngineId || '', engineFilter)) return false
-      if (!query) return true
-      return inst.name.toLowerCase().includes(query)
-        || inst.model.toLowerCase().includes(query)
-        || engineNameFor(inst).toLowerCase().includes(query)
-        || String(inst.config.port).includes(query)
-    })
-  }, [instances, search, statusFilter, engineFilter, defaultEngineId, engineNameFor])
+  const {
+    search, statusFilter, engineFilter, filteredInstances, selectedInstance, setSelectedInstanceId, selectedRowRef,
+  } = useInstanceSelection(instances, defaultEngineId, engineNameFor)
 
   const runningCount = instances.filter(inst => inst.status === 'running').length
   const stoppedCount = instances.filter(inst => inst.status === 'stopped').length
   const erroredCount = instances.filter(inst => inst.status === 'error').length
   const autoStartCount = instances.filter(inst => inst.config.auto_start).length
   const missingEngineInstances = useMemo(() => instances.filter(engineMissingFor), [engineMissingFor, instances])
-  const { selectedInstance, setSelectedInstanceId } = useInstanceSelection(instances, filteredInstances)
   const selectedIndex = selectedInstance ? filteredInstances.findIndex(inst => inst.id === selectedInstance.id) : -1
   const filteredInstanceIds = useMemo(() => filteredInstances.map(inst => inst.id), [filteredInstances])
 
@@ -362,7 +348,7 @@ const InstanceManager = () => {
                   {(['all', 'running', 'stopped'] as const).map(filter => (
                     <Button
                       key={filter}
-                      onClick={() => setStatusFilter(filter)}
+                      onClick={() => updateInstanceListView({ statusFilter: filter })}
                       variant={statusFilter === filter ? 'primary' : 'subtle'}
                       size="sm"
                     >
@@ -374,13 +360,13 @@ const InstanceManager = () => {
                 <div className="grid w-full min-w-0 gap-2 sm:grid-cols-[minmax(220px,1fr)_180px] xl:w-[520px]">
                   <TextInput
                     value={search}
-                    onChange={e => setSearch(e.target.value)}
+                    onChange={e => updateInstanceListView({ search: e.target.value })}
                     placeholder={labels.searchPlaceholder}
                     leadingIcon={<Search className="h-4 w-4" />}
                   />
                   <SelectInput
                     value={engineFilter}
-                    onChange={e => setEngineFilter(e.target.value)}
+                    onChange={e => updateInstanceListView({ engineFilter: e.target.value })}
                   >
                     <option value="all">{labels.allEngines}</option>
                     {engines.map(engine => (
@@ -404,6 +390,7 @@ const InstanceManager = () => {
                 return (
                   <div
                     key={inst.id}
+                    ref={selected ? selectedRowRef : undefined}
                     role="button"
                     tabIndex={0}
                     onClick={() => setSelectedInstanceId(inst.id)}

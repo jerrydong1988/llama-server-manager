@@ -56,6 +56,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   defaultEngineId: null,
   modelDirs: [],
   engineDirs: [],
+  instanceListView: { selectedId: null, search: '', statusFilter: 'all', engineFilter: 'all' },
   activeConfigInstanceId: null,
   activeTab: (() => {
     try {

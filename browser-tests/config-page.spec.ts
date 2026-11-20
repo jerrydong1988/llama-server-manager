@@ -347,7 +347,8 @@ test('switching instances keeps their configuration drafts independent', async (
   await expect(temperature).toHaveValue('0.6')
   await temperature.fill('0.72')
   await page.locator('[data-nav-id="instances"]').click()
-  await page.getByRole('button', { name: '配置参数', exact: true }).first().click()
+  await page.locator('.instance-list-row').getByText('Browser Parameter Regression', { exact: true }).click()
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
   await expect(temperature).toHaveValue('0.91')
 })
 

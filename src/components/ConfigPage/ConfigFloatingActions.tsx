@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { ArrowUp, CheckCircle2, LoaderCircle, Sparkles } from 'lucide-react'
 import { Button, IconButton, joinClassNames } from '../ui'
 import { useWorkspaceActions } from '../shell/WorkspaceActions'
+import { BackToInstancesButton } from './BackToInstancesButton'
 
 export function ConfigFloatingActions({
   topTargetId,
@@ -58,6 +59,7 @@ export function ConfigFloatingActions({
       data-config-guide-actions={guideTarget ? '' : undefined}
       className={joinClassNames('pointer-events-auto flex flex-wrap items-center gap-2', !guideTarget && 'rounded-xl border border-slate-200 bg-white/95 p-2 shadow-xl shadow-slate-950/15 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 dark:shadow-slate-950/50')}
     >
+      {!guideTarget && <BackToInstancesButton compact disabled={saving} />}
       <Button
         onClick={() => { void onSave() }}
         disabled={disabled}

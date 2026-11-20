@@ -8,6 +8,7 @@ import { gufoCopy } from '../../i18n/gufoCopy'
 import { resolveEffectiveEngine } from '../../store/engineResolution'
 import { Button, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 import { ModelAssetPicker } from './ModelAssetPicker'
+import { BackToInstancesButton } from './BackToInstancesButton'
 
 type GufoPathField = 'model_path' | 'mmproj_path' | 'mtp_model' | 'dflash_model'
 
@@ -223,7 +224,7 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
         <div className="flex flex-wrap gap-3">
           <Button variant="primary" disabled={busy || running || !engine} onClick={() => void validate(true)}>{busy ? copy.busy : copy.save}</Button>
           <Button variant="secondary" disabled={busy || running || !engine} onClick={() => void validate(false)}>{copy.preview}</Button>
-          <Button variant="subtle" onClick={() => useAppStore.getState().setActiveTab('instances')}>{copy.back}</Button>
+          <BackToInstancesButton disabled={busy} />
         </div>
       </div>
     </Surface>
