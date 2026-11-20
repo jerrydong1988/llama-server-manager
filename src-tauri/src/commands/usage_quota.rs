@@ -12,6 +12,7 @@ pub(crate) use maintenance::{maintain, storage, QuotaStorage};
 
 const MAX_TOKENS: u64 = 9_007_199_254_740_991;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(3);
+static OPEN_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum QuotaError {
@@ -70,6 +71,7 @@ fn unavailable(stage: &str, error: impl std::fmt::Display) -> QuotaError {
 }
 
 fn open(path: &Path) -> Result<Connection, String> {
+    let _opening = OPEN_GATE.lock().map_err(|_| "ledger open gate poisoned")?;
     let deadline = Instant::now() + BUSY_TIMEOUT;
     loop {
         match open_once(path, deadline.saturating_duration_since(Instant::now())) {
@@ -97,11 +99,26 @@ fn open(path: &Path) -> Result<Connection, String> {
 }
 
 fn open_once(path: &Path, timeout: Duration) -> rusqlite::Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.busy_timeout(timeout)?;
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-         CREATE TABLE IF NOT EXISTS quota_periods (
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+    }
+    let initialized: bool = conn.query_row(
+        "SELECT count(*) = 5 FROM sqlite_schema
+         WHERE (type='table' AND name IN ('quota_periods','quota_requests'))
+            OR (type='index' AND name IN ('quota_request_date','quota_request_key_day','quota_request_key_month'))",
+        [],
+        |row| row.get(0),
+    )?;
+    if initialized {
+        return Ok(conn);
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS quota_periods (
            key_id TEXT NOT NULL, kind TEXT NOT NULL, start INTEGER NOT NULL,
            settled INTEGER NOT NULL DEFAULT 0, held INTEGER NOT NULL DEFAULT 0,
            pending INTEGER NOT NULL DEFAULT 0, uncertain INTEGER NOT NULL DEFAULT 0,
@@ -113,6 +130,7 @@ fn open_once(path: &Path, timeout: Duration) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS quota_request_key_day ON quota_requests(key_id,day);
          CREATE INDEX IF NOT EXISTS quota_request_key_month ON quota_requests(key_id,month);",
     )?;
+    tx.commit()?;
     Ok(conn)
 }
 
@@ -374,6 +392,39 @@ mod tests {
     }
     pub(super) fn persist(mut p: QuotaPermit) {
         p.finished = true;
+    }
+
+    #[test]
+    fn ready_ledger_opens_for_read_while_a_reservation_holds_the_writer() {
+        let (_dir, path) = db();
+        persist(reserve_at(&path, &key(), "first", 10, 0).unwrap());
+        let mut writer = open(&path).unwrap();
+        let _reservation = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let reader = open_once(&path, Duration::ZERO).unwrap();
+        assert_eq!(period(&reader, "key", "day", 0).unwrap().held, 10);
+        let mode: String = reader
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn failed_schema_migration_does_not_publish_a_half_initialized_ledger() {
+        let (_dir, path) = db();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE quota_requests(id TEXT PRIMARY KEY)")
+            .unwrap();
+        assert!(open(&path).is_err());
+        let tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='quota_periods'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
     }
 
     #[test]
