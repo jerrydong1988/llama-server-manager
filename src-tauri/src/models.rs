@@ -1187,6 +1187,31 @@ pub struct RunningInstance {
     pub launch_config: Option<InstanceConfig>,
 }
 
+/// Desktop-only identity. A PID can be reused between two supervisor heartbeats.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceProcess {
+    pub pid: u32,
+    pub start_time: u64,
+    executable: String,
+}
+
+impl RunningInstance {
+    pub fn process(&self) -> InstanceProcess {
+        InstanceProcess {
+            pid: self.pid,
+            start_time: self.start_time,
+            executable: crate::path_utils::path_identity_key(std::path::Path::new(&self.executable_path)),
+        }
+    }
+}
+
+impl InstanceProcess {
+    pub fn matches(&self, record: &RunningInstance) -> bool {
+        self.pid == record.pid && self.start_time == record.start_time && self.executable
+            == crate::path_utils::path_identity_key(std::path::Path::new(&record.executable_path))
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SystemMetrics {
     pub cpu_percent: f32,
@@ -1465,8 +1490,8 @@ pub struct AppState {
     pub proxy_last_error: Mutex<Option<String>>,
     pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,
     pub checkpoint_coordinator: Arc<crate::checkpoint::CheckpointCoordinator>,
-    pub runtime_managed_instances: Mutex<std::collections::HashSet<String>>,
-    pub restored_runtime_instances: Mutex<std::collections::HashSet<String>>,
+    pub runtime_managed_instances: Mutex<HashMap<String, InstanceProcess>>,
+    pub restored_runtime_instances: Mutex<HashMap<String, Arc<InstanceProcess>>>,
 }
 
 pub struct DownloadBandwidthLimiter {

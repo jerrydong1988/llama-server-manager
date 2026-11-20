@@ -101,7 +101,7 @@ impl LaunchPlan {
         };
         let caps = self.capabilities.as_deref();
         if purpose == LaunchPurpose::CompletePreview
-            && !caps.is_some_and(|c| c.status == "detected")
+            && caps.is_none_or(|c| c.status != "detected")
         {
             return Err(AppError::new("ENGINE_PREVIEW_PROBE_REQUIRED",
                 "A complete engine capability probe is required to preview all configured arguments.", true));

@@ -54,7 +54,7 @@ assert.match(
 )
 assert.match(
   serverSource,
-  /let ri = state\.running[\s\S]*if ri\.is_none\(\) \{\s*return Ok\(\(\)\)/,
+  /let Some\(ri\) = state\.running[^;]+else \{\s*return Ok\(\(\)\)/,
   'stop_server must be idempotent so deletion can always coordinate with the backend',
 )
 const startServerSource = serverSource.slice(

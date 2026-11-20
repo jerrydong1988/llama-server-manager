@@ -679,7 +679,7 @@ pub(super) async fn instances(
         }
         "instances.validate" | "instances.start" => {
             ensure_inventory(app).await?;
-            let configured = if let Some(config) = args.get("config") {
+            let mut configured = if let Some(config) = args.get("config") {
                 let mut defaults = value(InstanceConfig::default())?;
                 patch_instance(&mut defaults, config)?;
                 let configured: InstanceConfig = serde_json::from_value(defaults)
@@ -690,6 +690,7 @@ pub(super) async fn instances(
                 instance(&state, &id)?
             };
             let selected = instance_engine(&state, &configured)?;
+            configured.engine_id = selected.id;
             if name == "instances.validate" {
                 value(server::generate_server_command(configured, selected.exe, state).await?)
             } else {

@@ -254,12 +254,13 @@ async fn prepare_background_handoff(
             *state.proxy_config.lock().unwrap() = next_config.clone();
         }
         crate::runtime_service::autostart::enable_runtime_autostart()?;
+        let observation = crate::runtime_service::begin_status_observation();
         let status = crate::runtime_service::prepare_background_detach(&state).await?;
         if status.config_revision == 0 || !status.background_enabled || !status.registered_for_login
         {
             return Err("后台接管回执不完整，主程序已取消退出".into());
         }
-        crate::runtime_service::reconcile_app_runtime(app, &status);
+        crate::runtime_service::reconcile_app_runtime(app, &status, observation);
         crate::runtime_service::mark_config_sync_complete(sync_generation);
         Ok::<(), String>(())
     }
@@ -385,8 +386,9 @@ async fn stop_background_runtime(app: tauri::AppHandle) -> Result<(), String> {
     if let Err(error) = crate::runtime_service::set_background_enabled(false).await {
         failures.push(format!("关闭后台接管标记失败：{error}"));
     }
+    let observation = crate::runtime_service::begin_status_observation();
     match crate::runtime_service::runtime_status().await {
-        Ok(status) => crate::runtime_service::reconcile_app_runtime(&app, &status),
+        Ok(status) => crate::runtime_service::reconcile_app_runtime(&app, &status, observation),
         Err(error) => failures.push(format!("读取停止回执失败：{error}")),
     }
 
@@ -631,10 +633,9 @@ fn main() {
             // Restore log capture, metrics, and the single authoritative health monitor.
             let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
             for (id, ri) in &config.running {
-                if !crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri.pid) {
+                let Some(attachment) = crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri) else {
                     continue;
-                }
-                let pid = ri.pid;
+                };
                 let app_reconnect = app.handle().clone();
                 let config_dir_clone = config_dir.clone();
 
@@ -647,17 +648,17 @@ fn main() {
                         .runtime_managed_instances
                         .lock()
                         .unwrap()
-                        .insert(id.clone());
+                        .insert(id.clone(), ri.process());
                     crate::commands::server::reconnect_runtime_instance_logs(
                         id,
-                        pid,
+                        attachment,
                         &config_dir_clone,
                         app_reconnect,
                     );
                 } else if let Some(launch_config) = launch_config {
                     crate::commands::server::reconnect_running_instance(
                         id,
-                        pid,
+                        attachment,
                         launch_config,
                         &config_dir_clone,
                         app_reconnect,
@@ -729,8 +730,8 @@ fn main() {
                     crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir()),
                 ),
             ),
-            runtime_managed_instances: Mutex::new(std::collections::HashSet::new()),
-            restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
+            runtime_managed_instances: Mutex::new(HashMap::new()),
+            restored_runtime_instances: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             management::desktop::list_management_tasks,

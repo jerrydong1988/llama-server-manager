@@ -810,19 +810,30 @@ fn runtime_status_payload(
     })
 }
 
-pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
+static SNAPSHOT_ORDER: std::sync::LazyLock<reconcile::SnapshotOrder> = std::sync::LazyLock::new(Default::default);
+
+pub(crate) fn begin_status_observation() -> u64 {
+    SNAPSHOT_ORDER.begin()
+}
+
+pub(crate) fn instance_ownership_changed() {
+    SNAPSHOT_ORDER.after_mutation();
+}
+
+pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus, observation: u64) {
     use tauri::{Emitter, Manager};
 
+    let Some(_publication) = SNAPSHOT_ORDER.accept(observation) else { return };
     let state = app.state::<crate::models::AppState>();
     let (changes, previous_managed) = {
-        let mut known = state.runtime_managed_instances.lock().unwrap();
         let mut running = state.running.lock().unwrap();
-        let previous = known.clone();
+        let mut known = state.runtime_managed_instances.lock().unwrap();
         let changes = reconcile::InstanceChanges::between(&running, &known, &status.running);
         changes.apply(&mut running, &mut known);
-        (changes, previous)
+        (changes, known.keys().cloned().collect())
     };
-    for id in &changes.stopped {
+    for (id, owner) in &changes.stopped {
+        crate::commands::server::forget_log_attachment(state.inner(), id, owner);
         crate::commands::monitoring::remove_instance(id);
     }
     *state.proxy_bound_addr.lock().unwrap() = status
@@ -832,11 +843,11 @@ pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServ
     *state.proxy_last_error.lock().unwrap() = status.proxy.last_error.clone();
 
     for &(instance_id, instance) in &changes.reconnect {
-        if crate::commands::server::register_restored_runtime_instance(app, instance_id, instance.pid) {
+        if let Some(attachment) = crate::commands::server::register_restored_runtime_instance(app, instance_id, instance) {
             let config_dir = state.config_dir.lock().unwrap().clone();
             crate::commands::server::reconnect_runtime_instance_logs(
                 instance_id,
-                instance.pid,
+                attachment,
                 &config_dir,
                 app.clone(),
             );
@@ -910,6 +921,7 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
+            let observation = begin_status_observation();
             let result = if first {
                 first = false;
                 synchronize_from_app(&app).await
@@ -925,7 +937,7 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
                 }
             };
             match result {
-                Ok(status) => reconcile_app_runtime(&app, &status),
+                Ok(status) => reconcile_app_runtime(&app, &status, observation),
                 Err(error) if update::is_update_pause(&error) => {}
                 Err(error) => {
                     use tauri::Emitter;

@@ -16,7 +16,7 @@ use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, EngineCapabilities,
-    InstanceConfig, RunningInstance, SystemMetrics,
+    InstanceConfig, InstanceProcess, RunningInstance, SystemMetrics,
 };
 use crate::path_utils::{path_identity_key, paths_equal};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
@@ -2877,8 +2877,9 @@ pub async fn start_server(
     // does not reject a dead process as still running. Keep this under the
     // instance operation lock; the daemon retains its own duplicate-start guard.
     if crate::runtime_service::manages_instances() {
+        let observation = crate::runtime_service::begin_status_observation();
         let status = crate::runtime_service::runtime_status().await?;
-        crate::runtime_service::reconcile_app_runtime(&app, &status);
+        crate::runtime_service::reconcile_app_runtime(&app, &status, observation);
     }
     start_server_impl(
         instance_id,
@@ -2904,7 +2905,7 @@ fn instance_operation_lock(state: &AppState, instance_id: &str) -> Arc<tokio::sy
 fn recover_gui_checkpoint_process(
     app: tauri::AppHandle,
     instance_id: String,
-    expected_pid: u32,
+    process: Arc<InstanceProcess>,
     config: InstanceConfig,
 ) {
     tauri::async_runtime::spawn(async move {
@@ -2915,10 +2916,10 @@ fn recover_gui_checkpoint_process(
             .running
             .lock()
             .unwrap()
-            .get(&instance_id).is_none_or(|running| running.pid != expected_pid)
+            .get(&instance_id).is_none_or(|running| !process.matches(running))
             || !state
                 .checkpoint_coordinator
-                .restore_restart_required(&instance_id, expected_pid)
+                .restore_restart_required(&instance_id, process.pid)
         {
             return;
         }
@@ -2959,6 +2960,37 @@ fn recover_gui_checkpoint_process(
     });
 }
 
+fn emit_server_started(
+    app: &tauri::AppHandle, instance_id: &str, pid: u32, cmd_display: &str,
+    config: &InstanceConfig, config_saved: bool,
+) {
+    app.emit(
+        "server-started",
+        serde_json::json!({
+            "instanceId": instance_id,
+            "pid": pid,
+            "port": config.port,
+            "host": config.host,
+            "command": cmd_display,
+            "effectiveConfig": config_saved.then(|| serde_json::json!({
+                "model_path": config.model_path,
+                "alias": config.alias,
+                "host": config.host,
+                "port": config.port,
+                "api_key": config.api_key,
+                "api_key_file": config.api_key_file,
+                "ssl_key_file": config.ssl_key_file,
+                "ssl_cert_file": config.ssl_cert_file,
+                "path_prefix": config.path_prefix,
+                "api_prefix": config.api_prefix,
+                "embedding": config.embedding,
+                "reranking": config.reranking,
+            })),
+        }),
+    )
+    .ok();
+}
+
 async fn start_server_impl(
     instance_id: String,
     mut config: InstanceConfig,
@@ -2968,6 +3000,7 @@ async fn start_server_impl(
     cold_recovery: bool,
 ) -> AppResult<()> {
     let mut timing = crate::operation_timing::OperationTiming::new("start_server");
+    let saved_at_start = state.instances.lock().unwrap().get(&instance_id).cloned();
     let (engine_exe, engine_backend) = bind_launch_engine(state.inner(), &mut config, engine_exe.as_deref())?;
     validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
@@ -3017,83 +3050,41 @@ async fn start_server_impl(
             .map_err(AppError::from)?;
         timing.mark("runtime-start");
 
-        let previous_instance = {
-            state
-                .running
-                .lock()
-                .unwrap()
-                .insert(instance_id.clone(), running.clone());
-            let previous = state
-                .instances
-                .lock()
-                .unwrap()
-                .insert(instance_id.clone(), config.clone());
-            state
-                .runtime_managed_instances
-                .lock()
-                .unwrap()
-                .insert(instance_id.clone());
-            previous
-        };
-        let running_snapshot = state.running.lock().unwrap().clone();
-        let persisted_instance_id = instance_id.clone();
-        let persisted_config = config.clone();
-        if let Err(error) = crate::commands::config::update_and_persist(&state, |global| {
-            global.running = running_snapshot;
-            global
-                .instances
-                .insert(persisted_instance_id, persisted_config);
-        }) {
-            let _ = crate::runtime_service::stop_instance(instance_id.clone()).await;
-            state.running.lock().unwrap().remove(&instance_id);
-            state
-                .runtime_managed_instances
-                .lock()
-                .unwrap()
-                .remove(&instance_id);
-            let mut instances = state.instances.lock().unwrap();
-            if let Some(previous) = previous_instance {
-                instances.insert(instance_id.clone(), previous);
-            } else {
-                instances.remove(&instance_id);
-            }
-            return Err(AppError::new(
-                "RUNTIME_STATE_PERSIST_FAILED",
-                format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
-                true,
-            ));
+        crate::runtime_service::instance_ownership_changed();
+        {
+            let mut records = state.running.lock().unwrap();
+            let mut owners = state.runtime_managed_instances.lock().unwrap();
+            records.insert(instance_id.clone(), running.clone());
+            owners.insert(instance_id.clone(), running.process());
         }
+        let publish_config = crate::commands::config::persist_started_instance(
+            state.inner(), &instance_id, saved_at_start.as_ref(), Some(&config),
+        );
+        let config_saved = match publish_config {
+            Ok(saved) => saved,
+            Err(error) => {
+                let _ = crate::runtime_service::stop_instance(instance_id.clone()).await;
+                crate::runtime_service::instance_ownership_changed();
+                state.running.lock().unwrap().remove(&instance_id);
+                state
+                    .runtime_managed_instances
+                    .lock()
+                    .unwrap()
+                    .remove(&instance_id);
+                return Err(AppError::new(
+                    "RUNTIME_STATE_PERSIST_FAILED",
+                    format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
+                    true,
+                ));
+            }
+        };
         timing.mark("persist-main");
 
-        app.emit(
-            "server-started",
-            serde_json::json!({
-                "instanceId": instance_id,
-                "pid": running.pid,
-                "port": config.port,
-                "host": config.host,
-                "command": cmd_display,
-                "effectiveConfig": {
-                    "model_path": config.model_path,
-                    "alias": config.alias,
-                    "host": config.host,
-                    "port": config.port,
-                    "api_key": config.api_key,
-                    "api_key_file": config.api_key_file,
-                    "ssl_key_file": config.ssl_key_file,
-                    "ssl_cert_file": config.ssl_cert_file,
-                    "path_prefix": config.path_prefix,
-                    "api_prefix": config.api_prefix,
-                    "embedding": config.embedding,
-                    "reranking": config.reranking,
-                },
-            }),
-        )
-        .ok();
+        emit_server_started(&app, &instance_id, running.pid, &cmd_display, &config, config_saved);
 
         let config_dir = state.config_dir.lock().unwrap().clone();
-        if register_restored_runtime_instance(&app, &running.instance_id, running.pid) {
-            reconnect_runtime_instance_logs(&running.instance_id, running.pid, &config_dir, app);
+        if let Some(attachment) = register_restored_runtime_instance(&app, &running.instance_id, &running) {
+            reconnect_runtime_instance_logs(&running.instance_id, attachment, &config_dir, app);
         }
         timing.finish("success");
         return Ok(());
@@ -3195,27 +3186,27 @@ async fn start_server_impl(
     .ok();
 
     // Atomic check-and-insert prevents starting the same instance twice.
+    let launch_record = RunningInstance {
+        private_console: cfg!(windows),
+        graceful_exit_safe,
+        instance_id: instance_id.clone(),
+        pid,
+        port: config.port,
+        host: config.host.clone(),
+        start_time,
+        executable_path: executable_path.to_string_lossy().to_string(),
+        telemetry_session_id: telemetry_session_id.clone(),
+        workload: workload.as_str().to_string(),
+        launch_config: Some(config.clone()),
+    };
+    let launched_process = Arc::new(launch_record.process());
+    crate::runtime_service::instance_ownership_changed();
     let duplicate_start = {
         let mut running = state.running.lock().unwrap();
         if running.contains_key(&instance_id) {
             true
         } else {
-            running.insert(
-                instance_id.clone(),
-                RunningInstance {
-                    private_console: cfg!(windows),
-                    graceful_exit_safe,
-                    instance_id: instance_id.clone(),
-                    pid,
-                    port: config.port,
-                    host: config.host.clone(),
-                    start_time,
-                    executable_path: executable_path.to_string_lossy().to_string(),
-                    telemetry_session_id: telemetry_session_id.clone(),
-                    workload: workload.as_str().to_string(),
-                    launch_config: Some(config.clone()),
-                },
-            );
+            running.insert(instance_id.clone(), launch_record);
             false
         }
     };
@@ -3236,92 +3227,55 @@ async fn start_server_impl(
     }
 
     // Persist running state to disk immediately via unified atomic writes to avoid races.
-    let previous_instance = state
-        .instances
-        .lock()
-        .unwrap()
-        .insert(instance_id.clone(), config.clone());
-    let running_snapshot = state.running.lock().unwrap().clone();
-    let persisted_instance_id = instance_id.clone();
-    let persisted_config = config.clone();
-    if let Err(persist_error) = crate::commands::config::update_and_persist(&state, |global| {
-        global.running = running_snapshot;
-        global
-            .instances
-            .insert(persisted_instance_id, persisted_config);
-    }) {
-        {
-            let mut running = state.running.lock().unwrap();
-            if running
-                .get(&instance_id)
-                .map(|current| current.pid == pid)
-                .unwrap_or(false)
+    let publish_config = crate::commands::config::persist_started_instance(
+        state.inner(), &instance_id, saved_at_start.as_ref(), (!cold_recovery).then_some(&config),
+    );
+    let config_saved = match publish_config {
+        Ok(saved) => saved,
+        Err(persist_error) => {
             {
-                running.remove(&instance_id);
+                let mut running = state.running.lock().unwrap();
+                if running
+                    .get(&instance_id)
+                    .map(|current| launched_process.matches(current))
+                    .unwrap_or(false)
+                {
+                    running.remove(&instance_id);
+                }
             }
+            let _ = crate::commands::telemetry::finish_run_session(
+                telemetry_session_id.as_deref(),
+                None,
+                "persistence-failed",
+            );
+            let message = match terminate_spawned_child(&mut child) {
+                Ok(()) => format!(
+                    "Server start was rolled back because runtime state could not be persisted: {persist_error}"
+                ),
+                Err(cleanup_error) => format!(
+                    "Runtime state persistence failed: {persist_error}; {cleanup_error}"
+                ),
+            };
+            mark_checkpoint_unexpected_exit(state.inner(), &app, &instance_id, pid);
+            return Err(AppError::new("RUNTIME_STATE_PERSIST_FAILED", message, true)
+                .with_context("instanceId", instance_id));
         }
-        {
-            let mut instances = state.instances.lock().unwrap();
-            if let Some(previous) = previous_instance {
-                instances.insert(instance_id.clone(), previous);
-            } else {
-                instances.remove(&instance_id);
-            }
-        }
-        let _ = crate::commands::telemetry::finish_run_session(
-            telemetry_session_id.as_deref(),
-            None,
-            "persistence-failed",
-        );
-        let message = match terminate_spawned_child(&mut child) {
-            Ok(()) => format!(
-                "Server start was rolled back because runtime state could not be persisted: {persist_error}"
-            ),
-            Err(cleanup_error) => format!(
-                "Runtime state persistence failed: {persist_error}; {cleanup_error}"
-            ),
-        };
-        mark_checkpoint_unexpected_exit(state.inner(), &app, &instance_id, pid);
-        return Err(AppError::new("RUNTIME_STATE_PERSIST_FAILED", message, true)
-            .with_context("instanceId", instance_id));
-    }
+    };
 
-    app.emit(
-        "server-started",
-        serde_json::json!({
-            "instanceId": instance_id,
-            "pid": pid,
-            "port": config.port,
-            "host": config.host,
-            "command": cmd_display,
-            "effectiveConfig": {
-                "model_path": config.model_path,
-                "alias": config.alias,
-                "host": config.host,
-                "port": config.port,
-                "api_key": config.api_key,
-                "api_key_file": config.api_key_file,
-                "ssl_key_file": config.ssl_key_file,
-                "ssl_cert_file": config.ssl_cert_file,
-                "path_prefix": config.path_prefix,
-                "api_prefix": config.api_prefix,
-                "embedding": config.embedding,
-                "reranking": config.reranking,
-            },
-        }),
-    )
-    .ok();
+    emit_server_started(&app, &instance_id, pid, &cmd_display, &config, config_saved);
 
     // Log tail thread: read the log file written directly by llama-server.
     let app_tail = app.clone();
     let id_tail = instance_id.clone();
     let log_path_tail = log_path.clone();
     let telemetry_session_tail = telemetry_session_id.clone();
+    let tail_process = Arc::clone(&launched_process);
+    let monitor_process = Arc::clone(&launched_process);
     std::thread::spawn(move || {
         tail_log_file(
             &log_path_tail,
             &id_tail,
-            pid,
+            tail_process,
             telemetry_session_tail,
             workload,
             Some(log_writer),
@@ -3344,14 +3298,12 @@ async fn start_server_impl(
                 let st = app_clone.state::<AppState>();
                 {
                     let mut r = st.running.lock().unwrap();
-                    if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
-                        r.remove(&id);
+                    if !r.get(&id).is_some_and(|ri| launched_process.matches(ri)) {
+                        return;
                     }
+                    r.remove(&id);
                 }
-                {
-                    let mut restored = st.restored_runtime_instances.lock().unwrap();
-                    restored.remove(&format!("{}:{}", id, pid));
-                }
+                forget_log_attachment(st.inner(), &id, &launched_process);
                 mark_checkpoint_unexpected_exit(st.inner(), &app_clone, &id, pid);
                 let _ = crate::commands::telemetry::finish_run_session(
                     telemetry_session_monitor.as_deref(),
@@ -3362,7 +3314,7 @@ async fn start_server_impl(
                     if global
                         .running
                         .get(&id)
-                        .map(|current| current.pid == pid)
+                        .map(|current| launched_process.matches(current))
                         .unwrap_or(false)
                     {
                         global.running.remove(&id);
@@ -3402,7 +3354,7 @@ async fn start_server_impl(
         let st2 = app_clone.state::<AppState>();
         let removed = {
             let mut r = st2.running.lock().unwrap();
-            if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
+            if r.get(&id).is_some_and(|ri| launched_process.matches(ri)) {
                 r.remove(&id).is_some()
             } else {
                 false
@@ -3410,10 +3362,7 @@ async fn start_server_impl(
         };
         if removed {
             mark_checkpoint_unexpected_exit(st2.inner(), &app_clone, &id, pid);
-            {
-                let mut restored = st2.restored_runtime_instances.lock().unwrap();
-                restored.remove(&format!("{}:{}", id, pid));
-            }
+            forget_log_attachment(st2.inner(), &id, &launched_process);
             let _ = crate::commands::telemetry::finish_run_session(
                 telemetry_session_monitor.as_deref(),
                 exit_code,
@@ -3423,7 +3372,7 @@ async fn start_server_impl(
                 if global
                     .running
                     .get(&id)
-                    .map(|current| current.pid == pid)
+                    .map(|current| launched_process.matches(current))
                     .unwrap_or(false)
                 {
                     global.running.remove(&id);
@@ -3464,7 +3413,7 @@ async fn start_server_impl(
     std::thread::spawn(move || {
         monitor_loop(
             &id_metrics,
-            pid,
+            monitor_process,
             MonitorLoopConfig {
                 endpoint_base: endpoint_base_metrics,
                 api_key: api_key_metrics,
@@ -3729,10 +3678,11 @@ pub(crate) fn advance_health_state(
 
 fn monitor_loop(
     instance_id: &str,
-    expected_pid: u32,
+    process: Arc<InstanceProcess>,
     config: MonitorLoopConfig,
     app: tauri::AppHandle,
 ) {
+    let expected_pid = process.pid;
     let MonitorLoopConfig {
         endpoint_base,
         api_key,
@@ -3742,7 +3692,7 @@ fn monitor_loop(
     } = config;
     crate::commands::monitoring::start_frame_loop(
         instance_id.to_string(),
-        expected_pid,
+        Arc::clone(&process),
         telemetry_session_id.clone(),
         workload,
         app.clone(),
@@ -3755,7 +3705,7 @@ fn monitor_loop(
         let guard = st.running.lock().unwrap();
         guard
             .get(instance_id)
-            .map(|r| r.pid == expected_pid)
+            .map(|r| process.matches(r))
             .unwrap_or(false)
     };
 
@@ -3779,7 +3729,7 @@ fn monitor_loop(
             break;
         }
         if !is_recorded_process_alive(expected_pid) {
-            cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
+            cleanup_running_instance(&app, instance_id, &process, "process-exited");
             break;
         }
 
@@ -3805,7 +3755,7 @@ fn monitor_loop(
             recover_gui_checkpoint_process(
                 app.clone(),
                 instance_id.to_string(),
-                expected_pid,
+                Arc::clone(&process),
                 launch_config.clone(),
             );
             break;
@@ -3843,7 +3793,7 @@ fn monitor_loop(
             let state = app.state::<AppState>();
             let running = state.running.lock().unwrap().get(instance_id).cloned();
             let router = state.proxy_router_runtime.lock().unwrap().clone();
-            if let Some(running) = running.filter(|run| run.pid == expected_pid) {
+            if let Some(running) = running.filter(|run| process.matches(run)) {
                 crate::checkpoint_idle::poll(&state.checkpoint_coordinator, &running, slots, || {
                     router.as_ref().map(|r| r.target_snapshot(instance_id).active_requests).unwrap_or(0)
                 });
@@ -4035,10 +3985,7 @@ pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<Stri
         .restored_runtime_instances
         .lock()
         .unwrap()
-        .retain(|key| {
-            key.split_once(':')
-                .is_some_and(|(instance_id, _)| remaining_ids.contains(instance_id))
-        });
+        .retain(|id, _| remaining_ids.contains(id));
     failures
 }
 
@@ -4220,34 +4167,34 @@ async fn stop_server_impl(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let ri = state.running.lock().unwrap().get(&instance_id).cloned();
-    if ri.is_none() {
+    let Some(ri) = state.running.lock().unwrap().get(&instance_id).cloned() else {
         return Ok(());
-    }
+    };
+    let process = ri.process();
     let runtime_managed = state
         .runtime_managed_instances
         .lock()
         .unwrap()
-        .contains(&instance_id);
+        .get(&instance_id)
+        == Some(&process);
     if crate::runtime_service::manages_instances() && runtime_managed {
         crate::runtime_service::stop_instance(instance_id.clone()).await?;
-        let removed = state.running.lock().unwrap().remove(&instance_id);
-        state
-            .runtime_managed_instances
-            .lock()
-            .unwrap()
-            .remove(&instance_id);
-        {
-            let mut restored = state.restored_runtime_instances.lock().unwrap();
-            let prefix = format!("{}:", instance_id);
-            restored.retain(|key| !key.starts_with(&prefix));
-        }
-        if let Some(removed) = removed {
+        crate::runtime_service::instance_ownership_changed();
+        let removed = {
+            let mut running = state.running.lock().unwrap();
+            if running.get(&instance_id).is_some_and(|current| !process.matches(current)) {
+                return Ok(());
+            }
+            running.remove(&instance_id)
+        };
+        // Keep the last daemon owner so a late subscriber can observe this stop.
+        if removed.is_some() {
+            forget_log_attachment(state.inner(), &instance_id, &process);
             crate::commands::config::update_and_persist(&state, |global| {
                 if global
                     .running
                     .get(&instance_id)
-                    .is_some_and(|current| current.pid == removed.pid)
+                    .is_some_and(|current| process.matches(current))
                 {
                     global.running.remove(&instance_id);
                 }
@@ -4270,69 +4217,40 @@ async fn stop_server_impl(
         .lock()
         .unwrap()
         .remove(&instance_id);
-    if let Some(ref ri) = ri {
-        if !running_instance_matches_live_process(ri) {
-            cleanup_running_instance(&app, &instance_id, ri.pid, "identity-mismatch");
-            return Ok(());
-        }
+    if !running_instance_matches_live_process(&ri) {
+        cleanup_running_instance(&app, &instance_id, &process, "identity-mismatch");
+        return Ok(());
     }
-
-    let checkpoint_resume_phase = if let Some(ref running) = ri {
-        checkpoint_before_termination(&app, &instance_id, running).await
-    } else {
-        None
-    };
-    let killed = ri.as_ref().is_some_and(terminate_running_instance);
-
-    if killed {
-        if let Some(ref running) = ri {
-            if let Ok(status) = state
-                .checkpoint_coordinator
-                .mark_stopped(&instance_id, running.pid)
-            {
-                emit_checkpoint_status(&app, &status);
-            }
+    let checkpoint_resume_phase = checkpoint_before_termination(&app, &instance_id, &ri).await;
+    if terminate_running_instance(&ri) {
+        if let Ok(status) = state.checkpoint_coordinator.mark_stopped(&instance_id, ri.pid) {
+            emit_checkpoint_status(&app, &status);
         }
         let removed = {
             let mut running = state.running.lock().unwrap();
             if running
                 .get(&instance_id)
-                .is_some_and(|current| Some(current.pid) == ri.as_ref().map(|item| item.pid))
+                .is_some_and(|current| process.matches(current))
             {
                 running.remove(&instance_id)
             } else {
                 None
             }
         };
-        if removed.is_none() {
+        let Some(removed) = removed else {
             return Ok(());
-        }
-        {
-            let mut restored = state.restored_runtime_instances.lock().unwrap();
-            let prefix = format!("{}:", instance_id);
-            restored.retain(|key| !key.starts_with(&prefix));
-        }
+        };
+        forget_log_attachment(state.inner(), &instance_id, &process);
         let _ = crate::commands::telemetry::finish_run_session(
-            removed
-                .as_ref()
-                .and_then(|item| item.telemetry_session_id.as_deref()),
+            removed.telemetry_session_id.as_deref(),
             None,
             "manual-stop",
         );
-        let persist_result = if let Some(ref ri) = ri {
-            crate::commands::config::update_and_persist(&state, |global| {
-                if global
-                    .running
-                    .get(&instance_id)
-                    .map(|current| current.pid == ri.pid)
-                    .unwrap_or(false)
-                {
-                    global.running.remove(&instance_id);
-                }
-            })
-        } else {
-            Ok(())
-        };
+        let persist_result = crate::commands::config::update_and_persist(&state, |global| {
+            if global.running.get(&instance_id).is_some_and(|current| process.matches(current)) {
+                global.running.remove(&instance_id);
+            }
+        });
         app.emit(
             "server-stopped",
             serde_json::json!({
@@ -4347,16 +4265,16 @@ async fn stop_server_impl(
             format!("Server stopped, but its runtime state could not be persisted: {error}")
         })
     } else {
-        if let (Some(running), Some(ready_phase)) = (ri.as_ref(), checkpoint_resume_phase) {
+        if let Some(ready_phase) = checkpoint_resume_phase {
             if let Ok(status) = state.checkpoint_coordinator.resume_after_stop_failure(
                 &instance_id,
-                running.pid,
+                ri.pid,
                 ready_phase,
             ) {
                 emit_checkpoint_status(&app, &status);
             }
         }
-        if let Some(running) = ri.as_ref() { state.checkpoint_coordinator.request_stop(&instance_id, running.pid, false); }
+        state.checkpoint_coordinator.request_stop(&instance_id, ri.pid, false);
         // Process is still running; do not emit server-stopped so the frontend stays running.
         // The monitor thread cleans up when the process actually exits.
         Err("无法终止进程".into())
@@ -4467,26 +4385,22 @@ pub(crate) fn running_instance_matches_live_process(running: &RunningInstance) -
 fn cleanup_running_instance(
     app: &tauri::AppHandle,
     instance_id: &str,
-    expected_pid: u32,
+    process: &InstanceProcess,
     reason: &str,
 ) -> bool {
     let state = app.state::<AppState>();
     let removed = {
         let mut running = state.running.lock().unwrap();
         match running.get(instance_id) {
-            Some(current) if current.pid == expected_pid => running.remove(instance_id),
+            Some(current) if process.matches(current) => running.remove(instance_id),
             _ => None,
         }
     };
     let Some(ri) = removed else {
         return false;
     };
-    mark_checkpoint_unexpected_exit(state.inner(), app, instance_id, expected_pid);
-    {
-        let mut restored = state.restored_runtime_instances.lock().unwrap();
-        let prefix = format!("{}:", instance_id);
-        restored.retain(|key| !key.starts_with(&prefix));
-    }
+    mark_checkpoint_unexpected_exit(state.inner(), app, instance_id, process.pid);
+    forget_log_attachment(state.inner(), instance_id, process);
     let _ = crate::commands::telemetry::finish_run_session(
         ri.telemetry_session_id.as_deref(),
         None,
@@ -4496,7 +4410,7 @@ fn cleanup_running_instance(
         if global
             .running
             .get(instance_id)
-            .map(|current| current.pid == expected_pid)
+            .map(|current| process.matches(current))
             .unwrap_or(false)
         {
             global.running.remove(instance_id);
@@ -5035,24 +4949,38 @@ fn parse_llama_metric_sample(
 pub fn register_restored_runtime_instance(
     app: &tauri::AppHandle,
     instance_id: &str,
-    pid: u32,
-) -> bool {
-    let restore_key = format!("{}:{}", instance_id, pid);
+    record: &RunningInstance,
+) -> Option<Arc<InstanceProcess>> {
     let state = app.state::<AppState>();
-    let mut restored = state.restored_runtime_instances.lock().unwrap();
-    let prefix = format!("{}:", instance_id);
-    restored.retain(|key| !key.starts_with(&prefix) || key == &restore_key);
-    restored.insert(restore_key)
+    let owner = record.process();
+    let running = state.running.lock().unwrap();
+    if !running.get(instance_id).is_some_and(|current| owner.matches(current)) {
+        return None;
+    }
+    let mut attached = state.restored_runtime_instances.lock().unwrap();
+    if attached.get(instance_id).map(Arc::as_ref) == Some(&owner) {
+        return None;
+    }
+    let attachment = Arc::new(owner);
+    attached.insert(instance_id.to_owned(), Arc::clone(&attachment));
+    Some(attachment)
+}
+
+pub(crate) fn forget_log_attachment(state: &AppState, instance_id: &str, owner: &InstanceProcess) {
+    let mut attached = state.restored_runtime_instances.lock().unwrap();
+    if attached.get(instance_id).map(Arc::as_ref) == Some(owner) {
+        attached.remove(instance_id);
+    }
 }
 
 pub fn reconnect_running_instance(
     instance_id: &str,
-    pid: u32,
+    process: Arc<InstanceProcess>,
     config: &InstanceConfig,
     config_dir: &std::path::Path,
     app: tauri::AppHandle,
 ) {
-    reconnect_instance_logs(instance_id, pid, config_dir, app.clone(), true);
+    reconnect_instance_logs(instance_id, RestoredLogOwner::Desktop(Arc::clone(&process)), config_dir, app.clone());
 
     // Metrics recovery: restart monitor_loop and keep recording with the new session.
     {
@@ -5081,7 +5009,7 @@ pub fn reconnect_running_instance(
         std::thread::spawn(move || {
             monitor_loop(
                 &id_metrics,
-                pid,
+                process,
                 MonitorLoopConfig {
                     endpoint_base,
                     api_key: ak,
@@ -5099,19 +5027,23 @@ pub fn reconnect_running_instance(
 /// second lifecycle or metrics monitor in the GUI process.
 pub fn reconnect_runtime_instance_logs(
     instance_id: &str,
-    pid: u32,
+    attachment: Arc<InstanceProcess>,
     config_dir: &std::path::Path,
     app: tauri::AppHandle,
 ) {
-    reconnect_instance_logs(instance_id, pid, config_dir, app, false);
+    reconnect_instance_logs(instance_id, RestoredLogOwner::Runtime(attachment), config_dir, app);
+}
+
+enum RestoredLogOwner {
+    Desktop(Arc<InstanceProcess>),
+    Runtime(Arc<InstanceProcess>),
 }
 
 fn reconnect_instance_logs(
     instance_id: &str,
-    pid: u32,
+    owner: RestoredLogOwner,
     config_dir: &std::path::Path,
     app: tauri::AppHandle,
-    parse_performance: bool,
 ) {
     if let Err(error) = validate_instance_id(instance_id) {
         eprintln!("Refusing to reconnect an invalid instance log path: {error}");
@@ -5119,25 +5051,20 @@ fn reconnect_instance_logs(
     }
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
     let id_log = instance_id.to_string();
+    let process = match owner {
+        RestoredLogOwner::Runtime(process) => {
+            std::thread::spawn(move || tail_log_file_read_only(&log_path, &id_log, process, app));
+            return;
+        }
+        RestoredLogOwner::Desktop(process) => process,
+    };
     let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
         .ok()
         .flatten();
     let workload = crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
         .unwrap_or(ModelWorkload::Inference);
     std::thread::spawn(move || {
-        if parse_performance {
-            tail_log_file(
-                &log_path,
-                &id_log,
-                pid,
-                telemetry_session_id,
-                workload,
-                None,
-                app,
-            );
-        } else {
-            tail_log_file_read_only(&log_path, &id_log, pid, app);
-        }
+        tail_log_file(&log_path, &id_log, process, telemetry_session_id, workload, None, app);
     });
 }
 
@@ -5734,9 +5661,19 @@ fn emit_log_batches(app: &tauri::AppHandle, instance_id: &str, lines: &[String])
 fn tail_log_file_read_only(
     log_path: &std::path::Path,
     instance_id: &str,
-    expected_pid: u32,
+    owner: Arc<InstanceProcess>,
     app: tauri::AppHandle,
 ) {
+    let current_owner = || {
+        let state = app.state::<AppState>();
+        let running = state.running.lock().unwrap();
+        let current = running.get(instance_id)?;
+        let attached = state.restored_runtime_instances.lock().unwrap();
+        Some(owner.matches(current) && attached.get(instance_id).is_some_and(|active| Arc::ptr_eq(active, &owner)))
+    };
+    if current_owner() != Some(true) {
+        return;
+    }
     let mut last_size = 0_u64;
     let mut pending = Vec::new();
     if log_path.exists() {
@@ -5753,6 +5690,10 @@ fn tail_log_file_read_only(
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
+        let still_running = match current_owner() {
+            Some(false) => return, // The log path now belongs to another process lifetime.
+            value => value.is_some(),
+        };
         let current_size = match std::fs::metadata(log_path) {
             Ok(metadata) => metadata.len(),
             Err(_) => 0,
@@ -5777,16 +5718,6 @@ fn tail_log_file_read_only(
             emit_log_batches(&app, instance_id, &lines);
         }
 
-        let still_running = {
-            let state = app.state::<AppState>();
-            let running = state
-                .running
-                .lock()
-                .unwrap()
-                .get(instance_id)
-                .is_some_and(|running| running.pid == expected_pid);
-            running
-        };
         if !still_running {
             if !pending.is_empty() {
                 let line = String::from_utf8_lossy(&pending).trim().to_string();
@@ -5802,12 +5733,13 @@ fn tail_log_file_read_only(
 fn tail_log_file(
     log_path: &std::path::Path,
     instance_id: &str,
-    expected_pid: u32,
+    process: Arc<InstanceProcess>,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
     log_writer: Option<Arc<CappedLogWriter>>,
     app: tauri::AppHandle,
 ) {
+    let expected_pid = process.pid;
     let parser = PerfParser::new(workload);
     let mut tasks: HashMap<u32, TaskPerfState> = HashMap::new();
     let mut last_completed: Option<TaskPerfState> = None;
@@ -5992,7 +5924,7 @@ fn tail_log_file(
             let guard = st.running.lock().unwrap();
             guard
                 .get(instance_id)
-                .map(|running| running.pid == expected_pid)
+                .map(|running| process.matches(running))
                 .unwrap_or(false)
         };
         if !still_running {
