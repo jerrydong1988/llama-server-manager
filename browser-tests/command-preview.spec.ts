@@ -1,6 +1,17 @@
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { exportShellCommand } from '../src/store/commandFormatting'
 import { buildCommandPreview } from '../src/components/InstanceManager/commandPreview'
+import type { GeneratedServerCommand } from '../src/store/types'
+import manualPreview from '../scripts/fixtures/manual-command-preview.json' with { type: 'json' }
+
+test('the Rust preview contract retains manual argv and camelCase diagnostics', () => {
+  const response: GeneratedServerCommand = manualPreview
+  const preview = buildCommandPreview(response.command)
+  expect(preview.executable).toBe('llama-server')
+  expect(preview.maskedCommand).toEqual(['llama-server', '--model', 'two words.gguf', '--temp', '0.5', '--temp', '0.75', '--port', '18123'])
+  expect(response.unsupportedFlags).toEqual([])
+  expect(response.emittedOverrideKeys).toEqual([])
+})
 
 const engine = `C:\\AI Engines\\${'long-engine-folder-'.repeat(8)}\\llama-server.exe`
 const model = `C:\\模型目录 with spaces\\${'LongModelName'.repeat(15)}\\Qwen3.8-Q8_0.gguf`

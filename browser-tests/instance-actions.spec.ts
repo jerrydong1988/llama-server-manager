@@ -29,8 +29,17 @@ test('saving then returning reveals the selected instance and retains the list f
   await expect(search).toHaveValue('Group')
   await expect(engine).toHaveValue(engineId)
   await expect(page.locator('.instance-list-row')).toHaveCount(2)
-  await page.locator('[data-nav-id="dashboard"]').click()
-  await page.locator('[data-nav-id="instances"]').click()
+  // Return before the lazy dashboard module loads, as on a first visit.
+  const dashboardModule = '**/components/Dashboard/Dashboard.tsx*'
+  let releaseDashboard!: () => void
+  const pending = new Promise<void>(resolve => { releaseDashboard = resolve })
+  await page.route(dashboardModule, async route => { await pending; await route.continue() })
+  try {
+    await Promise.all([page.waitForRequest(dashboardModule), page.locator('[data-nav-id="dashboard"]').click()])
+    await page.locator('[data-nav-id="instances"]').click()
+  } finally {
+    releaseDashboard()
+  }
   await expect(beta).toHaveAttribute('aria-selected', 'true')
   await expect(beta).toBeInViewport({ ratio: 0.99 })
   await page.locator('.instance-list-row').getByText('Group Alpha', { exact: true }).click()

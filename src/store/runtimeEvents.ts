@@ -46,6 +46,10 @@ let scanModelDebounce: ReturnType<typeof setTimeout> | null = null
 let sysMetricsTimer: ReturnType<typeof setTimeout> | null = null
 let sysMetricsInFlight = false
 let runtimeManagedIds = new Set<string>()
+
+function reportedHealth(status?: string): 'ok' | 'fail' | 'pending' {
+  return status === 'ok' || status === 'fail' ? status : 'pending'
+}
 let lastReportedRuntimeStatusError: string | null = null
 let runtimeBridgeWarnings = new Set<string>()
 let managementDownloadRefresh = 0
@@ -266,6 +270,7 @@ export function registerGlobalStoreListeners(
 
   registerListener<{
     running: Record<string, { pid: number; host: string; port: number; startTime: number }>
+    health?: Record<string, string>
     previouslyManaged?: string[]
     lastError?: string | null
     checkpoints?: Record<string, CheckpointStatus>
@@ -277,10 +282,9 @@ export function registerGlobalStoreListeners(
     if (hasCheckpointSnapshot) checkpointSnapshotReceived = true
     const running = event.payload.running || {}
     const nextManagedIds = new Set(Object.keys(running))
-    const previousManagedIds = new Set([
-      ...runtimeManagedIds,
-      ...(event.payload.previouslyManaged || []),
-    ])
+    // Current hosts explicitly report remembered daemon owners, excluding any
+    // replacement now owned by the foreground. Older payloads omit this list.
+    const previousManagedIds = new Set(event.payload.previouslyManaged ?? runtimeManagedIds)
     runtimeManagedIds = nextManagedIds
     store.setState(state => ({
       runtimeWarnings: runtimeBridgeWarnings.size > 0 || recoveredCheckpointWarning !== null
@@ -296,6 +300,7 @@ export function registerGlobalStoreListeners(
             ...instance,
             status: 'running',
             startTime: runtime.startTime > 0 ? runtime.startTime * 1000 : instance.startTime,
+            healthCheck: event.payload.health ? reportedHealth(event.payload.health[instance.id]) : instance.healthCheck,
           }
         }
         if (previousManagedIds.has(instance.id)) {
@@ -368,7 +373,7 @@ export function registerGlobalStoreListeners(
     port: number
     host: string
     command: string
-    effectiveConfig?: Partial<InstanceConfig>
+    effectiveConfig?: Partial<InstanceConfig> | null
   }>(store, 'server-started', (event) => {
     lastReportedRuntimeStatusError = null
     const state = store.getState()
@@ -423,11 +428,7 @@ export function registerGlobalStoreListeners(
 
   registerListener<{ instanceId: string; status: string }>(store, 'health-status', (event) => {
     store.getState().updateInstance(event.payload.instanceId, {
-      healthCheck: event.payload.status === 'ok'
-        ? 'ok'
-        : event.payload.status === 'fail'
-          ? 'fail'
-          : 'pending',
+      healthCheck: reportedHealth(event.payload.status),
     })
   })
 

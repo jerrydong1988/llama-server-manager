@@ -212,6 +212,10 @@ async function run() {
 
   const sharedMcp = await managementClient({ cli, app: executable, data }).mcp()
   try {
+    const legacyPreview = await sharedMcp.tool('instances.validate', { id: 'shared-managed' })
+    assert.equal(fs.realpathSync.native(legacyPreview.command[0]), fs.realpathSync.native(engine))
+    assert.equal((await call('instances.get', { id: 'shared-managed' })).data.config.engine_id, '',
+      'preview can resolve the default for legacy configs without persisting a binding')
     const before = (await call('instances.get', { id: 'shared-managed' })).data
     await mutate('instances.update', { id: 'shared-managed', revision: before.revision,
       patch: { name: 'Renamed shared preset', engine_id: engineId, temp: 0.72, host: '127.0.0.1', port: sharedPort } })
@@ -250,6 +254,38 @@ async function run() {
 
   const port = await freePort()
   const secret = 'management-fixture-secret-1234567890'
+  const capture = path.join(engineDir, 'capture-argv')
+  fs.writeFileSync(capture, '')
+  async function comparePreviewAndStart(id, mode) {
+    const configFile = path.join(data, 'configs', 'instances.json')
+    const mtime = () => fs.statSync(configFile, { bigint: true }).mtimeNs
+    const probeCount = () => fs.existsSync(capture + '.probes') ? fs.statSync(capture + '.probes').size : 0
+    const before = { mtime: mtime(), probes: probeCount() }
+    const t0 = performance.now()
+    const preview = (await call('instances.validate', { id })).data
+    const t1 = performance.now()
+    const warm = await lifecycleMcp.tool('instances.validate', { id })
+    const t2 = performance.now()
+    assert.deepEqual(warm, preview, 'CLI and MCP validation must agree for the saved revision')
+    assert.equal(mtime(), before.mtime, 'read-only validation must not persist instance settings')
+    assert.equal(probeCount(), before.probes, 'validation must reuse previously probed inventory')
+    const started = Date.now()
+    await mutate('instances.start', { id })
+    const expected = preview.command.slice(1).map(arg => arg === '[REDACTED]' ? secret : arg)
+    const portIndex = expected.indexOf('--port')
+    assert.ok(portIndex >= 0)
+    const healthUrl = `http://127.0.0.1:${expected[portIndex + 1]}/health`
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await fetch(healthUrl).catch(() => null))?.ok) break
+      if (attempt === 29) throw new Error('fixture did not become healthy')
+      await wait(200)
+    }
+    assert.deepEqual(fs.readFileSync(capture, 'utf8').split('\0'), expected,
+      'engine must receive the validated argv in order')
+    console.log(JSON.stringify({ launchContract: mode, firstCliPreviewMs: Math.round(t1 - t0),
+      warmMcpPreviewMs: Math.round(t2 - t1), requestToEngineArgsMs: Math.round(fs.statSync(capture).mtimeMs - started),
+      requestToHealthObservedMs: Date.now() - started, extraPreviewProbes: 0, previewConfigWrites: 0 }))
+  }
   let revision = (await call('service.status')).data.revision
   await mutate('instances.create', { id: 'agent-fixture', revision, config: { name: 'Agent fixture', engine_id: engineId, model_path: model, host: '127.0.0.1', port, launch_mode: 'manual', manual_command: `"${engine}" --model "${model}" --host 127.0.0.1 --api-key ${secret}`, api_key: secret } })
   const configured = await call('instances.get', { id: 'agent-fixture' })
@@ -272,14 +308,10 @@ async function run() {
   const command = cloned.data.result.validation.command
   assert.equal(command[command.indexOf('--temp') + 1], '0.12345679')
   assert.equal(command[command.indexOf('--top-p') + 1], '0.95')
-  await mutate('instances.delete', { id: 'decimal-clone', revision: cloned.data.result.revision })
-  await mutate('instances.start', { id: 'agent-fixture' })
-  for (let attempt = 0; attempt < 30; attempt++) {
-    const response = await fetch(`http://127.0.0.1:${port}/health`).catch(() => null)
-    if (response?.ok) break
-    if (attempt === 29) throw new Error('fixture did not start on the manual fallback port')
-    await wait(200)
-  }
+  await comparePreviewAndStart('decimal-clone', 'managed')
+  await mutate('instances.stop', { id: 'decimal-clone' })
+  await mutate('instances.delete', { id: 'decimal-clone', revision: (await call('service.status')).data.revision })
+  await comparePreviewAndStart('agent-fixture', 'manual')
   const inference = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` }, body: JSON.stringify({ messages: [{ role: 'user', content: 'fixture' }] }) }).then(response => response.json())
   assert.equal(inference.choices[0].message.content, 'fixture-ok')
   const health = await call('instances.health', { id: 'agent-fixture' })

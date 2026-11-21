@@ -5,7 +5,12 @@ use std::{
 };
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let capture = std::env::current_exe().unwrap().with_file_name("capture-argv");
     if args.iter().any(|arg| matches!(arg.as_str(), "--version" | "--help" | "-h")) {
+        if capture.is_file() {
+            std::fs::OpenOptions::new().create(true).append(true)
+                .open(capture.with_extension("probes")).unwrap().write_all(b".").unwrap();
+        }
         let marker = std::env::current_exe().unwrap().with_file_name("probe-delay-ms");
         if let Ok(value) = std::fs::read_to_string(marker) {
             let millis = value.trim().parse::<u64>().unwrap().min(4000);
@@ -17,8 +22,11 @@ fn main() {
         return;
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("llama-server management test fixture\n--model FNAME\n--host HOST\n--port PORT\n--alias NAME\n--metrics\n--slots\n--props\n--api-key KEY\n--ctx-size N\n--threads N\n--n-gpu-layers N\n--parallel N\n--no-warmup\n--temp N\n--top-p N\n--mirostat-lr N\n--xtc-threshold N\n--adaptive-decay N");
+        println!("llama-server management test fixture\n-m, --model FNAME\n--host HOST\n--port PORT\n-a, --alias NAME\n--metrics\n--slots\n--props\n--api-key KEY\n--ctx-size N\n--threads N\n--n-gpu-layers N\n--parallel N\n--no-warmup\n--temp N\n--top-p N\n--mirostat-lr N\n--xtc-threshold N\n--adaptive-decay N");
         return;
+    }
+    if capture.is_file() {
+        std::fs::write(&capture, args[1..].join("\0")).unwrap();
     }
     let value = |flag: &str| {
         args.iter()

@@ -135,7 +135,7 @@ assert.match(coreSliceSource, /engine scan failed:/, 'engine scan failures must 
 assert.match(serverSource, /stdout_pump\.join\(\)/, 'server exit must drain stdout before final telemetry parsing')
 assert.match(serverSource, /stderr_pump\.join\(\)/, 'server exit must drain stderr before final telemetry parsing')
 assert.match(serverSource, /ENGINE_PREVIEW_MATCH_CACHE_TTL/, 'command previews must reuse a short-lived executable verification result')
-assert.match(serverSource, /trusted_engine_capabilities\(state\.inner\(\), &config, &engine_exe, false\)/, 'real launches must bypass the preview verification cache')
+assert.match(serverSource, /LaunchPlan::resolve\(state\.inner\(\), config, &engine_exe, LaunchPurpose::Start, &mut timing\)/, 'real launches must request start-time identity verification')
 assert.doesNotMatch(serverSource, /"metrics-update"/, 'the backend must not emit an event without a frontend consumer')
 assert.match(mainSource, /terminate_all_servers_for_exit/, 'application exit must terminate managed server processes')
 assert.match(telemetrySource, /TELEMETRY_DROPPED_WRITES\.fetch_add/, 'telemetry queue pressure must be observable')

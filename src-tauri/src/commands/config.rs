@@ -107,6 +107,8 @@ fn delete_instance_configuration(
     global.instance_order.retain(|id| id != instance_id);
     persist_global_config_unlocked(&directory, &global)?;
     *state.instances.lock().unwrap() = global.instances.clone();
+    state.runtime_managed_instances.lock().unwrap().remove(instance_id);
+    state.restored_runtime_instances.lock().unwrap().remove(instance_id);
     let revision = MANAGEMENT_REVISION.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
     crate::runtime_service::mark_config_sync_pending();
     Ok(serde_json::json!({"deleted":instance_id,"revision":management_config_revision(&global),
@@ -208,6 +210,42 @@ where
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     update_fn(&mut global);
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
+}
+
+/// A running process keeps its immutable launch config. A concurrent edit is
+/// the configuration for the *next* start and must survive this transaction.
+pub(crate) fn persist_started_instance(
+    state: &AppState,
+    id: &str,
+    saved_at_start: Option<&InstanceConfig>,
+    effective: Option<&InstanceConfig>,
+) -> Result<bool, String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let directory = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&directory)?;
+    global.running = state.running.lock().unwrap().clone();
+    publish_launch_settings(&mut global, &state.instances, id, saved_at_start, effective, |updated| {
+        persist_global_config_unlocked(&directory, updated).map(|_| ())
+    })
+}
+
+fn publish_launch_settings(
+    global: &mut GlobalConfig,
+    shared: &Mutex<HashMap<String, InstanceConfig>>,
+    id: &str,
+    expected: Option<&InstanceConfig>,
+    effective: Option<&InstanceConfig>,
+    persist: impl FnOnce(&GlobalConfig) -> Result<(), String>,
+) -> Result<bool, String> {
+    let update = effective.filter(|_| global.instances.get(id) == expected);
+    if let Some(config) = update {
+        global.instances.insert(id.to_owned(), config.clone());
+    }
+    persist(global)?;
+    if let Some(config) = update {
+        shared.lock().unwrap().insert(id.to_owned(), config.clone());
+    }
+    Ok(update.is_some())
 }
 
 /// Persists an engine-name snapshot before publishing it to shared memory. Keeping both
@@ -582,10 +620,9 @@ pub async fn load_config(
     // Restore log capture, metrics, and the single authoritative health monitor.
     let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
     for (id, ri) in &global.running {
-        if !crate::commands::server::register_restored_runtime_instance(&app, id, ri.pid) {
+        let Some(attachment) = crate::commands::server::register_restored_runtime_instance(&app, id, ri) else {
             continue;
-        }
-        let pid = ri.pid;
+        };
         let app_reconnect = app.clone();
         let config_dir = config_dir.clone();
 
@@ -603,17 +640,17 @@ pub async fn load_config(
                 .runtime_managed_instances
                 .lock()
                 .unwrap()
-                .insert(id.clone());
+                .insert(id.clone(), ri.process());
             crate::commands::server::reconnect_runtime_instance_logs(
                 id,
-                pid,
+                attachment,
                 &config_dir,
                 app_reconnect,
             );
         } else {
             crate::commands::server::reconnect_running_instance(
                 id,
-                pid,
+                attachment,
                 &launch_config,
                 &config_dir,
                 app_reconnect,
@@ -708,6 +745,29 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_publishes_after_commit_and_preserves_concurrent_edits_and_recovery_settings() {
+        let original = InstanceConfig { name: "original".into(), ..Default::default() };
+        let newer = InstanceConfig { name: "edited".into(), ..original.clone() };
+        let launched = InstanceConfig { name: "normalized".into(), ..original.clone() };
+        for (current, cold, fail) in [(&original, false, false), (&newer, false, false),
+            (&newer, true, false), (&original, false, true), (&newer, false, true)] {
+            let mut global = default_global_config();
+            global.instances.insert("id".into(), current.clone());
+            let shared = Mutex::new(global.instances.clone());
+            let result = publish_launch_settings(&mut global, &shared, "id", Some(&original),
+                (!cold).then_some(&launched), |record| {
+                    assert_eq!(shared.lock().unwrap()["id"], *current);
+                    let expected = if !cold && current == &original { &launched } else { current };
+                    assert_eq!(record.instances["id"], *expected);
+                    if fail { Err("write failed".into()) } else { Ok(()) }
+                });
+            if fail { assert!(result.is_err()) } else { assert_eq!(result.unwrap(), !cold && current == &original) }
+            let expected = if !fail && !cold && current == &original { &launched } else { current };
+            assert_eq!(shared.lock().unwrap()["id"], *expected);
+        }
+    }
 
     #[test]
     fn removal_rejects_default_and_disabled_route_references() {

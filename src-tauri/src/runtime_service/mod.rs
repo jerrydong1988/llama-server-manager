@@ -1,5 +1,6 @@
 pub mod autostart;
 pub mod protocol;
+mod reconcile;
 mod supervisor;
 mod transport;
 pub mod update;
@@ -809,57 +810,44 @@ fn runtime_status_payload(
     })
 }
 
-pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
+static SNAPSHOT_ORDER: std::sync::LazyLock<reconcile::SnapshotOrder> = std::sync::LazyLock::new(Default::default);
+
+pub(crate) fn begin_status_observation() -> u64 {
+    SNAPSHOT_ORDER.begin()
+}
+
+pub(crate) fn instance_ownership_changed() {
+    SNAPSHOT_ORDER.after_mutation();
+}
+
+pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus, observation: u64) {
     use tauri::{Emitter, Manager};
 
+    let Some(_publication) = SNAPSHOT_ORDER.accept(observation) else { return };
     let state = app.state::<crate::models::AppState>();
-    let previous_managed = state.runtime_managed_instances.lock().unwrap().clone();
-    let next_managed = status
-        .running
-        .keys()
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
-    let mut changed = false;
-    let mut reconnect = Vec::new();
-    {
+    let (changes, previous_managed) = {
         let mut running = state.running.lock().unwrap();
-        for instance_id in previous_managed.difference(&next_managed) {
-            changed |= running.remove(instance_id).is_some();
-            crate::commands::monitoring::remove_instance(instance_id);
-        }
-        for (instance_id, runtime_instance) in &status.running {
-            let differs = running
-                .get(instance_id)
-                .is_none_or(|current| current.pid != runtime_instance.pid);
-            if differs {
-                running.insert(instance_id.clone(), runtime_instance.clone());
-                changed = true;
-            }
-            if differs || !previous_managed.contains(instance_id) {
-                reconnect.push((instance_id.clone(), runtime_instance.pid));
-            }
-        }
+        let mut known = state.runtime_managed_instances.lock().unwrap();
+        let changes = reconcile::InstanceChanges::between(&running, &known, &status.running);
+        changes.apply(&mut running, &mut known);
+        (changes, known.keys().cloned().collect())
+    };
+    for (id, owner) in &changes.stopped {
+        crate::commands::server::forget_log_attachment(state.inner(), id, owner);
+        crate::commands::monitoring::remove_instance(id);
     }
-    // Keep IDs that were managed during this GUI session. The frontend may not
-    // have attached its event listener when the first reconciliation arrives;
-    // retaining the IDs lets later heartbeats still correct a missed stop event.
-    state
-        .runtime_managed_instances
-        .lock()
-        .unwrap()
-        .extend(next_managed.iter().cloned());
     *state.proxy_bound_addr.lock().unwrap() = status
         .proxy
         .running
         .then(|| status.proxy.bound_addr.clone());
     *state.proxy_last_error.lock().unwrap() = status.proxy.last_error.clone();
 
-    for (instance_id, pid) in reconnect {
-        if crate::commands::server::register_restored_runtime_instance(app, &instance_id, pid) {
+    for &(instance_id, instance) in &changes.reconnect {
+        if let Some(attachment) = crate::commands::server::register_restored_runtime_instance(app, instance_id, instance) {
             let config_dir = state.config_dir.lock().unwrap().clone();
             crate::commands::server::reconnect_runtime_instance_logs(
-                &instance_id,
-                pid,
+                instance_id,
+                attachment,
                 &config_dir,
                 app.clone(),
             );
@@ -881,10 +869,9 @@ pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServ
         let _ = app.emit("perf-update", performance);
     }
 
-    if changed {
-        let snapshot = state.running.lock().unwrap().clone();
+    if changes.running_changed() {
         let _ = crate::commands::config::update_and_persist(&state, |global| {
-            global.running = snapshot;
+            global.running = state.running.lock().unwrap().clone();
         });
     }
     let _ = app.emit(
@@ -934,6 +921,7 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
+            let observation = begin_status_observation();
             let result = if first {
                 first = false;
                 synchronize_from_app(&app).await
@@ -949,7 +937,7 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
                 }
             };
             match result {
-                Ok(status) => reconcile_app_runtime(&app, &status),
+                Ok(status) => reconcile_app_runtime(&app, &status, observation),
                 Err(error) if update::is_update_pause(&error) => {}
                 Err(error) => {
                     use tauri::Emitter;

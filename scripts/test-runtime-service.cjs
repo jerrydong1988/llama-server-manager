@@ -391,6 +391,12 @@ http.createServer((request, response) => {
 
 async function main() {
   const executable = debugExecutable()
+  // Optionally exercise an actual upgrade. Only the old daemon uses this
+  // binary; the replacement always runs the newly built Manager.
+  const previous = process.env.LSM_TEST_PREVIOUS_RUNTIME_EXE
+  if (previous && (!path.isAbsolute(previous) || !fs.statSync(previous).isFile())) {
+    throw new Error('LSM_TEST_PREVIOUS_RUNTIME_EXE must name an existing absolute executable')
+  }
   if (!fs.existsSync(executable)) {
     throw new Error(`debug runtime executable is missing: ${executable}; run cargo build first`)
   }
@@ -440,7 +446,7 @@ async function main() {
   const proxyPort = await reserveLoopbackPort()
   const proxyBlocker = net.createServer()
   const launchedPids = new Set()
-  const contenders = Array.from({ length: 4 }, () => spawnRuntime(executable, dataDir))
+  const contenders = Array.from({ length: 4 }, () => spawnRuntime(previous || executable, dataDir))
   const serviceProcesses = new Set(contenders)
   let service = contenders[0]
 
@@ -605,6 +611,20 @@ async function main() {
     if (routedBeforeUpgrade.status !== 200 || !routedBeforeUpgrade.body.includes('runtime-smoke-response')) {
       throw new Error(`runtime did not forward the pre-upgrade request: ${JSON.stringify(routedBeforeUpgrade)}`)
     }
+
+    const beforeMismatch = (await request(endpoint, token, { command: 'get_status' }, 'before-mismatch')).reply.payload
+    const rejectedDetach = await request(endpoint, token, {
+      command: 'prepare_background_detach',
+      payload: {
+        revision: initialRevision + 1, proxy_config: proxyConfig, instances: { [launchSpec.instance_id]: launchSpec.config },
+        expected_running: { [launchSpec.instance_id]: { ...started.reply.payload, start_time: started.reply.payload.start_time + 1 } },
+      },
+    }, 'detach-with-obsolete-process-identity')
+    assert.ok(rejectedDetach.error)
+    const afterMismatch = (await request(endpoint, token, { command: 'get_status' }, 'after-mismatch')).reply.payload
+    assert.equal(afterMismatch.background_enabled, beforeMismatch.background_enabled)
+    assert.equal(afterMismatch.running[launchSpec.instance_id].pid, firstInstancePid)
+    assert.equal(afterMismatch.proxy.running, true)
 
     const detached = await request(
       endpoint,

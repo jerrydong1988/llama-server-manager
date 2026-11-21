@@ -126,7 +126,7 @@ assert.match(
 )
 assert.doesNotMatch(shared, /['"]mistral['"]/, 'removed built-in template must not remain selectable')
 assert.doesNotMatch(english, /apply_diff/, 'removed upstream built-in tool must not be advertised')
-assert.match(server, /ENGINE_PARAMETER_UNSUPPORTED/, 'server launch must enforce detected engine capabilities')
+assert.match(read('src-tauri', 'src', 'commands', 'server', 'launch_plan.rs'), /ENGINE_PARAMETER_UNSUPPORTED/, 'server launch must enforce detected engine capabilities')
 assert.match(configPage, /useEngineCompatibility/, 'the configuration page must use engine capability negotiation')
 assert.match(compatibilityHook, /probeEngineCapabilities/, 'selected configured engines must be capability-probed')
 assert.match(configPage, /unsupportedEngineFlags\.length > 0/, 'unsupported active flags must block configuration save')

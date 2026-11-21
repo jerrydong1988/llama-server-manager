@@ -114,6 +114,29 @@ pub fn draft_tokens_ignored(help: &str) -> bool {
     description.to_ascii_lowercase().contains("deprecated and ignored")
 }
 
+pub(crate) fn apply_launch_capabilities(
+    command: &[String],
+    caps: &crate::models::EngineCapabilities,
+) -> AppResult<Vec<String>> {
+    let command = command_for_draft_policy(command, caps.gufo_draft_tokens_ignored == Some(true));
+    let mut unsupported = Vec::new();
+    let mut args = command.iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg.starts_with("--") {
+            if !caps.supported_flags.contains(arg) {
+                unsupported.push(arg);
+            }
+            // Every managed Gufo option takes a value. It can itself begin
+            // with "--", including for --api-key and --served-model-name.
+            args.next();
+        }
+    }
+    if !unsupported.is_empty() {
+        return Err(AppError::new("GUFO_PARAMETER_UNSUPPORTED", format!("Gufo does not advertise: {unsupported:?}"), false));
+    }
+    Ok(command)
+}
+
 /// Preserve the saved legacy value; suppress only the ignored launch argument.
 pub fn command_for_draft_policy(command: &[String], ignored: bool) -> Vec<String> {
     let mut command = command.to_vec();
@@ -459,6 +482,13 @@ mod tests {
         command.extend(["--draft-tokens".into(), "3".into()]);
         assert_eq!(command_for_draft_policy(&command, true), expected);
         assert_eq!(command_for_draft_policy(&command, false), command);
+        let caps = crate::models::EngineCapabilities {
+            gufo_draft_tokens_ignored: Some(true),
+            supported_flags: ["--api-key", "--model", "--served-model-name", "--speculative"]
+                .into_iter().map(str::to_owned).collect(),
+            ..Default::default()
+        };
+        assert_eq!(apply_launch_capabilities(&command, &caps).unwrap(), expected);
     }
 
     #[cfg(windows)]

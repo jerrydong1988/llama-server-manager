@@ -127,6 +127,49 @@ test('instance start reports an immediate transient state while the backend is p
   await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeEnabled()
 })
 
+test('legacy unbound instances persist the host-selected engine before starting', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=unbound-instance')
+  await page.getByRole('button', { name: '启动', exact: true }).first().click()
+  await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeEnabled()
+  const calls = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call =>
+    ['resolve_default_instance_engine', 'save_config', 'start_server'].includes(call.command)))
+  expect(calls.map(call => call.command)).toEqual(['resolve_default_instance_engine', 'save_config', 'start_server'])
+  expect(calls[2].payload).toMatchObject({ config: { engine_id: 'browser-test-engine' } })
+})
+
+test('runtime snapshots retire remembered daemon owners and leave a foreground replacement alone', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/')
+  const row = page.locator('.instance-list-row').first()
+  await expect(row.getByRole('button', { name: '启动', exact: true })).toBeVisible()
+  await page.evaluate(async () => {
+    const id = 'browser-test-instance'
+    await window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-status', {
+      running: { [id]: { pid: 42, host: '127.0.0.1', port: 8080, startTime: 100 } }, previouslyManaged: [id], health: { [id]: 'ok' },
+    })
+  })
+  await expect(row.getByRole('button', { name: '停止', exact: true })).toBeVisible()
+  await expect(row.getByText('正常', { exact: true })).toBeVisible()
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-status', {
+    running: { 'browser-test-instance': { pid: 42, host: '127.0.0.1', port: 8080, startTime: 200 } }, health: {},
+  }))
+  await expect(row.getByText('正常', { exact: true })).toHaveCount(0)
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-status', { running: {}, previouslyManaged: [] }))
+  await expect(row.getByRole('button', { name: '停止', exact: true })).toBeVisible()
+  // Even without a server-stopped event, a later authoritative tombstone converges.
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.emitEvent('runtime-service-status', {
+    running: {}, previouslyManaged: ['browser-test-instance'],
+  }))
+  await expect(row.getByRole('button', { name: '启动', exact: true })).toBeVisible()
+})
+
 test('a transient updater failure is visible and a manual retry discovers the update', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
   await page.goto('/?scenario=updater-retry')

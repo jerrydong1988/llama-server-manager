@@ -239,15 +239,12 @@ pub(super) fn engine(state: &AppState, configured: &str) -> Result<EngineInfo, F
 }
 
 pub(super) fn instance_engine(state: &AppState, config: &InstanceConfig) -> Result<EngineInfo, Failure> {
-    if !config.engine_id.is_empty() {
-        let selected = engine(state, &config.engine_id)?;
-        return if selected.kind == config.engine_kind { Ok(selected) } else { Err(Failure::new("VALIDATION", "Engine type differs from instance type")) };
-    }
-    let default_id = global(state).default_engine_id;
-    let engines = state.engines.lock().unwrap();
-    engines.iter().find(|e| e.kind == config.engine_kind && crate::path_utils::paths_equal(Path::new(&e.id), Path::new(&default_id)))
-        .or_else(|| engines.iter().find(|e| e.kind == config.engine_kind)).cloned()
-        .ok_or_else(|| Failure::new("NOT_FOUND", "No engine of the configured type is available"))
+    use crate::engine_selection::{with_instance_engine, SelectionError};
+    with_instance_engine(state, config.engine_kind, &config.engine_id, Clone::clone).map_err(|error| match error {
+        SelectionError::ConfiguredMissing => Failure::new("NOT_FOUND", "configured engine is unavailable; refresh engines or select a valid engine"),
+        SelectionError::KindMismatch => Failure::new("VALIDATION", "Engine type differs from instance type"),
+        SelectionError::NoneAvailable => Failure::new("NOT_FOUND", "No engine of the configured type is available"),
+    })
 }
 
 pub(super) async fn ensure_inventory(app: &tauri::AppHandle) -> Result<(), Failure> {
@@ -682,7 +679,7 @@ pub(super) async fn instances(
         }
         "instances.validate" | "instances.start" => {
             ensure_inventory(app).await?;
-            let configured = if let Some(config) = args.get("config") {
+            let mut configured = if let Some(config) = args.get("config") {
                 let mut defaults = value(InstanceConfig::default())?;
                 patch_instance(&mut defaults, config)?;
                 let configured: InstanceConfig = serde_json::from_value(defaults)
@@ -693,14 +690,14 @@ pub(super) async fn instances(
                 instance(&state, &id)?
             };
             let selected = instance_engine(&state, &configured)?;
+            configured.engine_id = selected.id;
             if name == "instances.validate" {
                 value(server::generate_server_command(configured, selected.exe, state).await?)
             } else {
                 server::start_server(
                     id.clone(),
                     configured,
-                    selected.exe,
-                    selected.backend,
+                    Some(selected.exe),
                     state,
                     app.clone(),
                 )

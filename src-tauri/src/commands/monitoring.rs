@@ -175,7 +175,7 @@ struct InstanceMonitoringState {
     session_id: Option<String>,
     workload: ModelWorkload,
     registered_at: i64,
-    frame_loop_pid: Option<u32>,
+    frame_loop_owner: Option<Arc<crate::models::InstanceProcess>>,
     system: Option<Timed<SystemMetrics>>,
     llama: Option<Timed<LlamaMetricSample>>,
     tasks: Option<Timed<TaskSnapshot>>,
@@ -192,7 +192,7 @@ impl InstanceMonitoringState {
             session_id: session_id.map(ToString::to_string),
             workload,
             registered_at: now,
-            frame_loop_pid: None,
+            frame_loop_owner: None,
             system: None,
             llama: None,
             tasks: None,
@@ -671,7 +671,7 @@ pub(crate) fn remove_instance(instance_id: &str) {
 
 pub fn start_frame_loop(
     instance_id: String,
-    expected_pid: u32,
+    owner: Arc<crate::models::InstanceProcess>,
     session_id: Option<String>,
     workload: ModelWorkload,
     app: tauri::AppHandle,
@@ -693,12 +693,12 @@ pub fn start_frame_loop(
                 .clone()
         };
         let mut state = shared.lock().unwrap();
-        let same_process = state.frame_loop_pid == Some(expected_pid);
+        let same_process = state.frame_loop_owner.as_deref() == Some(owner.as_ref());
         state.reset_session(session_id.as_deref(), workload, now, !same_process);
         if same_process {
             false
         } else {
-            state.frame_loop_pid = Some(expected_pid);
+            state.frame_loop_owner = Some(Arc::clone(&owner));
             true
         }
     };
@@ -713,13 +713,13 @@ pub fn start_frame_loop(
             let running = state.running.lock().unwrap();
             running
                 .get(&instance_id)
-                .is_some_and(|instance| instance.pid == expected_pid)
+                .is_some_and(|instance| owner.matches(instance))
         };
         if !is_current_process {
             let mut registry = MONITORING.lock().unwrap();
             let owns_state = registry
                 .get(&instance_id)
-                .is_some_and(|state| state.lock().unwrap().frame_loop_pid == Some(expected_pid));
+                .is_some_and(|state| state.lock().unwrap().frame_loop_owner.as_deref() == Some(owner.as_ref()));
             if owns_state {
                 registry.remove(&instance_id);
             }

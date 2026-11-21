@@ -1,0 +1,5 @@
+{
+  "command": ["llama-server", "--model", "two words.gguf", "--temp", "0.5", "--temp", "0.75", "--port", "18123"],
+  "unsupportedFlags": [],
+  "emittedOverrideKeys": []
+}

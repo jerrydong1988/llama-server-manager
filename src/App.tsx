@@ -439,7 +439,7 @@ function AppInner() {
           <PageFallback label={t.common?.loading || 'Loading...'} />
         </div>
       ) : (
-        <Suspense fallback={<PageFallback label={t.common?.loading || 'Loading...'} />}>
+        <Suspense key={activeTab} fallback={<PageFallback label={t.common?.loading || 'Loading...'} />}>
           {renderTabContent(activeTab)}
         </Suspense>
       )}

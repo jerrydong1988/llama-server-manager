@@ -598,6 +598,9 @@ if (BROWSER_SCENARIO === 'multimodal-mismatch') {
 if (BROWSER_SCENARIO === 'empty-model-roots') {
   state.model_dirs = []
 }
+if (BROWSER_SCENARIO === 'unbound-instance') {
+  state.instances[INSTANCE_ID].engine_id = ''
+}
 if (BROWSER_SCENARIO === 'windows-path-aliases') {
   engine.dir = '\\\\?\\c:\\browser-test\\engine\\build'
   engine.exe = `${engine.dir}\\llama-server.exe`
@@ -1621,6 +1624,12 @@ mockIPC((command, payload) => {
     case 'stop_server': {
       delete control.state.running[String(args.instanceId)]
       return null
+    }
+    case 'resolve_default_instance_engine': {
+      const matching = engines.filter(engine => (engine.kind ?? 'llama_cpp') === args.engineKind)
+      const selected = matching.find(engine => engine.id === control.state.default_engine_id) ?? matching[0]
+      if (!selected) throw { code: 'CONFIGURED_ENGINE_REQUIRED', message: 'No matching engine in inventory' }
+      return selected.id
     }
     case 'start_server': {
       const instanceId = String(args.instanceId ?? '')
