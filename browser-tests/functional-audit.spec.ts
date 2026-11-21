@@ -12,13 +12,15 @@ test('router lifecycle refreshes CAS revision before a subsequent save', async (
   await open(page, 'proxy')
   await page.getByRole('button', { name: '停止', exact: true }).click()
   await expect(page.getByRole('button', { name: '启动', exact: true })).toBeEnabled()
+  await page.getByRole('tab', {name:'路由设置'}).click()
+  await page.locator('summary').filter({hasText:'模型调度'}).click()
   await page.getByRole('combobox', { name: '调度策略' }).selectOption('weighted')
   await page.getByTestId('proxy-header-save').click()
   await expect.poll(() => page.evaluate(async () => {
     const result = await (window as any).__TAURI_INTERNALS__.invoke('get_proxy_config')
     return result.routing_strategy
   })).toBe('weighted')
-  await expect(page.getByTestId('proxy-header-save')).toBeEnabled()
+  await expect(page.getByTestId('proxy-header-save')).toHaveCount(0)
   await page.getByRole('button', { name: '启动', exact: true }).click()
   await expect(page.getByRole('button', { name: '停止', exact: true })).toBeEnabled()
   await page.getByRole('combobox', { name: '调度策略' }).selectOption('priorityFailover')
@@ -28,7 +30,8 @@ test('router lifecycle refreshes CAS revision before a subsequent save', async (
 
 test('late router save receipt retains edits entered while saving', async ({ page }) => {
   await open(page, 'proxy')
-  await expect(page.getByTestId('proxy-header-save')).toBeVisible()
+  await page.getByRole('tab', {name:'路由设置'}).click()
+  await page.locator('summary').filter({hasText:'模型调度'}).click()
   await page.evaluate(() => {
     const api = (window as any).__TAURI_INTERNALS__
     const original = api.invoke

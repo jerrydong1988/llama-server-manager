@@ -44,8 +44,9 @@ test('usage shows partial counts, coverage, cache and stable key filters', async
   await expect(panel).toContainText('0.0%')
   await expect(panel.getByRole('row').filter({ hasText: 'key-a' })).toHaveCount(0)
   await expect(page.getByRole('combobox', { name: '使用统计 API Key' }).locator('option[value="key-a"]')).toHaveCount(1)
-  await page.getByRole('tab', { name: '路由配置' }).click()
-  await expect(page.getByRole('heading', { name: 'API 兼容入口' })).toBeVisible()
+  await page.getByRole('tab', { name: '路由设置' }).click()
+  await page.locator('summary').filter({hasText:'监听与 API 入口'}).click()
+  await expect(page.locator('summary').filter({hasText:'API 兼容入口'})).toBeVisible()
 })
 test('usage exports a safe full summary and clears only after explicit confirmation', async ({ page }) => {
   await page.goto('/?scenario=proxy-routing')

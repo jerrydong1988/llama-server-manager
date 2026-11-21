@@ -35,6 +35,6 @@ for (const lang of ['zh-CN', 'en-US']) {
     expect(narrowRouter!.y).toBeGreaterThan(narrowInstances!.y + narrowInstances!.height)
     await page.screenshot({ path: testInfo.outputPath(`dashboard-${lang}-narrow.png`) })
     await router.getByRole('button').click()
-    await expect(page.getByRole('tab', { name: lang === 'zh-CN' ? '路由配置' : 'Routing settings' })).toBeVisible()
+    await expect(page.getByRole('tab', { name: lang === 'zh-CN' ? '路由与实例' : 'Routes & instances' })).toHaveAttribute('aria-selected','true')
   })
 }
