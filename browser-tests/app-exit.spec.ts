@@ -132,6 +132,8 @@ test('destructive background shutdown stays in routing settings behind confirmat
   })
   await page.goto('/?scenario=background-runtime-active')
 
+  await page.getByRole('tab', {name:'路由设置'}).click()
+  await page.locator('summary').filter({hasText:'独立后台运行时'}).click()
   await page.getByRole('button', { name: '停止后台实例与路由' }).click()
   const dialog = page.getByRole('alertdialog', { name: '确认停止全部后台工作负载？' })
   await expect(dialog).toBeVisible()
