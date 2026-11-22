@@ -29,7 +29,7 @@ export type MonitoringTrendPoint = {
 
 export type FleetThroughputSeries = {
   mode: 'inference' | 'vector' | 'mixed' | 'empty'
-  unit: 'tok/s' | 'input tok/s'
+  unit: 'tok/s' | 'input tok/s' | 'items/s'
   points: MonitoringTrendPoint[]
   current: number | null
   vectorItemsPerSecond: number
@@ -247,6 +247,8 @@ export function buildFleetThroughputSeries(
   currentByInstance: Record<string, MonitoringFrame>,
   instanceIds: string[],
   startTs = Number.NEGATIVE_INFINITY,
+  vectorMetric: 'input' | 'items' = 'input',
+  now?: number,
 ): FleetThroughputSeries {
   const currentFrames = instanceIds
     .map(instanceId => currentByInstance[instanceId])
@@ -270,6 +272,10 @@ export function buildFleetThroughputSeries(
   const included = (frame: MonitoringFrame) => primaryIsInference
     ? frame.workload === 'inference'
     : frame.workload !== 'inference'
+  const reading = (frame: MonitoringFrame) => {
+    const value = !primaryIsInference && vectorMetric === 'items' ? frame.itemsPerSecond : frame.throughput
+    return frame.state === 'unavailable' || value == null || !Number.isFinite(value) ? null : Math.max(value, 0)
+  }
   const representedIds = new Set(representativeFrames.map(frame => frame.instanceId))
   const expectedInstanceIds = new Set([
     ...representativeFrames.filter(included).map(frame => frame.instanceId),
@@ -283,9 +289,7 @@ export function buildFleetThroughputSeries(
       .filter(frame => frame.ts >= startTs && included(frame))
       .map(frame => ({
         ts: frame.ts,
-        value: frame.state !== 'unavailable' && frame.throughput != null && Number.isFinite(frame.throughput)
-          ? Math.max(frame.throughput, 0)
-          : null,
+        value: reading(frame),
       }))
     : null
   const byTimestamp = new Map<number, { ts: number; values: Map<string, number> }>()
@@ -304,9 +308,9 @@ export function buildFleetThroughputSeries(
       if (!included(frame)) continue
       const bucketTs = Math.floor(frame.ts / 5000) * 5000
       const bucket = byTimestamp.get(bucketTs) || { ts: frame.ts, values: new Map<string, number>() }
-      if (frame.state !== 'unavailable' && frame.throughput != null && Number.isFinite(frame.throughput)) {
-        bucket.values.set(instanceId, Math.max(frame.throughput, 0))
-      }
+      const value = reading(frame)
+      if (value != null) bucket.values.set(instanceId, value)
+      else bucket.values.delete(instanceId)
       bucket.ts = Math.max(bucket.ts, frame.ts)
       byTimestamp.set(bucketTs, bucket)
     }
@@ -319,16 +323,16 @@ export function buildFleetThroughputSeries(
     }))
     .sort((left, right) => left.ts - right.ts)
   const currentValues = currentFrames.filter(included)
-  const current = currentValues.length === expectedInstanceIds.size
-    && currentValues.every(frame => frame.state !== 'unavailable' && frame.throughput != null)
-    ? currentValues.reduce((total, frame) => total + Math.max(frame.throughput || 0, 0), 0)
+  const current = currentValues.length > 0 && currentValues.length === expectedInstanceIds.size
+    && currentValues.every(frame => reading(frame) != null && (now == null || (frame.ts <= now + 1000 && now - frame.ts <= 8000)))
+    ? currentValues.reduce((total, frame) => total + (reading(frame) ?? 0), 0)
     : null
   const vectorItemsPerSecond = currentFrames
     .filter(frame => frame.workload !== 'inference')
     .reduce((total, frame) => total + Math.max(frame.itemsPerSecond || 0, 0), 0)
   return {
     mode,
-    unit: primaryIsInference ? 'tok/s' : 'input tok/s',
+    unit: primaryIsInference ? 'tok/s' : vectorMetric === 'items' ? 'items/s' : 'input tok/s',
     points,
     current,
     vectorItemsPerSecond,

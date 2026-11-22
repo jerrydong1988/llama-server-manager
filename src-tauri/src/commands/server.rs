@@ -3581,6 +3581,9 @@ pub(crate) fn collect_instance_monitor_sample(
         memory_mb,
         uptime_secs,
         gpu_percent: gpu_system.gpu_percent,
+        gpu_temperature_c: gpu_system.gpu_temperature_c,
+        gpu_power_w: gpu_system.gpu_power_w,
+        gpu_board_power_w: gpu_system.gpu_board_power_w,
         vram_used_mb: gpu_system.vram_used_mb,
         vram_total_mb: gpu_system.vram_total_mb,
         system_cpu_percent: gpu_system.system_cpu_percent,
@@ -4634,6 +4637,9 @@ static SYSINFO_CACHE: LazyLock<Mutex<SystemSampler>> = LazyLock::new(|| {
 #[derive(Clone)]
 struct GpuSystemSnapshot {
     cpu_percent: Option<f32>,
+    gpu_temperature_c: Option<f64>,
+    gpu_power_w: Option<f64>,
+    gpu_board_power_w: Option<f64>,
     gpu_percent: Option<f32>,
     vram_used_mb: Option<f64>,
     vram_total_mb: Option<f64>,
@@ -4660,7 +4666,10 @@ fn collect_gpu_and_system() -> GpuSystemSnapshot {
     let snapshot = if let Some(m) = adlx::collect_metrics() {
         GpuSystemSnapshot {
             cpu_percent: m.cpu_percent,
+            gpu_power_w: m.gpu_power_w,
             gpu_percent: m.gpu_percent,
+            gpu_temperature_c: m.gpu_temperature_c,
+            gpu_board_power_w: m.gpu_board_power_w,
             vram_used_mb: m.vram_used_mb,
             vram_total_mb: m.vram_total_mb,
             memory_mb: m.memory_mb,
@@ -4673,7 +4682,10 @@ fn collect_gpu_and_system() -> GpuSystemSnapshot {
     } else if let Some(m) = nvml::collect_metrics() {
         GpuSystemSnapshot {
             cpu_percent: None,
+            gpu_power_w: m.gpu_power_w,
             gpu_percent: m.gpu_percent,
+            gpu_temperature_c: m.gpu_temperature_c,
+            gpu_board_power_w: None,
             vram_used_mb: m.vram_used_mb,
             vram_total_mb: m.vram_total_mb,
             memory_mb: None,
@@ -4686,7 +4698,10 @@ fn collect_gpu_and_system() -> GpuSystemSnapshot {
     } else {
         GpuSystemSnapshot {
             cpu_percent: None,
+            gpu_power_w: None,
             gpu_percent: None,
+            gpu_temperature_c: None,
+            gpu_board_power_w: None,
             vram_used_mb: None,
             vram_total_mb: None,
             memory_mb: None,
@@ -4751,6 +4766,9 @@ pub async fn get_system_metrics(
             memory_mb: (mem * 10.0).round() / 10.0,
             uptime_secs: uptime,
             gpu_percent: gpu_system.gpu_percent,
+            gpu_temperature_c: gpu_system.gpu_temperature_c,
+            gpu_power_w: gpu_system.gpu_power_w,
+            gpu_board_power_w: gpu_system.gpu_board_power_w,
             vram_used_mb: gpu_system.vram_used_mb,
             vram_total_mb: gpu_system.vram_total_mb,
             system_cpu_percent: gpu_system.system_cpu_percent,
@@ -4779,6 +4797,9 @@ pub async fn get_system_health() -> Result<SystemMetrics, String> {
                 .unwrap_or(gpu_system.system_memory_used_mb.unwrap_or(0.0)),
             uptime_secs: 0,
             gpu_percent: gpu_system.gpu_percent,
+            gpu_temperature_c: gpu_system.gpu_temperature_c,
+            gpu_power_w: gpu_system.gpu_power_w,
+            gpu_board_power_w: gpu_system.gpu_board_power_w,
             vram_used_mb: gpu_system.vram_used_mb,
             vram_total_mb: gpu_system.vram_total_mb,
             system_cpu_percent: gpu_system.system_cpu_percent,

@@ -58,6 +58,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   engineDirs: [],
   instanceListView: { selectedId: null, search: '', statusFilter: 'all', engineFilter: 'all' },
   activeConfigInstanceId: null,
+  monitoringInstanceId: '',
   activeTab: (() => {
     try {
       return localStorage.getItem('lastTab') || 'dashboard'

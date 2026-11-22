@@ -54,13 +54,13 @@ function ActiveGuideTour() {
   const pending = configPending ? copy.needSave : step.id === 'models' ? copy.needModel : step.id === 'engines' ? copy.needEngine
     : step.id === 'start' ? copy.needStart : step.id === 'verify' ? copy.needVerify : copy.noInstance
   return (
-    <section ref={panelRef} tabIndex={-1} aria-label={copy.title} data-guide-panel className="max-h-[42vh] shrink-0 overflow-y-auto border-t border-blue-300 bg-white text-slate-900 outline-none shadow-[0_-4px_16px_rgba(15,23,42,0.06)] dark:border-blue-800 dark:bg-slate-900 dark:text-slate-100">
+    <section ref={panelRef} tabIndex={-1} aria-label={copy.title} data-guide-panel className="max-h-[42vh] shrink-0 overflow-y-auto border-t border-ui-line bg-ui-surface text-ui-ink outline-none shadow-[0_-4px_16px_rgba(15,23,42,0.06)]">
       <div className="mx-auto w-full max-w-[1480px] px-4 py-2 sm:px-5">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <Compass className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+            <Compass className="h-4 w-4 shrink-0 text-ui-action-ink" />
             <span className="truncate text-xs font-semibold">{session.mode === 'setup' ? copy.setup : copy.advanced}</span>
-            <span className="shrink-0 text-xs text-slate-500 dark:text-slate-400" data-guide-progress>{progress}</span>
+            <span className="shrink-0 text-xs text-ui-muted" data-guide-progress>{progress}</span>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {!session.complete && <Button size="sm" variant="subtle" onClick={() => close(true)}>{copy.pause}</Button>}
@@ -74,7 +74,7 @@ function ActiveGuideTour() {
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0 flex-1" role="status">
               <h2 className="flex items-center gap-2 font-semibold"><CheckCircle2 className="h-5 w-5 text-emerald-600" />{session.mode === 'setup' ? copy.success : copy.explored}</h2>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{session.mode === 'setup' ? copy.successDetail : copy.exploredDetail}</p>
+              <p className="mt-1 text-sm text-ui-body">{session.mode === 'setup' ? copy.successDetail : copy.exploredDetail}</p>
             </div>
             <Button onClick={() => finish()}>{copy.returnGuide}</Button>
             <Button variant="primary" onClick={() => finish(true)}>{copy.stay}</Button>
@@ -83,8 +83,8 @@ function ActiveGuideTour() {
           <div className="mt-1 grid min-w-0 gap-x-5 gap-y-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,auto)] xl:items-end">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold" data-guide-step-title>{step.title}</h2>
-              {!collapsed && <p className="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">{step.description}</p>}
-              <p role="status" className={`mt-1 text-xs leading-5 ${ready ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500 dark:text-slate-400'}`}>
+              {!collapsed && <p className="mt-1 text-sm leading-5 text-ui-body">{step.description}</p>}
+              <p role="status" className={`mt-1 text-xs leading-5 ${ready ? 'text-emerald-700 dark:text-emerald-300' : 'text-ui-muted'}`}>
                 {configPending ? copy.needSave : away ? (needsInstance ? copy.noInstance : copy.away) : targetStatus === 'missing' ? copy.missing : targetStatus === 'loading' ? copy.loading : ready ? copy.ready : pending}
               </p>
               <div className="mt-1 flex flex-wrap gap-2">

@@ -1,4 +1,9 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function openTelemetryDetails(page: Page, tab: string) {
+  if (tab === 'perf') await page.locator('.monitor-tabs button').nth(2).click()
+  await page.locator(tab === 'perf' ? '[data-monitor-diagnostics] > summary' : '[data-monitor-operations] > summary').click()
+}
 
 test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
@@ -14,6 +19,7 @@ test('performance monitoring keeps global resources independent from the selecte
   await page.goto('/?scenario=monitoring')
 
   await expect(page.getByRole('heading', { name: '性能监控', level: 1 })).toBeVisible()
+  await openTelemetryDetails(page, 'perf')
   const resources = page.locator('section[aria-label="全局系统资源"]')
   await expect(resources).toBeVisible({ timeout: 15_000 })
   await expect(resources).toContainText('9%')
@@ -44,7 +50,7 @@ test('performance monitoring keeps global resources independent from the selecte
     .map(point => point.split(',')[1])
   expect(new Set(yCoordinates).size).toBeGreaterThan(1)
 
-  await page.getByRole('button', { name: /Stopped Monitoring Instance/ }).click()
+  await page.locator('[data-guide="perf-select"] select').selectOption('browser-stopped-instance')
   await expect(page.locator('[data-guide="perf-select"] select')).toHaveValue('browser-stopped-instance')
   await expect(resources).toContainText('9%')
 })
@@ -77,6 +83,7 @@ test('big screen uses the same global resource snapshot and live task throughput
 
   const screenHeading = page.locator('[data-guide="monitoring-header"]').getByRole('heading', { name: '大屏模式', exact: true })
   await expect(screenHeading).toBeVisible({ timeout: 15_000 })
+  await openTelemetryDetails(page, 'bigscreen')
   const trends = page.locator('[data-inference-trends]')
   await expect(trends.locator('[data-chart-kind="bars"]')).toHaveCount(0)
   await expect(trends.locator('[data-chart-kind="line"]')).toBeVisible()
@@ -98,6 +105,7 @@ test('wallboard keeps a reporting subtotal separate from instance health', async
     localStorage.setItem('lastTab', 'bigscreen')
   })
   await page.goto('/?scenario=monitoring')
+  await openTelemetryDetails(page, 'bigscreen')
   const current = page.locator('[data-inference-throughput]').first().locator('[data-phase="decode"]')
   await expect(current).toContainText('25.8 tok/s')
   await page.evaluate(async () => {
@@ -118,6 +126,7 @@ for (const tab of ['perf', 'bigscreen']) {
       localStorage.setItem('lastTab', tab)
     }, tab)
     await page.goto('/?scenario=monitoring')
+    await openTelemetryDetails(page, tab)
     const panel = page.locator('[data-inference-throughput]').first()
     await expect(panel).toContainText('Prefill 输入速度')
     await expect(panel).toContainText('Decode 生成速度')
@@ -168,6 +177,7 @@ for (const tab of ['perf', 'bigscreen']) {
         localStorage.setItem('lastTab', tab)
       }, { tab, language })
       await page.goto('/?scenario=monitoring')
+      await openTelemetryDetails(page, tab)
       await expect(page.locator('[data-inference-throughput]').first()).toBeVisible()
       await expect(page.locator('[data-inference-trends]')).toBeVisible()
       const overflow = await page.locator('[data-inference-throughput], [data-inference-trends]').evaluateAll(elements => elements.filter(element => element.scrollWidth > element.clientWidth + 2).length)

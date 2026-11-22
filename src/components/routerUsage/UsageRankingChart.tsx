@@ -22,26 +22,26 @@ export default function UsageRankingChart({ groups, lang, onFilter, dimension, o
       </SelectInput>
     </div>
     <div className="my-4"><MetricToggle value={metric} onChange={onMetricChange} label={c.rankMetric} lang={lang} /></div>
-    {metric === 'tokens' ? <div className="mb-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-400">
+    {metric === 'tokens' ? <div className="mb-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-ui-muted">
       <span className="flex items-center gap-2"><LegendDot className="bg-blue-500" />{l.input}</span><span className="flex items-center gap-2"><LegendDot className="bg-violet-500" />{l.output}</span>
     </div> : null}
     {!ranked.length ? <ChartEmpty>{l.empty}</ChartEmpty> : <>
       <div className="space-y-1">{ranked.slice(0, 6).map((g, i) => <button key={g.id} type="button" disabled={!g.id} onClick={() => onFilter(dimension, g.id)}
         aria-label={`${c.filter} ${name(g)} · ${g.id}`} title={`${name(g)} · ${g.id}`}
-        className="block w-full min-w-0 rounded-lg px-2 py-2.5 text-left outline-none hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-default dark:hover:bg-slate-950/60">
+        className="block w-full min-w-0 rounded-lg px-2 py-2.5 text-left outline-none hover:bg-ui-hover focus-visible:ring-2 focus-visible:ring-ui-focus disabled:cursor-default">
         <span className="mb-2 flex min-w-0 items-center gap-2 text-xs">
-          <span className="w-4 shrink-0 text-slate-400">{i + 1}</span><span className="min-w-0 flex-1 truncate font-medium">{name(g)}</span>
+          <span className="w-4 shrink-0 text-ui-muted">{i + 1}</span><span className="min-w-0 flex-1 truncate font-medium">{name(g)}</span>
           <strong className="shrink-0 tabular-nums">{g.value == null ? c.unreported : g.value.toLocaleString(lang)}</strong>
-          <span className="w-14 shrink-0 text-right tabular-nums text-slate-500 dark:text-slate-400">{g.value != null && total > 0 ? `${(g.value / total * 100).toFixed(1)}%` : '—'}</span>
+          <span className="w-14 shrink-0 text-right tabular-nums text-ui-muted">{g.value != null && total > 0 ? `${(g.value / total * 100).toFixed(1)}%` : '—'}</span>
         </span>
-        <span className="ml-6 flex h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" aria-hidden="true">
+        <span className="ml-6 flex h-2 overflow-hidden rounded-full bg-ui-inset" aria-hidden="true">
           {metric === 'requests' ? <span className="bg-blue-500" style={{ width: `${(g.value ?? 0) / peak * 100}%` }} /> : <>
             <span className="bg-blue-500" style={{ width: `${g.summary.input / peak * 100}%` }} /><span className="bg-violet-500" style={{ width: `${g.summary.output / peak * 100}%` }} />
           </>}
         </span>
       </button>)}</div>
-      <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">{c.rankHint} {ranked.length > 6 ? c.top : ''}</p>
-      {metric === 'tokens' ? <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{c.partialHint}</p> : null}
+      <p className="mt-3 text-xs leading-5 text-ui-muted">{c.rankHint} {ranked.length > 6 ? c.top : ''}</p>
+      {metric === 'tokens' ? <p className="mt-2 text-xs leading-5 text-ui-muted">{c.partialHint}</p> : null}
     </>}
   </Surface>
 }

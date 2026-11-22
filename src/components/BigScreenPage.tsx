@@ -10,7 +10,6 @@ import {
   FastForward,
   Gauge,
   HardDrive,
-  Monitor,
   Server,
   Terminal,
   Zap,
@@ -32,6 +31,8 @@ import { Badge, joinClassNames } from './ui'
 import { MiniSparkline, TrendChart } from './monitoring/MonitoringPrimitives'
 import { formatBytes, formatBytesPerSecond, formatDuration, formatMs, formatRate, formatTime } from './monitoring/monitoringFormat'
 import { DualThroughput, DualThroughputTrends, InferenceTasks, useMonitoringClock } from './monitoring/InferencePanels'
+import { WallOverview } from './monitoring/WallOverview'
+import './monitoring/workspace.css'
 import { fleetInferenceTrend } from './monitoring/inferenceThroughput'
 import {
   buildActivityFeed,
@@ -85,14 +86,12 @@ export default function BigScreenPage() {
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
   const [speculativeRequests, setSpeculativeRequests] = useState<InferenceRequestSummary[]>([])
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
-  const [refreshing, setRefreshing] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const telemetryInFlightRef = useRef(false)
 
-  const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
+  const refreshTelemetry = useCallback(async () => {
     if (telemetryInFlightRef.current) return
     telemetryInFlightRef.current = true
-    if (!options.silent) setRefreshing(true)
     try {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview'),
@@ -118,13 +117,12 @@ export default function BigScreenPage() {
       setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
       telemetryInFlightRef.current = false
-      if (!options.silent) setRefreshing(false)
     }
   }, [])
 
   useEffect(() => {
     void refreshTelemetry()
-    const timer = window.setInterval(() => void refreshTelemetry({ silent: true }), BIG_SCREEN_TELEMETRY_REFRESH_MS)
+    const timer = window.setInterval(() => void refreshTelemetry(), BIG_SCREEN_TELEMETRY_REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [refreshTelemetry])
 
@@ -151,8 +149,10 @@ export default function BigScreenPage() {
       monitoringCurrentByInstance,
       runningInstanceIds,
       trendStart,
+      'items',
+      trendEnd,
     ),
-    [monitoringCurrentByInstance, monitoringFramesByInstance, runningInstanceIds, trendStart],
+    [monitoringCurrentByInstance, monitoringFramesByInstance, runningInstanceIds, trendStart, trendEnd],
   )
   const trendPoints = downsampleMonitoringPoints(
     fleetThroughput.points.filter(point => point.ts >= trendStart),
@@ -346,31 +346,13 @@ export default function BigScreenPage() {
   const telemetryIssue = telemetryError || overview.last_write_error || (overview.dropped_writes > 0 ? healthLabels.telemetryIssue : null)
 
   return (
-    <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-100 p-3 text-slate-950 dark:bg-slate-950 dark:text-slate-100" data-guide="monitoring-wall">
-      <header data-guide="monitoring-header" className="grid min-h-[72px] grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(220px,1fr)] items-center rounded-lg border border-slate-200 bg-white px-5 shadow-[0_20px_80px_rgba(15,23,42,0.08)] dark:border-slate-700/80 dark:bg-slate-900/90 dark:shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-300/25 dark:bg-blue-400/10 dark:text-blue-200">
-            <Monitor className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="truncate text-lg font-semibold text-slate-950 dark:text-white">Llama Server Manager</div>
-            <div className="truncate text-xs text-slate-500">{labels.wallboard}</div>
-          </div>
-        </div>
-        <div className="text-center">
-          <h1 className="text-3xl font-semibold tracking-wide text-slate-950 dark:text-white">{labels.title}</h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{labels.subtitle}</p>
-        </div>
-        <div className="text-right">
-          <div className="font-mono text-xl font-semibold text-slate-950 dark:text-white">{formatTime(lastUpdatedAt)}</div>
-          <div className="mt-1 text-xs text-slate-500">{refreshing ? labels.refreshing : labels.updated}</div>
-        </div>
-      </header>
-
+    <WallOverview instances={instances} frames={monitoringCurrentByInstance} system={sysMetrics} history={systemMetricsHistory}
+      now={trendEnd} inferenceIds={inferenceIds} decode={decodeTrend} fleet={fleetThroughput}>
+      <div className="space-y-3 pt-3">
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <WallKpi label={labels.serviceStatus} value={statusLabel} detail={`${healthLabels.healthChecks} · ${healthy}/${runningInstances.length}`} tone={statusTone} icon={failed ? <AlertTriangle className="h-8 w-8" /> : <Server className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
-        {hasInference ? <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900"><DualThroughput frames={dualFrames} lang={lang} compact wall /></div>
+        {hasInference ? <div className="rounded-2xl border border-ui-line bg-ui-surface p-4"><DualThroughput frames={dualFrames} lang={lang} compact wall /></div>
           : <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />}
         <WallKpi label={labels.requestPressure} value={pressure.percent == null ? '--' : `${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
         <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
@@ -381,21 +363,21 @@ export default function BigScreenPage() {
           {hasInference ? <DualThroughputTrends prefill={prefillTrend} decode={decodeTrend} start={trendStart} end={trendEnd} lang={lang} wall /> : <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
             <div className="space-y-4">
               <div>
-                <div className="text-xs text-slate-500">{labels.currentThroughput}</div>
+                <div className="text-xs text-ui-muted">{labels.currentThroughput}</div>
                 <div className="mt-2 text-5xl font-semibold text-blue-700 dark:text-blue-300">{formatRate(currentTps, fleetThroughput.unit).replace(` ${fleetThroughput.unit}`, '')}</div>
                 <div className="mt-1 text-sm text-blue-600 dark:text-blue-200">{fleetThroughput.unit}</div>
-                <div className="mt-1 truncate text-xs text-slate-500" title={currentThroughputDetail}>{currentThroughputDetail}</div>
+                <div className="mt-1 truncate text-xs text-ui-muted" title={currentThroughputDetail}>{currentThroughputDetail}</div>
               </div>
               <div className="grid gap-2">
                 <MiniWallStat label={labels.peak} value={formatRate(peakTps, fleetThroughput.unit)} />
                 <MiniWallStat label={labels.avg5m} value={formatRate(avgTps, fleetThroughput.unit)} />
               </div>
             </div>
-            <TrendChart points={trendPoints} rangeStart={trendStart} rangeEnd={trendEnd} emptyText={labels.noSamples} unit={fleetThroughput.unit} className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/50" />
+            <TrendChart points={trendPoints} rangeStart={trendStart} rangeEnd={trendEnd} emptyText={labels.noSamples} unit={fleetThroughput.unit} className="border-ui-line bg-ui-surface" />
           </div>}
-          <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/50">
+          <div className="mt-4 rounded-lg border border-ui-line bg-ui-surface p-3">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{labels.activeRequests}</div>
+              <div className="text-sm font-semibold text-ui-ink">{labels.activeRequests}</div>
               <Badge tone={activeRequestCount > 0 ? 'emerald' : 'slate'}>{activeRequestCount}</Badge>
             </div>
             {hasInference ? <InferenceTasks entries={inferenceIds.map(id => ({ frame: monitoringCurrentByInstance[id], name: instances.find(instance => instance.id === id)?.name }))} lang={lang} /> : null}
@@ -438,7 +420,7 @@ export default function BigScreenPage() {
         <WallPanel
           title={labels.instanceStatus}
           icon={<Server className="h-5 w-5" />}
-          action={<div className="flex gap-3 text-sm"><span className="text-emerald-700 dark:text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-slate-500 dark:text-slate-400">{labels.stopped} {stoppedCount}</span><span className="text-red-700 dark:text-red-300">{labels.error} {errorCount}</span></div>}
+          action={<div className="flex gap-3 text-sm"><span className="text-emerald-700 dark:text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-ui-muted">{labels.stopped} {stoppedCount}</span><span className="text-red-700 dark:text-red-300">{labels.error} {errorCount}</span></div>}
         >
           <div className="space-y-2">
             {instances.length === 0 ? (
@@ -455,8 +437,8 @@ export default function BigScreenPage() {
           action={<div className="flex gap-3 text-sm"><span className="text-blue-700 dark:text-blue-300">{labels.active} {downloadStats.active}</span><span className="text-amber-700 dark:text-amber-300">{labels.queued} {downloadStats.queued}</span><span className="text-red-700 dark:text-red-300">{labels.failed} {downloadStats.failed}</span></div>}
         >
           <div className="space-y-3">
-            <div className="rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/50">
-              <div className="text-xs text-slate-500">{labels.totalSpeed}</div>
+            <div className="rounded-lg border border-ui-line bg-ui-surface p-3">
+              <div className="text-xs text-ui-muted">{labels.totalSpeed}</div>
               <div className="mt-1 text-2xl font-semibold text-blue-700 dark:text-blue-300">{formatBytesPerSecond(downloadStats.speed)}</div>
             </div>
             {recentDownloads.length === 0 ? (
@@ -480,7 +462,7 @@ export default function BigScreenPage() {
         </WallPanel>
       </section>
 
-      <footer className="grid gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500 md:grid-cols-[minmax(0,1fr)_auto] dark:border-slate-800 dark:bg-slate-900/70">
+      <footer className="grid gap-3 rounded-lg border border-ui-line bg-ui-surface px-4 py-3 text-xs text-ui-muted md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="flex min-w-0 flex-wrap gap-5">
           <span>{labels.models}: {modelCount}</span>
           <span>{labels.engines}: {engines.length}</span>
@@ -491,14 +473,15 @@ export default function BigScreenPage() {
           {telemetryIssue || labels.dataLinkNormal}
         </div>
       </footer>
-    </div>
+      </div>
+    </WallOverview>
   )
 }
 
 function WallPanel({ title, icon, action, children }: { title: string; icon: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-950 shadow-[0_18px_54px_rgba(15,23,42,0.08)] dark:border-slate-700/80 dark:bg-slate-900/90 dark:text-slate-100 dark:shadow-[0_18px_54px_rgba(2,6,23,0.32)]">
-      <div className="flex h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700/80">
+    <section className="min-w-0 overflow-hidden rounded-lg border border-ui-line bg-ui-surface text-ui-ink shadow-[0_18px_54px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_54px_rgba(2,6,23,0.32)]">
+      <div className="flex h-12 items-center justify-between gap-3 border-b border-ui-line px-4">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-blue-700 dark:text-blue-300">{icon}</span>
           <h3 className="truncate text-base font-semibold">{title}</h3>
@@ -513,15 +496,15 @@ function WallPanel({ title, icon, action, children }: { title: string; icon: Rea
 function WallKpi({ label, value, detail, tone, icon }: { label: string; value: ReactNode; detail: string; tone: SignalTone; icon: ReactNode }) {
   const toneClass = wallTone(tone)
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-[0_12px_42px_rgba(15,23,42,0.08)] dark:border-slate-700 dark:bg-slate-900/90 dark:shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
+    <div className="min-w-0 rounded-lg border border-ui-line bg-ui-surface px-5 py-4 shadow-[0_12px_42px_rgba(15,23,42,0.08)] dark:shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
       <div className="flex min-w-0 items-center gap-4">
         <div className={joinClassNames('flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border', toneClass.box)}>
           {icon}
         </div>
         <div className="min-w-0">
-          <div className="truncate text-sm text-slate-600 dark:text-slate-400">{label}</div>
+          <div className="truncate text-sm text-ui-muted">{label}</div>
           <div className={joinClassNames('mt-1 truncate text-3xl font-semibold', toneClass.text)} title={String(value)}>{value}</div>
-          <div className="mt-1 truncate text-xs text-slate-500" title={detail}>{detail}</div>
+          <div className="mt-1 truncate text-xs text-ui-muted" title={detail}>{detail}</div>
         </div>
       </div>
     </div>
@@ -533,14 +516,14 @@ function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { 
   const safe = Math.max(0, Math.min(100, Math.round(available ? value : 0)))
   const toneClass = wallTone(tone)
   return (
-    <div className="grid min-w-0 grid-cols-[40px_minmax(0,1fr)_64px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 2xl:grid-cols-[48px_minmax(160px,0.8fr)_78px_minmax(80px,1fr)_110px] dark:border-slate-700 dark:bg-slate-950/50">
+    <div className="grid min-w-0 grid-cols-[40px_minmax(0,1fr)_64px] items-center gap-3 rounded-lg border border-ui-line bg-ui-inset px-4 py-3 2xl:grid-cols-[48px_minmax(160px,0.8fr)_78px_minmax(80px,1fr)_110px]">
       <div className={joinClassNames('flex h-10 w-10 items-center justify-center rounded-lg border', toneClass.box)}>{icon}</div>
       <div className="min-w-0">
-        <div className="truncate text-base font-semibold text-slate-900 dark:text-slate-100">{label}</div>
-        <div className="break-words text-xs leading-4 text-slate-500" title={detail}>{detail}</div>
+        <div className="truncate text-base font-semibold text-ui-ink">{label}</div>
+        <div className="break-words text-xs leading-4 text-ui-muted" title={detail}>{detail}</div>
       </div>
-      <div className="text-3xl font-semibold text-slate-950 dark:text-white">{available ? `${safe}%` : '--'}</div>
-      <div className="hidden h-2 overflow-hidden rounded-full bg-slate-200 2xl:block dark:bg-slate-800">
+      <div className="text-3xl font-semibold text-ui-ink">{available ? `${safe}%` : '--'}</div>
+      <div className="hidden h-2 overflow-hidden rounded-full bg-ui-line 2xl:block">
         <div className={joinClassNames('h-full rounded-full', toneClass.bar)} style={{ width: `${safe}%` }} />
       </div>
       <div className="hidden 2xl:block">
@@ -558,13 +541,13 @@ function ActiveWallRequest({ task }: { task: RunningInferenceTask & { instanceNa
     <div className="grid min-w-0 grid-cols-[72px_minmax(0,1fr)_110px_82px] items-center gap-3 text-sm">
       <span className="text-emerald-700 dark:text-emerald-300">#{task.task_id}</span>
       <div className="min-w-0">
-        <div className="truncate text-slate-700 dark:text-slate-200" title={task.instanceName}>{task.instanceName}</div>
-        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+        <div className="truncate text-ui-body" title={task.instanceName}>{task.instanceName}</div>
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ui-line">
           <div className="h-full rounded-full bg-blue-400" style={{ width: `${isVector ? 100 : progress}%` }} />
         </div>
       </div>
       <span className="text-blue-700 dark:text-blue-200">{isVector ? task.workload : formatRate(task.tg_3s ?? task.tg)}</span>
-      <span className="text-slate-500 dark:text-slate-400">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
+      <span className="text-ui-muted">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
     </div>
   )
 }
@@ -584,9 +567,9 @@ function WallSpeculativeSummary({
         ? labels.recentSessionSource
         : labels.configured
   return (
-    <div data-wall-speculative-analysis className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+    <div data-wall-speculative-analysis className="mt-4 border-t border-ui-line pt-4">
       <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ui-ink">
           <FastForward className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-300" />
           <span className="truncate">{labels.title}</span>
         </div>
@@ -594,10 +577,10 @@ function WallSpeculativeSummary({
       </div>
       {summary.hasData ? (
         <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-[150px_repeat(3,minmax(0,1fr))] xl:items-end">
-          <div className="min-w-0 xl:border-r xl:border-slate-200 xl:pr-4 dark:xl:border-slate-700">
-            <div className="text-xs text-slate-500">{labels.acceptanceRate}</div>
+          <div className="min-w-0 xl:border-r xl:border-ui-line xl:pr-4">
+            <div className="text-xs text-ui-muted">{labels.acceptanceRate}</div>
             <div className="mt-1 text-3xl font-semibold text-violet-700 dark:text-violet-300">{formatPercent(summary.acceptanceRate)}</div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ui-line">
               <div className="h-full rounded-full bg-violet-500" style={{ width: `${Math.round((summary.acceptanceRate || 0) * 100)}%` }} />
             </div>
           </div>
@@ -606,7 +589,7 @@ function WallSpeculativeSummary({
           <WallInlineStat label={labels.avgDraftTime} value={formatMs(summary.avgGenerationTimeMs)} />
         </div>
       ) : (
-        <div className="py-2 text-xs text-slate-500">{labels.waiting}</div>
+        <div className="py-2 text-xs text-ui-muted">{labels.waiting}</div>
       )}
     </div>
   )
@@ -615,8 +598,8 @@ function WallSpeculativeSummary({
 function WallInlineStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-xs text-slate-500" title={label}>{label}</div>
-      <div className="mt-1 truncate text-lg font-semibold text-slate-900 dark:text-slate-100" title={value}>{value}</div>
+      <div className="truncate text-xs text-ui-muted" title={label}>{label}</div>
+      <div className="mt-1 truncate text-lg font-semibold text-ui-ink" title={value}>{value}</div>
     </div>
   )
 }
@@ -638,11 +621,11 @@ function InstanceWallRow({
   const latestSession = sessions.find(session => session.instance_id === instance.id)
   const tone = instance.status === 'error' ? 'red' : isRunning ? 'emerald' : 'slate'
   return (
-    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/50">
+    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-ui-line bg-ui-inset px-3 py-2">
       <Badge tone={tone}>{isRunning ? labels.running : instance.status === 'error' ? labels.error : labels.stopped}</Badge>
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={instance.name}>{instance.name}</div>
-        <div className="truncate font-mono text-xs text-slate-500">{instance.config.host}:{instance.config.port}</div>
+        <div className="truncate text-sm font-semibold text-ui-ink" title={instance.name}>{instance.name}</div>
+        <div className="truncate font-mono text-xs text-ui-muted">{instance.config.host}:{instance.config.port}</div>
       </div>
       <div className="text-right text-sm text-blue-700 dark:text-blue-200">
         {isRunning && (currentFrame?.workload || (instance.config.embedding || instance.config.reranking ? 'embedding' : 'inference')) === 'inference'
@@ -650,7 +633,7 @@ function InstanceWallRow({
           : isRunning && currentFrame
           ? formatRate(currentFrame.throughput, currentFrame.throughputUnit)
           : latestSession?.workload === 'inference'
-            ? <div>{formatRate(latestSession.avg_tokens_per_sec)}<div className="text-xs text-slate-600 dark:text-slate-300">{getInferenceLabels(lang).sessionDecodeAverage}</div></div>
+            ? <div>{formatRate(latestSession.avg_tokens_per_sec)}<div className="text-xs text-ui-body">{getInferenceLabels(lang).sessionDecodeAverage}</div></div>
             : '--'}
       </div>
     </div>
@@ -660,18 +643,18 @@ function InstanceWallRow({
 function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getBigScreenLabels> }) {
   const progress = task.total > 0 ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100)) : 0
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/50">
+    <div className="rounded-lg border border-ui-line bg-ui-inset px-3 py-2">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={task.fileName}>{task.fileName}</div>
+        <div className="min-w-0 truncate text-sm font-semibold text-ui-ink" title={task.fileName}>{task.fileName}</div>
         <Badge tone={downloadTone(task.status)}>{downloadStatusText(task.status, labels)}</Badge>
       </div>
       <div className="mt-2 grid grid-cols-[minmax(0,1fr)_54px] items-center gap-3">
-        <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+        <div className="h-2 overflow-hidden rounded-full bg-ui-line">
           <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
         </div>
-        <span className="text-right text-xs text-slate-500 dark:text-slate-400">{Math.round(progress)}%</span>
+        <span className="text-right text-xs text-ui-muted">{Math.round(progress)}%</span>
       </div>
-      <div className="mt-1 flex justify-between gap-3 text-xs text-slate-500">
+      <div className="mt-1 flex justify-between gap-3 text-xs text-ui-muted">
         <span>{formatBytes(task.downloaded)} / {formatBytes(task.total)}</span>
         <span>{formatBytesPerSecond(task.speed)}</span>
       </div>
@@ -682,12 +665,12 @@ function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: Ret
 function ActivityWallRow({ item }: { item: ActivityFeedItem }) {
   const tone = item.severity === 'critical' ? 'red' : item.severity === 'warning' ? 'amber' : item.severity === 'success' ? 'emerald' : 'blue'
   return (
-    <div className="grid min-w-0 grid-cols-[58px_70px_minmax(0,1fr)] items-center gap-3 border-b border-slate-200 px-1 py-2 last:border-b-0 dark:border-slate-800">
-      <span className="text-xs text-slate-500">{formatTime(item.ts).slice(0, 5)}</span>
+    <div className="grid min-w-0 grid-cols-[58px_70px_minmax(0,1fr)] items-center gap-3 border-b border-ui-line px-1 py-2 last:border-b-0">
+      <span className="text-xs text-ui-muted">{formatTime(item.ts).slice(0, 5)}</span>
       <Badge tone={tone}>{item.label}</Badge>
       <div className="min-w-0">
-        <div className="truncate text-sm text-slate-700 dark:text-slate-200" title={item.title}>{item.title}</div>
-        <div className="truncate text-xs text-slate-500" title={item.detail}>{item.detail}</div>
+        <div className="truncate text-sm text-ui-body" title={item.title}>{item.title}</div>
+        <div className="truncate text-xs text-ui-muted" title={item.detail}>{item.detail}</div>
       </div>
     </div>
   )
@@ -695,17 +678,17 @@ function ActivityWallRow({ item }: { item: ActivityFeedItem }) {
 
 function MiniWallStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/50">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">{value}</div>
+    <div className="rounded-lg border border-ui-line bg-ui-inset p-3">
+      <div className="text-xs text-ui-muted">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-ui-ink">{value}</div>
     </div>
   )
 }
 
 function EmptyDark({ text }: { text: string }) {
   return (
-    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/40">
-      <CheckCircle2 className="mr-2 h-4 w-4 text-slate-400 dark:text-slate-600" />
+    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-ui-line bg-ui-inset px-4 text-center text-sm text-ui-muted">
+      <CheckCircle2 className="mr-2 h-4 w-4 text-ui-muted" />
       {text}
     </div>
   )
@@ -737,7 +720,7 @@ function wallTone(tone: SignalTone) {
     red: { text: 'text-red-700 dark:text-red-300', box: 'border-red-200 bg-red-50 text-red-700 dark:border-red-300/25 dark:bg-red-400/10 dark:text-red-200', bar: 'bg-red-500 dark:bg-red-400' },
     violet: { text: 'text-violet-700 dark:text-violet-300', box: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-300/25 dark:bg-violet-400/10 dark:text-violet-200', bar: 'bg-violet-500 dark:bg-violet-400' },
     cyan: { text: 'text-cyan-700 dark:text-cyan-300', box: 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-300/25 dark:bg-cyan-400/10 dark:text-cyan-200', bar: 'bg-cyan-500 dark:bg-cyan-400' },
-    slate: { text: 'text-slate-700 dark:text-slate-300', box: 'border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-600 dark:bg-slate-800/70 dark:text-slate-200', bar: 'bg-slate-500' },
+    slate: { text: 'text-ui-body', box: 'border-ui-line bg-ui-inset text-ui-body', bar: 'bg-ui-control' },
   }
   return map[tone]
 }

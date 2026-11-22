@@ -584,8 +584,8 @@ Performance Monitoring combines system signals, instance metrics, slots, log tim
 
 ### 查看指标 / Read the Metrics
 
-1. 从左侧选择正在运行的实例，工作负载徽标会显示本次会话实际记录的服务类型。
-2. CPU、内存、GPU 和显存是三类工作负载共用的资源信号。
+1. 在页首选择实例。「实时概览」显示最近五分钟的吞吐、显存、GPU 温度和功率。点击指标卡可展开趋势，生成模型还可切换到预填充速度。
+2. 「历史会话」可查看所选实例的会话记录。「硬件与诊断」可查看本机 CPU、系统内存、驱动传感器及推理诊断。GPU 温度和功率属于主机；缺少读数时显示「—」。
 3. 生成模型查看输出 tokens/s、提示处理速度、排队深度和忙碌槽位。
 4. Embedding：输入 tokens/s、向量项/s 使用最近 60 秒工作窗口，并显示任务耗时 P50 / P95 和整段会话已完成向量项数。
 5. Reranker：输入 tokens/s、文档项/s 使用最近 60 秒工作窗口，并显示任务耗时 P50 / P95 和整段会话已完成文档项数。
@@ -593,8 +593,8 @@ Performance Monitoring combines system signals, instance metrics, slots, log tim
 7. 页面会分别标明日志来源和代理来源。某个来源没有可确认的数据时显示“不可用”或 `--`，不会用 `0` 冒充已测量结果；已测量时间桶内确实空闲时才显示零值。
 8. 历史基线只比较相同模型、工作负载和后端的会话。向量服务的诊断聚焦资源压力、吞吐和 P95 变化，不显示生成模型专用的 KV 缓存、上下文和解码建议。
 
-1. Select a running instance; the workload badge shows the service type recorded for that session.
-2. CPU, memory, GPU, and VRAM are common resource signals across all workloads.
+1. Select an instance at the top. Live overview shows five minutes of throughput, GPU memory, temperature and power. Select a card for its trend, or switch the generation rate to prefill.
+2. Session history lists runs for the selected instance. Hardware & diagnostics includes host CPU, RAM, driver sensors and inference diagnostics. Missing host readings appear as a dash.
 3. Generation workloads show output tokens/s, prompt processing speed, queue depth, and busy slots.
 4. Embedding: input tokens/s and vector items/s over the latest 60-second work window, plus task P50/P95 latency and session-wide completed vector items.
 5. Reranker: input tokens/s and document items/s over the latest 60-second work window, plus task P50/P95 latency and session-wide completed document items.
@@ -630,14 +630,14 @@ Monitoring Wall condenses instances, throughput, request pressure, downloads, lo
 
 ![监控大屏的服务健康、吞吐、压力和活动 / Monitoring wall with health, throughput, pressure, and activity](public/docs/guide/10-monitoring-wall.png)
 
-- 顶部显示更新时间和整体服务状态。
-- KPI 展示运行实例、当前与峰值吞吐、请求压力和告警数。
+- 顶部显示时钟和在线实例数，可进入全屏或返回监控。
+- 主图展示最近五分钟的总解码速度或向量吞吐，旁边显示本机 GPU 温度、功率和显存。展开「运行详情」可查看请求压力、告警、下载和日志。
 - 实例吞吐按实例聚合，避免把同一请求或排队数重复计算。
 - 下载和日志区域用于发现近期失败，不替代下载页或日志页的详细操作。
 - 数据不可用时显示真实空状态或降级信息，不填充模拟指标。
 
-- The header shows update time and overall service status.
-- KPIs cover running instances, current and peak throughput, request pressure, and alerts.
+- The header shows the clock and online instance count, with controls for fullscreen and returning to monitoring.
+- The main chart shows five minutes of fleet decode speed or vector throughput alongside host GPU temperature, power and memory. Open Operational details for request pressure, alerts, downloads and logs.
 - Throughput is aggregated per instance without double-counting request or queue data.
 - Download and log summaries surface recent failures but do not replace detailed pages.
 - Unavailable data remains an honest empty or degraded state.

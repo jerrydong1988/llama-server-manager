@@ -171,7 +171,7 @@ export default function ApiKeysWorkspace({ keys, legacy, busy, active, available
                         .join(' · ') || '—'
                     const open = () => select({ original: k, value: k, isNew: false })
                     return (
-                      <tr key={k.id} data-selected={session?.value.id === k.id} onClick={open}>
+                      <tr key={k.id} className="console-list-row cursor-pointer" data-selected={session?.value.id === k.id} onClick={open}>
                         <td>
                           <button
                             type="button"

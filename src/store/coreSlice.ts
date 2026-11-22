@@ -29,6 +29,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   | 'setEngineDirs'
   | 'setDefaultEngineId'
   | 'setActiveConfigInstanceId'
+  | 'setMonitoringInstanceId'
   | 'setActiveTab'
   | 'setDarkMode'
   | 'loadInitialData'
@@ -90,6 +91,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       set({ defaultEngineId: id })
       void get().saveConfig().catch(() => {})
     },
+    setMonitoringInstanceId: id => set({ monitoringInstanceId: id }),
     setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
     setActiveTab: (tab) => {
       const { activeConfigInstanceId, instanceListView } = get()

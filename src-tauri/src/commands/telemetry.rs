@@ -66,6 +66,7 @@ pub struct TelemetrySessionSummary {
     pub stopped_at: Option<i64>,
     pub duration_secs: Option<i64>,
     pub avg_tokens_per_sec: f64,
+    pub avg_items_per_sec: Option<f64>,
     pub peak_vram_mb: f64,
     pub sample_count: u32,
     pub stop_reason: Option<String>,
@@ -196,9 +197,30 @@ pub struct DiagnosticFinding {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SlotContextUsage {
+    pub ts: i64,
+    pub used: i64,
+    pub capacity: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentVectorActivity {
+    pub id: i64,
+    pub source: String,
+    pub completed_at: i64,
+    pub duration_ms: f64,
+    pub item_count: i64,
+    pub input_tokens: Option<i64>,
+    pub http_status: Option<u16>,
+    pub error_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TelemetrySessionDetail {
     pub samples: Vec<TelemetrySampleSummary>,
     pub requests: Vec<InferenceRequestSummary>,
+    pub vector_activity: Vec<RecentVectorActivity>,
+    pub context_usage: Option<SlotContextUsage>,
     pub analysis: TelemetrySessionAnalysis,
     pub diagnostics: Vec<DiagnosticFinding>,
 }
@@ -1498,6 +1520,12 @@ fn query_telemetry_sessions(
         .prepare(
             "WITH recent_sessions AS MATERIALIZED (
                 SELECT * FROM run_sessions ORDER BY started_at DESC LIMIT ?2
+             ), vector_stats AS (
+                SELECT session_id, SUM(item_count) * 1000.0 /
+                    MAX(1000, MAX(completed_at) - MIN(started_at)) AS avg_items
+                FROM vector_activity_events WHERE source = 'log'
+                  AND session_id IN (SELECT id FROM recent_sessions WHERE workload IN ('embedding','reranker'))
+                GROUP BY session_id
              ), metric_stats AS (
                 SELECT session_id,
                     AVG(CASE WHEN tokens_per_sec > 0 THEN tokens_per_sec END) AS avg_tps,
@@ -1517,8 +1545,9 @@ fn query_telemetry_sessions(
                 COALESCE(m.avg_tps, 0),
                 COALESCE(m.peak_vram, 0),
                 COALESCE(m.sample_count, 0),
-                s.stop_reason
+                s.stop_reason, v.avg_items
              FROM recent_sessions s
+             LEFT JOIN vector_stats v ON v.session_id = s.id
              LEFT JOIN metric_stats m ON m.session_id = s.id
              ORDER BY s.started_at DESC
              ",
@@ -1543,6 +1572,7 @@ fn query_telemetry_sessions(
                 peak_vram_mb: row.get(13)?,
                 sample_count: row.get::<_, i64>(14)?.max(0) as u32,
                 stop_reason: row.get(15)?,
+                avg_items_per_sec: row.get(16)?,
             })
         })
         .map_err(|e| format!("无法查询遥测会话: {e}"))?;
@@ -1578,16 +1608,50 @@ pub async fn get_telemetry_session_detail(
         let samples = samples_for_session(&conn, &session_id, sample_limit)?;
         let requests = inference_requests_for_session(&conn, &session_id, request_limit)?;
         let analysis = query_session_analysis(&conn, &session_id)?;
+        let vector_activity = if analysis.vector_analysis.is_some() {
+            recent_vector_activity(&conn, &session_id, request_limit).map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        };
+        let context_usage = latest_slot_context(&conn, &session_id).map_err(|e| e.to_string())?;
         let diagnostics = query_session_diagnostics_with_analysis(&conn, &session_id, &analysis)?;
         Ok(TelemetrySessionDetail {
             samples,
             requests,
+            vector_activity,
+            context_usage,
             analysis,
             diagnostics,
         })
     })
     .await
     .map_err(|e| format!("遥测会话详情查询失败: {e}"))?
+}
+
+fn latest_slot_context(conn: &Connection, session: &str) -> rusqlite::Result<Option<SlotContextUsage>> {
+    conn.query_row(
+        "SELECT ts, SUM(n_past), SUM(n_ctx) FROM slot_snapshots
+         WHERE session_id = ?1 AND ts = (SELECT MAX(ts) FROM slot_snapshots WHERE session_id = ?1)
+         GROUP BY ts HAVING COUNT(n_past) = COUNT(*) AND MIN(n_ctx) > 0 AND MIN(n_past) >= 0",
+        [session],
+        |row| Ok(SlotContextUsage { ts: row.get(0)?, used: row.get(1)?, capacity: row.get(2)? }),
+    ).optional()
+}
+
+fn recent_vector_activity(conn: &Connection, session: &str, limit: u32) -> rusqlite::Result<Vec<RecentVectorActivity>> {
+    // Proxy calls and engine batches can describe the same work. Show the latest
+    // reporting source and return its name with every row.
+    let mut query = conn.prepare(
+        "SELECT id, source, completed_at, duration_ms, item_count, input_tokens, http_status, error_text
+         FROM vector_activity_events WHERE session_id = ?1 AND source = (
+             SELECT source FROM vector_activity_events WHERE session_id = ?1 ORDER BY completed_at DESC, id DESC LIMIT 1
+         ) ORDER BY completed_at DESC, id DESC LIMIT ?2",
+    )?;
+    let rows = query.query_map(params![session, limit], |row| Ok(RecentVectorActivity {
+        id: row.get(0)?, source: row.get(1)?, completed_at: row.get(2)?, duration_ms: row.get(3)?,
+        item_count: row.get(4)?, input_tokens: row.get(5)?, http_status: row.get(6)?, error_text: row.get(7)?,
+    }))?;
+    rows.collect()
 }
 
 pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String> {
@@ -3381,6 +3445,9 @@ mod tests {
             instance_id: "instance".into(),
             timestamp: 2,
             system: SystemMetrics {
+                gpu_temperature_c: None,
+                gpu_power_w: None,
+                gpu_board_power_w: None,
                 cpu_percent: 1.0,
                 memory_mb: 2.0,
                 uptime_secs: 3,
@@ -3410,6 +3477,24 @@ mod tests {
     }
 
     #[test]
+    fn context_usage_requires_a_complete_latest_slot_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        seed_vector_session(&conn, "context", "model", "cpu", ModelWorkload::Inference);
+        let insert = |ts: i64, slot: i64, used: Option<i64>| {
+            conn.execute("INSERT INTO slot_snapshots(session_id, instance_id, ts, slot_id, is_processing, n_ctx, n_past)
+                          VALUES ('context', 'context', ?1, ?2, 1, 2048, ?3)", params![ts, slot, used]).unwrap();
+        };
+        insert(1, 0, Some(0));
+        insert(1, 1, Some(256));
+        let snapshot = latest_slot_context(&conn, "context").unwrap().unwrap();
+        assert_eq!((snapshot.used, snapshot.capacity), (256, 4096));
+        insert(2, 0, Some(512));
+        insert(2, 1, None);
+        assert!(latest_slot_context(&conn, "context").unwrap().is_none());
+    }
+
+    #[test]
     fn metric_sample_persists_decode_calls_and_max_tokens() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
@@ -3430,6 +3515,9 @@ mod tests {
         )
         .unwrap();
         let system = SystemMetrics {
+            gpu_temperature_c: None,
+            gpu_power_w: None,
+            gpu_board_power_w: None,
             cpu_percent: 1.0,
             memory_mb: 2.0,
             uptime_secs: 3,
@@ -3524,6 +3612,9 @@ mod tests {
         )
         .unwrap();
         let system = SystemMetrics {
+            gpu_temperature_c: None,
+            gpu_power_w: None,
+            gpu_board_power_w: None,
             cpu_percent: 1.0,
             memory_mb: 2.0,
             uptime_secs: 3,
@@ -3773,6 +3864,13 @@ mod tests {
         };
         record_vector_activity_in_connection(&conn, "analysis-vector", &log).unwrap();
         record_vector_activity_in_connection(&conn, "analysis-vector", &proxy).unwrap();
+        let recent = recent_vector_activity(&conn, "analysis-vector", 18).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].source, "proxy");
+        assert_eq!(recent[0].item_count, 4);
+        let sessions = query_telemetry_sessions(&conn, 10_000, 10).unwrap();
+        assert_eq!(sessions.iter().find(|s| s.id == "analysis-vector").unwrap().avg_items_per_sec, Some(1.0));
+
 
         let analysis = query_session_analysis(&conn, "analysis-vector").unwrap();
         let vector = analysis

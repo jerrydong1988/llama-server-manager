@@ -269,15 +269,15 @@ export default function GuidePage() {
 
   return (
     <div className="relative flex min-w-0 flex-1 overflow-hidden">
-      <aside className="flex w-[260px] shrink-0 overflow-hidden border-r border-slate-200 bg-slate-100/80 p-3 dark:border-slate-800 dark:bg-slate-950/80 2xl:w-[300px] 2xl:p-4">
+      <aside className="flex w-[260px] shrink-0 overflow-hidden border-r border-ui-line bg-ui-canvas p-3 2xl:w-[300px] 2xl:p-4">
         <Surface className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
           <div className="mb-4 flex shrink-0 items-center gap-3">
-            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-blue-600 dark:text-blue-300">
+            <div className="rounded-lg border border-ui-line bg-ui-selected p-3 text-ui-action-ink">
               <BookOpen className="h-5 w-5" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">{labels.guide}</h2>
-              <p className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
+              <h2 className="text-lg font-semibold text-ui-ink">{labels.guide}</h2>
+              <p className="mt-1 text-sm leading-5 text-ui-muted">{labels.subtitle}</p>
             </div>
           </div>
 
@@ -301,11 +301,11 @@ export default function GuidePage() {
               aria-expanded={isChecklistOpen}
               title={isChecklistOpen ? labels.collapseChecklist : labels.expandChecklist}
               onClick={() => setIsChecklistOpen(open => !open)}
-              className="mb-3 flex w-full shrink-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-medium text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+              className="mb-3 flex w-full shrink-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-medium text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink"
             >
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{labels.checklistTitle}</span>
-              <span className="shrink-0 tabular-nums text-slate-500">
+              <span className="shrink-0 tabular-nums text-ui-muted">
                 {completedChecklistCount}/{checklist.length}
               </span>
               <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isChecklistOpen ? 'rotate-180' : ''}`} />
@@ -313,28 +313,28 @@ export default function GuidePage() {
 
             {isChecklistOpen && (
               <div id="guide-setup-checklist" className="mb-3 shrink-0 pr-1">
-                <p className="mb-3 text-xs leading-5 text-slate-500">{labels.checklistDesc}</p>
+                <p className="mb-3 text-xs leading-5 text-ui-muted">{labels.checklistDesc}</p>
                 <div className="space-y-2">
                   {checklist.map(item => (
                     <button
                       key={item.id}
                       type="button"
                       onClick={() => setActiveTab(item.tab)}
-                      className="flex w-full items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:border-slate-700 dark:hover:bg-slate-900"
+                      className="flex w-full items-start gap-2 rounded-lg border border-ui-line bg-ui-surface px-3 py-2 text-left transition hover:border-ui-control hover:bg-ui-hover"
                     >
                       {item.done ? (
                         <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-300" />
                       ) : (
-                        <Circle className="mt-0.5 h-4 w-4 shrink-0 text-slate-400 dark:text-slate-500" />
+                        <Circle className="mt-0.5 h-4 w-4 shrink-0 text-ui-muted" />
                       )}
                       <span className="min-w-0 flex-1">
                         <span className="flex min-w-0 items-center justify-between gap-2">
-                          <span className="truncate text-sm text-slate-800 dark:text-slate-200">{item.title}</span>
-                          <span className={`shrink-0 text-[11px] ${item.done ? 'text-emerald-600 dark:text-emerald-300' : 'text-slate-500'}`}>
+                          <span className="truncate text-sm text-ui-body">{item.title}</span>
+                          <span className={`shrink-0 text-[11px] ${item.done ? 'text-emerald-600 dark:text-emerald-300' : 'text-ui-muted'}`}>
                             {item.done ? labels.completed : labels.pending}
                           </span>
                         </span>
-                        <span className="mt-1 block truncate text-xs text-slate-500">{item.detail}</span>
+                        <span className="mt-1 block truncate text-xs text-ui-muted">{item.detail}</span>
                       </span>
                     </button>
                   ))}
@@ -342,7 +342,7 @@ export default function GuidePage() {
               </div>
             )}
 
-            <div className="mb-2 flex shrink-0 items-center gap-2 px-2 text-xs font-medium text-slate-500">
+            <div className="mb-2 flex shrink-0 items-center gap-2 px-2 text-xs font-medium text-ui-muted">
               <Compass className="h-3.5 w-3.5" />
               {labels.contents}
             </div>
@@ -359,8 +359,8 @@ export default function GuidePage() {
                   aria-current={activeSectionId === item.id ? 'location' : undefined}
                   className={`w-full rounded-lg px-2.5 py-2 text-left text-sm transition ${
                     activeSectionId === item.id
-                      ? 'bg-blue-600 font-medium text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-200 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                      ? 'bg-ui-action font-medium text-ui-action-ink'
+                      : 'text-ui-body hover:bg-ui-hover hover:text-ui-ink'
                   }`}
                   title={item.title}
                 >
@@ -375,12 +375,12 @@ export default function GuidePage() {
       <div
         ref={scrollContainerRef}
         data-guide-scroll
-        className="min-w-0 flex-1 overflow-y-auto bg-slate-100 px-4 py-5 dark:bg-slate-950 sm:px-6 2xl:px-8 2xl:py-6"
+        className="min-w-0 flex-1 overflow-y-auto bg-ui-canvas px-4 py-5 sm:px-6 2xl:px-8 2xl:py-6"
       >
         <Surface className="mx-auto max-w-5xl p-5 sm:p-8">
           <div
             ref={contentRef}
-            className="guide-content prose max-w-none text-slate-800 dark:prose-invert dark:text-slate-200"
+            className="guide-content prose max-w-none text-ui-body dark:prose-invert"
             onClick={handleContentClick}
             dangerouslySetInnerHTML={{ __html: html }}
           />
@@ -393,7 +393,7 @@ export default function GuidePage() {
           onClick={scrollToTop}
           title={labels.backToTop}
           aria-label={labels.backToTop}
-          className="absolute bottom-6 right-6 z-10 flex h-10 w-10 items-center justify-center rounded-lg border border-blue-500 bg-blue-600 text-white shadow-lg transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-100 dark:focus:ring-offset-slate-950"
+          className="absolute bottom-6 right-6 z-10 flex h-10 w-10 items-center justify-center rounded-lg border border-ui-action-line bg-ui-action text-ui-action-ink shadow-lg transition hover:bg-ui-action-hover focus:outline-none focus:ring-2 focus:ring-ui-focus focus:ring-offset-2 focus:ring-offset-ui-canvas"
         >
           <ArrowUp className="h-5 w-5" />
         </button>

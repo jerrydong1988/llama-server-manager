@@ -219,24 +219,24 @@ export default function StorageMaintenance() {
       <Surface key={group.id} data-storage-group={group.id} className="min-w-0 p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="font-semibold text-slate-950 dark:text-slate-50">{copy.title}</h3>
-            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{copy.description}</p>
+            <h3 className="font-semibold text-ui-ink">{copy.title}</h3>
+            <p className="mt-1 text-sm leading-6 text-ui-muted">{copy.description}</p>
           </div>
           <Badge tone={group.eligibleCount > 0 ? 'amber' : 'slate'}>{group.eligibleCount} / {group.itemCount}</Badge>
         </div>
         {copy.warning ? <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">{copy.warning}</div> : null}
         {group.warnings.map(warning => <div key={warning} className="mt-2 text-xs text-rose-600 dark:text-rose-300">{warning}</div>)}
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-          <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950"><div className="text-xs text-slate-500">{labels.total}</div><div className="mt-1 font-semibold">{formatBytes(group.totalBytes)}</div></div>
-          <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950"><div className="text-xs text-slate-500">{labels.reclaimable}</div><div className="mt-1 font-semibold">{formatBytes(group.eligibleBytes)}</div></div>
+          <div className="rounded-lg bg-ui-inset p-3"><div className="text-xs text-ui-muted">{labels.total}</div><div className="mt-1 font-semibold">{formatBytes(group.totalBytes)}</div></div>
+          <div className="rounded-lg bg-ui-inset p-3"><div className="text-xs text-ui-muted">{labels.reclaimable}</div><div className="mt-1 font-semibold">{formatBytes(group.eligibleBytes)}</div></div>
         </div>
         {group.items.length > 0 ? (
-          <details className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+          <details className="mt-4 text-xs text-ui-muted">
             <summary className="cursor-pointer font-medium">{labels.showItems.replace('{count}', String(group.itemCount))}</summary>
             <div className="mt-2 max-h-44 space-y-2 overflow-y-auto">
               {group.items.map(entry => (
-                <div key={entry.path} className="rounded-md border border-slate-200 p-2 dark:border-slate-800">
-                  <div className="break-all font-mono text-[11px] text-slate-700 dark:text-slate-200">{entry.path}</div>
+                <div key={entry.path} className="rounded-md border border-ui-line p-2">
+                  <div className="break-all font-mono text-[11px] text-ui-body">{entry.path}</div>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
                     <span>{formatBytes(entry.bytes)}</span><span>{formatTime(entry.modifiedAt, labels.unknownTime)}</span>
                     {!entry.safe ? <span className="text-rose-600 dark:text-rose-300">{labels.unsafe}</span> : null}
@@ -304,9 +304,9 @@ export default function StorageMaintenance() {
         <SectionHeader title={labels.telemetryTitle} description={labels.telemetryDescription} />
         <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="grid flex-1 grid-cols-3 gap-3 text-sm">
-            <div><div className="text-xs text-slate-500">DB</div><div className="mt-1 font-semibold">{formatBytes(inventory?.telemetry.databaseBytes || 0)}</div></div>
-            <div><div className="text-xs text-slate-500">WAL</div><div className="mt-1 font-semibold">{formatBytes(inventory?.telemetry.walBytes || 0)}</div></div>
-            <div><div className="text-xs text-slate-500">SHM</div><div className="mt-1 font-semibold">{formatBytes(inventory?.telemetry.sharedMemoryBytes || 0)}</div></div>
+            <div><div className="text-xs text-ui-muted">DB</div><div className="mt-1 font-semibold">{formatBytes(inventory?.telemetry.databaseBytes || 0)}</div></div>
+            <div><div className="text-xs text-ui-muted">WAL</div><div className="mt-1 font-semibold">{formatBytes(inventory?.telemetry.walBytes || 0)}</div></div>
+            <div><div className="text-xs text-ui-muted">SHM</div><div className="mt-1 font-semibold">{formatBytes(inventory?.telemetry.sharedMemoryBytes || 0)}</div></div>
           </div>
           <Button data-storage-action="telemetry-optimize" onClick={() => void optimizeTelemetry()} disabled={busy !== '' || !inventory || inventory.runningInstanceCount > 0} variant="primary">{busy === 'telemetry' ? labels.optimizing : labels.optimize}</Button>
         </div>
@@ -317,12 +317,12 @@ export default function StorageMaintenance() {
         <div className="mt-4 space-y-3">
           {inventory?.authorizedDirectories.length ? inventory.authorizedDirectories.map(directory => {
             const key = `${directory.purpose}:${directory.root}`
-            return <div key={key} className="flex flex-col gap-3 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center dark:border-slate-800">
+            return <div key={key} className="flex flex-col gap-3 rounded-lg border border-ui-line p-3 sm:flex-row sm:items-center">
               <Badge tone="blue">{labels.purposes[directory.purpose]}</Badge>
-              <div className="min-w-0 flex-1 break-all font-mono text-xs text-slate-600 dark:text-slate-300">{directory.root}</div>
+              <div className="min-w-0 flex-1 break-all font-mono text-xs text-ui-body">{directory.root}</div>
               <Button data-storage-action="revoke-directory" onClick={() => void revoke(directory)} disabled={busy !== ''} variant="danger" size="sm">{labels.revoke}</Button>
             </div>
-          }) : <div className="text-sm text-slate-500">{labels.noAuthorized}</div>}
+          }) : <div className="text-sm text-ui-muted">{labels.noAuthorized}</div>}
         </div>
       </Surface>
 
@@ -331,11 +331,11 @@ export default function StorageMaintenance() {
         {inventory?.externalArtifacts.warnings.map(warning => <div key={warning} className="mt-3 text-xs text-amber-700 dark:text-amber-200">{warning}</div>)}
         <div className="mt-4 space-y-3">
           {inventory?.externalArtifacts.references.length ? inventory.externalArtifacts.references.map((reference, index) => (
-            <div key={`${reference.instanceId}:${reference.flag}:${reference.value}:${index}`} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <div key={`${reference.instanceId}:${reference.flag}:${reference.value}:${index}`} className="rounded-lg border border-ui-line p-3">
               <div className="flex flex-wrap items-center gap-2"><Badge tone="violet">{reference.flag}</Badge><span className="text-sm font-medium">{reference.instanceName}</span><Badge tone="slate">{labels.operatorOwned}</Badge></div>
-              <div className="mt-2 break-all font-mono text-xs text-slate-600 dark:text-slate-300">{reference.value}</div>
+              <div className="mt-2 break-all font-mono text-xs text-ui-body">{reference.value}</div>
             </div>
-          )) : <div className="text-sm text-slate-500">{labels.noExternal}</div>}
+          )) : <div className="text-sm text-ui-muted">{labels.noExternal}</div>}
         </div>
       </Surface>
     </div>

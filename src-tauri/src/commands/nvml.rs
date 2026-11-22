@@ -90,6 +90,8 @@ pub struct NvmlMetrics {
     pub vram_used_mb: Option<f64>,
     pub vram_total_mb: Option<f64>,
     pub gpu_name: Option<String>,
+    pub gpu_temperature_c: Option<f64>,
+    pub gpu_power_w: Option<f64>,
 }
 
 /// Collect GPU metrics via NVML. Returns None if NVIDIA driver/GPU not available.
@@ -153,6 +155,8 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
         vram_used_mb: None,
         vram_total_mb: None,
         gpu_name: None,
+        gpu_temperature_c: None,
+        gpu_power_w: None,
     };
 
     type GetUtilFn = unsafe extern "system" fn(*mut c_void, *mut NvmlUtilization) -> NvmlResult;
@@ -163,6 +167,12 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
     type GetNameFn = unsafe extern "system" fn(*mut c_void, *mut c_char, u32) -> NvmlResult;
     let get_name = lib.get::<GetNameFn>(b"nvmlDeviceGetName\0").ok();
 
+    type GetTempFn = unsafe extern "system" fn(*mut c_void, u32, *mut u32) -> NvmlResult;
+    type GetPowerFn = unsafe extern "system" fn(*mut c_void, *mut u32) -> NvmlResult;
+    let get_temp = lib.get::<GetTempFn>(b"nvmlDeviceGetTemperature\0").ok();
+    let get_power = lib.get::<GetPowerFn>(b"nvmlDeviceGetPowerUsage\0").ok();
+    let mut power_mw = 0_u64;
+    let mut power_samples = 0_u32;
     let mut vram_used_bytes = 0_u64;
     let mut vram_total_bytes = 0_u64;
     let mut memory_samples = 0_u32;
@@ -171,6 +181,24 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
         let mut device: *mut c_void = std::ptr::null_mut();
         if get_handle(index, &mut device) != NVML_SUCCESS || device.is_null() {
             continue;
+        }
+
+        if let Some(read) = get_temp.as_ref() {
+            let mut celsius = 0;
+            if read(device, 0, &mut celsius) == NVML_SUCCESS {
+                let temperature = f64::from(celsius);
+                m.gpu_temperature_c = Some(
+                    m.gpu_temperature_c
+                        .map_or(temperature, |prior| prior.max(temperature)),
+                );
+            }
+        }
+        if let Some(read) = get_power.as_ref() {
+            let mut milliwatts = 0;
+            if read(device, &mut milliwatts) == NVML_SUCCESS {
+                power_mw += u64::from(milliwatts);
+                power_samples += 1;
+            }
         }
 
         let mut util = NvmlUtilization { gpu: 0, memory: 0 };
@@ -201,6 +229,10 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
                 }
             }
         }
+    }
+    // The host total is meaningful only when every enumerated GPU reports power.
+    if power_samples == device_count {
+        m.gpu_power_w = Some(power_mw as f64 / 1000.0);
     }
     if memory_samples > 0 {
         m.vram_total_mb = Some((vram_total_bytes as f64) / (1024.0 * 1024.0));

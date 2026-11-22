@@ -21,13 +21,13 @@ import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextI
 const backendTone = (backend: string) => {
   switch (backend) {
     case 'CUDA':
-      return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+      return 'border-emerald-500/20 bg-emerald-500/10 text-ui-positive'
     case 'ROCm':
-      return 'border-rose-500/20 bg-rose-500/10 text-rose-300'
+      return 'border-rose-500/20 bg-rose-500/10 text-ui-danger'
     case 'Vulkan':
-      return 'border-violet-500/20 bg-violet-500/10 text-violet-300'
+      return 'border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300'
     default:
-      return 'border-slate-700 bg-slate-800 text-slate-300'
+      return 'border-ui-line bg-ui-inset text-ui-body'
   }
 }
 
@@ -260,17 +260,17 @@ const EngineManager = () => {
       <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3 text-violet-300">
+            <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3 text-violet-700 dark:text-violet-300">
               <Cpu className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.nav.engine}</h1>
-                <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400">
+                <h1 className="text-3xl font-semibold tracking-tight text-ui-ink">{t.nav.engine}</h1>
+                <span className="rounded-full border border-ui-line bg-ui-surface px-2.5 py-1 text-xs text-ui-muted">
                   {formatMessage(labels.engineCount, { count: engines.length })}
                 </span>
               </div>
-              <p className="text-sm text-slate-400">
+              <p className="text-sm text-ui-muted">
                 {labels.subtitle}
               </p>
             </div>
@@ -314,7 +314,7 @@ const EngineManager = () => {
       </div>
 
       {scanError && (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-ui-warn">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{scanError}</span>
         </div>
@@ -325,8 +325,8 @@ const EngineManager = () => {
           role="status"
           className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
             lastProbeBatchResult.failed > 0
-              ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              ? 'border-amber-500/30 bg-amber-500/10 text-ui-warn'
+              : 'border-emerald-500/30 bg-emerald-500/10 text-ui-positive'
           }`}
         >
           {lastProbeBatchResult.failed > 0
@@ -354,10 +354,10 @@ const EngineManager = () => {
 
       <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: labels.registered, value: engines.length, icon: Cpu, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
-          { label: labels.default, value: defaultEngineId ? 1 : 0, icon: Star, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
-          { label: labels.backends, value: backendCounts.size, icon: RefreshCw, tone: 'text-violet-300 bg-violet-500/10 border-violet-500/20' },
-          { label: labels.scanRoots, value: engineDirs.length, icon: FolderOpen, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
+          { label: labels.registered, value: engines.length, icon: Cpu, tone: 'text-ui-info bg-sky-500/10 border-sky-500/20' },
+          { label: labels.default, value: defaultEngineId ? 1 : 0, icon: Star, tone: 'text-ui-warn bg-amber-500/10 border-amber-500/20' },
+          { label: labels.backends, value: backendCounts.size, icon: RefreshCw, tone: 'text-violet-700 dark:text-violet-300 bg-violet-500/10 border-violet-500/20' },
+          { label: labels.scanRoots, value: engineDirs.length, icon: FolderOpen, tone: 'text-ui-positive bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
           <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} />
         ))}
@@ -366,15 +366,15 @@ const EngineManager = () => {
       <div className="grid gap-6 2xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
         <Surface as="aside" className="p-5">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-slate-50">{labels.scanRoots}</h2>
-            <p className="mt-1 text-sm text-slate-400">
+            <h2 className="text-lg font-semibold text-ui-ink">{labels.scanRoots}</h2>
+            <p className="mt-1 text-sm text-ui-muted">
               {labels.scanRootsDescription}
             </p>
           </div>
 
           <div className="space-y-3">
             {engineDirs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-700 px-4 py-8 text-center text-sm text-slate-500">
+              <div className="rounded-2xl border border-dashed border-ui-line px-4 py-8 text-center text-sm text-ui-muted">
                 {t.engineMgr.noEngines}
               </div>
             ) : (
@@ -382,15 +382,15 @@ const EngineManager = () => {
                 <InsetSurface key={dir} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <PathText value={dir} maxLength={38} className="text-sm font-medium text-slate-100" />
-                      <p className="mt-1 text-xs text-slate-500">
+                      <PathText value={dir} maxLength={38} className="text-sm font-medium text-ui-ink" />
+                      <p className="mt-1 text-xs text-ui-muted">
                         {engines.filter(engine => isPathWithinRoot(engine.dir, dir)).length} {labels.discovered}
                       </p>
                     </div>
                     <button
                       onClick={() => handleRemoveDir(dir)}
                       disabled={probeBusy}
-                      className="rounded-lg p-2 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-lg p-2 text-ui-muted transition hover:bg-red-500/10 hover:text-ui-danger disabled:cursor-not-allowed disabled:opacity-50"
                       title={t.engineMgr.remove}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -403,7 +403,7 @@ const EngineManager = () => {
 
           {backendCounts.size > 0 && (
             <InsetSurface className="mt-5 p-4">
-              <p className="text-sm font-medium text-slate-100">{labels.backendMix}</p>
+              <p className="text-sm font-medium text-ui-ink">{labels.backendMix}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {[...backendCounts.entries()].map(([backend, count]) => (
                   <span key={backend} className={`rounded-full border px-2.5 py-1 text-xs ${backendTone(backend)}`}>
@@ -418,8 +418,8 @@ const EngineManager = () => {
         <Surface as="section" className="min-h-[620px] p-5">
           <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-50">{labels.inventory}</h2>
-              <p className="mt-1 text-sm text-slate-400">
+              <h2 className="text-lg font-semibold text-ui-ink">{labels.inventory}</h2>
+              <p className="mt-1 text-sm text-ui-muted">
                 {labels.inventoryDescription}
               </p>
             </div>
@@ -446,22 +446,22 @@ const EngineManager = () => {
           </div>
 
           {filteredEngines.length === 0 ? (
-            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 text-center">
-              <Cpu className="mb-4 h-12 w-12 text-slate-700" />
-              <p className="text-base text-slate-300">{t.engineMgr.noEngines}</p>
-              <p className="mt-2 max-w-md text-sm text-slate-500">
+            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-ui-line text-center">
+              <Cpu className="mb-4 h-12 w-12 text-ui-body" />
+              <p className="text-base text-ui-body">{t.engineMgr.noEngines}</p>
+              <p className="mt-2 max-w-md text-sm text-ui-muted">
                 {labels.emptyDescription}
               </p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-slate-800">
-              <div className="grid grid-cols-[minmax(0,2.1fr)_120px_140px_180px] gap-4 border-b border-slate-800 bg-slate-950/80 px-4 py-3 text-xs uppercase tracking-[0.14em] text-slate-500">
+            <div className="overflow-hidden rounded-2xl border border-ui-line">
+              <div className="grid grid-cols-[minmax(0,2.1fr)_120px_140px_180px] gap-4 border-b border-ui-line bg-ui-inset px-4 py-3 text-xs uppercase tracking-[0.14em] text-ui-muted">
                 <span>{labels.engine}</span>
                 <span>{labels.backend}</span>
                 <span>{labels.version}</span>
                 <span className="text-right">{labels.actions}</span>
               </div>
-              <div className="divide-y divide-slate-800 bg-slate-950/30">
+              <div className="divide-y divide-ui-line bg-ui-inset">
                 {filteredEngines.map(engine => {
                   const isSelected = Boolean(selectedEngineId && pathsEqual(selectedEngineId, engine.id))
                   const isDefault = Boolean(defaultEngineId && pathsEqual(defaultEngineId, engine.id))
@@ -499,7 +499,7 @@ const EngineManager = () => {
                               }}
                               autoFocus
                               aria-label={labels.rename}
-                              className="h-8 w-full rounded-lg border border-blue-500/50 bg-slate-950 px-3 text-sm text-slate-100 outline-none"
+                              className="h-8 w-full rounded-lg border border-ui-control bg-ui-surface px-3 text-sm text-ui-ink outline-none"
                             />
                           ) : (
                             <>
@@ -513,7 +513,7 @@ const EngineManager = () => {
                                   event.stopPropagation()
                                   startRename(engine)
                                 }}
-                                className="shrink-0 rounded-md p-1 text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
+                                className="shrink-0 rounded-md p-1 text-ui-muted transition hover:bg-ui-hover hover:text-ui-body"
                                 title={labels.rename}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
@@ -562,7 +562,7 @@ const EngineManager = () => {
                             event.stopPropagation()
                             openEngineFolder(engine.dir)
                           }}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
+                          className="rounded-lg p-2 text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink"
                           title={t.engineMgr.openFolder}
                         >
                           <FolderOpen className="h-4 w-4" />
@@ -573,7 +573,7 @@ const EngineManager = () => {
                             void handleDelete(engine.id)
                           }}
                           disabled={probeBusy}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="rounded-lg p-2 text-ui-muted transition hover:bg-red-500/10 hover:text-ui-danger disabled:cursor-not-allowed disabled:opacity-50"
                           title={t.engineMgr.remove}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -589,16 +589,16 @@ const EngineManager = () => {
 
         <Surface as="aside" className="p-5">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-slate-50">{labels.details}</h2>
-            <p className="mt-1 text-sm text-slate-400">
+            <h2 className="text-lg font-semibold text-ui-ink">{labels.details}</h2>
+            <p className="mt-1 text-sm text-ui-muted">
               {labels.detailsDescription}
             </p>
           </div>
 
           {!selectedEngine ? (
-            <div className="flex min-h-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 text-center">
-              <Cpu className="mb-4 h-10 w-10 text-slate-700" />
-              <p className="text-sm text-slate-400">
+            <div className="flex min-h-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-ui-line text-center">
+              <Cpu className="mb-4 h-10 w-10 text-ui-body" />
+              <p className="text-sm text-ui-muted">
                 {labels.noSelection}
               </p>
             </div>
@@ -610,8 +610,8 @@ const EngineManager = () => {
                     <Cpu className="h-5 w-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-100">{selectedEngine.name}</p>
-                    <PathText value={selectedEngine.dir} maxLength={58} className="mt-1 text-slate-500" />
+                    <p className="truncate text-sm font-medium text-ui-ink">{selectedEngine.name}</p>
+                    <PathText value={selectedEngine.dir} maxLength={58} className="mt-1 text-ui-muted" />
                   </div>
                 </div>
               </InsetSurface>
@@ -630,10 +630,10 @@ const EngineManager = () => {
                   [labels.scanRoot, engineDirs.find(dir => isPathWithinRoot(selectedEngine.dir, dir)) || '--'],
                 ].map(([label, value]) => (
                   <div key={label} className="grid min-w-0 grid-cols-2 items-start gap-3">
-                    <span className="min-w-0 break-words text-sm text-slate-500">{label}</span>
-                    <span className="min-w-0 break-words text-right text-sm text-slate-200">
+                    <span className="min-w-0 break-words text-sm text-ui-muted">{label}</span>
+                    <span className="min-w-0 break-words text-right text-sm text-ui-body">
                       {label === (labels.scanRoot) && value !== '--'
-                        ? <PathText value={String(value)} maxLength={32} className="justify-end text-slate-200" />
+                        ? <PathText value={String(value)} maxLength={32} className="justify-end text-ui-body" />
                         : value}
                     </span>
                   </div>
@@ -641,13 +641,13 @@ const EngineManager = () => {
               </InsetSurface>
 
               {selectedEngine.capabilities?.error && (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-ui-warn">
                   {localizeEngineCapabilityError(selectedEngine.capabilities.error, labels)}
                 </div>
               )}
 
               {normalizeEngineVersionStatus(selectedEngine.capabilities) === 'unknown' && (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-ui-warn">
                   {labels.versionUnknownWarning}
                 </div>
               )}

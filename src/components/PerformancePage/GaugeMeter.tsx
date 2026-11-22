@@ -9,22 +9,22 @@ export default function GaugeMeter({ label, value, max, unit, color, detail }: {
   const radius = 40; const circ = 2 * Math.PI * radius
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+    <div className="rounded-lg border border-ui-line bg-ui-inset p-4">
       <div className="flex flex-col items-center">
       <div className="relative w-24 h-24">
         <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 96 96">
-          <circle cx="48" cy="48" r={radius} fill="none" stroke="currentColor" strokeWidth="8" className="text-slate-800" />
+          <circle cx="48" cy="48" r={radius} fill="none" stroke="currentColor" strokeWidth="8" className="text-ui-body" />
           <circle cx="48" cy="48" r={radius} fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round"
             strokeDasharray={circ} strokeDashoffset={circ - (pct / 100) * circ}
             className={`${colorMap[color]} transition-all duration-700`} />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-xl font-bold text-slate-100">{value != null ? Math.round(value) : 0}</span>
-          <span className="text-xs text-slate-500">{unit}</span>
+          <span className="text-xl font-bold text-ui-ink">{value != null ? Math.round(value) : 0}</span>
+          <span className="text-xs text-ui-muted">{unit}</span>
         </div>
       </div>
-      <p className="mt-3 text-sm font-medium text-slate-200">{label}</p>
-      {detail && <p className="mt-1 text-center text-xs text-slate-500">{detail}</p>}
+      <p className="mt-3 text-sm font-medium text-ui-body">{label}</p>
+      {detail && <p className="mt-1 text-center text-xs text-ui-muted">{detail}</p>}
       </div>
     </div>
   )

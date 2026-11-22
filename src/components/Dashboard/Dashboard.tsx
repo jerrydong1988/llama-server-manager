@@ -90,7 +90,7 @@ function statusTone(instance: Instance): 'slate' | 'emerald' | 'red' {
 }
 
 function healthDotClass(instance: Instance) {
-  if (instance.status === 'stopped') return 'bg-slate-500'
+  if (instance.status === 'stopped') return 'bg-ui-control'
   if (instance.status === 'error' || instance.healthCheck === 'fail') return 'bg-rose-500'
   if (instance.healthCheck === 'ok') return 'bg-emerald-500'
   return 'bg-amber-500'
@@ -108,15 +108,15 @@ function downloadTone(status: DownloadProgress['status']): 'slate' | 'blue' | 'e
 function MiniStat({
   label,
   value,
-  tone = 'text-slate-900 dark:text-slate-100',
+  tone = 'text-ui-ink',
 }: {
   label: string
   value: string | number
   tone?: string
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
-      <div className="truncate text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-500" title={label}>{label}</div>
+    <div className="min-w-0 rounded-md border border-ui-line bg-ui-inset px-3 py-2">
+      <div className="truncate text-[11px] uppercase tracking-wide text-ui-muted" title={label}>{label}</div>
       <div className={`mt-1 truncate text-lg font-semibold ${tone}`} title={String(value)}>{value}</div>
     </div>
   )
@@ -141,23 +141,23 @@ function ResourceMeter({
   const safePercent = clampPercent(available ? percent : 0)
 
   return (
-    <div className="min-w-0 border-b border-slate-200 px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0 dark:border-slate-800">
+    <div className="min-w-0 border-b border-ui-line px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-ui-line bg-ui-inset text-ui-muted">
             {icon}
           </span>
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-slate-800 dark:text-slate-200" title={label}>{label}</div>
-            <div className="truncate text-xs text-slate-500 dark:text-slate-500" title={secondary}>{secondary}</div>
+            <div className="truncate text-sm font-medium text-ui-body" title={label}>{label}</div>
+            <div className="truncate text-xs text-ui-muted" title={secondary}>{secondary}</div>
           </div>
         </div>
-        <div className="shrink-0 text-xl font-semibold text-slate-950 dark:text-slate-50">{available ? `${safePercent}%` : '--'}</div>
+        <div className="shrink-0 text-xl font-semibold text-ui-ink">{available ? `${safePercent}%` : '--'}</div>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-ui-line">
         <div className={`h-full rounded-full ${meterColor(tone)}`} style={{ width: `${safePercent}%` }} />
       </div>
-      <div className="mt-2 truncate text-xs text-slate-500 dark:text-slate-500" title={primary}>{primary}</div>
+      <div className="mt-2 truncate text-xs text-ui-muted" title={primary}>{primary}</div>
     </div>
   )
 }
@@ -180,7 +180,7 @@ function ActionIconButton({
       disabled={disabled}
       title={title}
       aria-label={title}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-ui-line bg-ui-surface text-ui-body transition hover:border-ui-control hover:bg-ui-hover disabled:cursor-not-allowed disabled:opacity-35"
     >
       {children}
     </button>
@@ -430,11 +430,11 @@ export default function Dashboard() {
         <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-semibold text-slate-950 dark:text-slate-50">{labels.title}</h2>
+              <h2 className="text-xl font-semibold text-ui-ink">{labels.title}</h2>
               <Badge tone={attentionCount > 0 ? 'amber' : 'emerald'}>{attentionCount > 0 ? labels.attention : labels.healthy}</Badge>
               <Badge>{labels.workspace}</Badge>
             </div>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
+            <p className="mt-1 text-sm text-ui-muted">{labels.subtitle}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -449,12 +449,12 @@ export default function Dashboard() {
       </Surface>
 
       <Surface as="section" className="overflow-hidden" data-testid="dashboard-resources">
-        <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+        <div className="border-b border-ui-line px-5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <SectionHeader title={labels.resources} />
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <MiniStat label={labels.running} value={`${runningCount}/${instances.length}`} tone="text-emerald-600 dark:text-emerald-300" />
-              <MiniStat label={labels.attention} value={attentionCount} tone={attentionCount > 0 ? 'text-amber-600 dark:text-amber-300' : 'text-slate-700 dark:text-slate-300'} />
+              <MiniStat label={labels.attention} value={attentionCount} tone={attentionCount > 0 ? 'text-amber-600 dark:text-amber-300' : 'text-ui-body'} />
               <MiniStat label={labels.transfer} value={formatRate(transferBytes)} tone="text-blue-600 dark:text-blue-300" />
               <MiniStat label={labels.queue} value={downloadQueue.length} tone="text-violet-600 dark:text-violet-300" />
             </div>
@@ -478,18 +478,18 @@ export default function Dashboard() {
                     key={action.id}
                     type="button"
                     onClick={action.action}
-                    className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/55 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+                    className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border border-ui-line bg-ui-inset p-3 text-left transition hover:border-ui-control hover:bg-ui-hover"
                   >
                     <span className="flex items-start gap-3">
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ui-line bg-ui-surface text-blue-600 dark:text-blue-300">
                         {action.icon}
                       </span>
                       <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-slate-950 dark:text-slate-100">{action.title}</span>
-                        <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.description}</span>
+                        <span className="block text-sm font-semibold text-ui-ink">{action.title}</span>
+                        <span className="mt-1 block text-xs leading-5 text-ui-muted">{action.description}</span>
                       </span>
                     </span>
-                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-blue-600 transition group-hover:text-blue-500 dark:text-blue-300">
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-ui-action-ink transition group-hover:underline">
                       {labels.goHandle}
                       <ArrowUpRight className="h-3.5 w-3.5" />
                     </span>
@@ -499,14 +499,14 @@ export default function Dashboard() {
             </div>
           </Surface>
           <Surface as="section" className="min-w-0 overflow-hidden" data-testid="dashboard-instances">
-            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div className="border-b border-ui-line px-5 py-4">
               <div className="flex flex-col gap-4">
                 <div className="min-w-0">
                   <SectionHeader
                     title={statusScope === 'running' ? labels.running : statusScope === 'stopped' ? labels.stopped : labels.instances}
                     description={`${labels.visibleRows}: ${filteredInstances.length} / ${instances.length}`}
                   />
-                  <div className="mt-3 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950/70">
+                  <div className="mt-3 inline-flex rounded-lg border border-ui-line bg-ui-inset p-1">
                     {(['running', 'stopped', 'all'] as const).map(scope => (
                       <button
                         type="button"
@@ -514,8 +514,8 @@ export default function Dashboard() {
                         onClick={() => setStatusScope(scope)}
                         className={`h-8 rounded-md px-3 text-xs font-medium transition ${
                           statusScope === scope
-                            ? 'bg-blue-600 text-white'
-                            : 'text-slate-600 hover:bg-white hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                            ? 'bg-ui-action text-ui-action-ink'
+                            : 'text-ui-muted hover:bg-ui-hover hover:text-ui-ink'
                         }`}
                       >
                         {scope === 'running' ? labels.running : scope === 'stopped' ? labels.stopped : labels.all}
@@ -547,7 +547,7 @@ export default function Dashboard() {
 
               <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
                 <MiniStat label={labels.running} value={runningCount} tone="text-emerald-600 dark:text-emerald-300" />
-                <MiniStat label={labels.stopped} value={stoppedCount} tone="text-slate-700 dark:text-slate-300" />
+                <MiniStat label={labels.stopped} value={stoppedCount} tone="text-ui-body" />
                 <MiniStat label={t.instance.error} value={erroredCount} tone="text-rose-600 dark:text-rose-300" />
                 <MiniStat label={labels.autoStart} value={autoStartCount} tone="text-blue-600 dark:text-blue-300" />
               </div>
@@ -555,8 +555,8 @@ export default function Dashboard() {
 
             {filteredInstances.length === 0 ? (
               <div className="px-5 py-12 text-center">
-                <Server className="mx-auto h-10 w-10 text-slate-300 dark:text-slate-700" />
-                <div className="mt-3 text-sm text-slate-500 dark:text-slate-500">{labels.noMatches}</div>
+                <Server className="mx-auto h-10 w-10 text-ui-body" />
+                <div className="mt-3 text-sm text-ui-muted">{labels.noMatches}</div>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -569,8 +569,8 @@ export default function Dashboard() {
                     <col className="w-[17%]" />
                     <col className="w-[20%]" />
                   </colgroup>
-                  <thead className="bg-slate-50 dark:bg-slate-950/70">
-                    <tr className="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-500">
+                  <thead className="bg-ui-inset">
+                    <tr className="text-left text-xs uppercase tracking-wide text-ui-muted">
                       <th className="px-5 py-3 font-medium">{labels.name}</th>
                       <th className="px-5 py-3 font-medium">{labels.engine}</th>
                       <th className="px-5 py-3 font-medium">{labels.status}</th>
@@ -579,7 +579,7 @@ export default function Dashboard() {
                       <th className="px-5 py-3 text-right font-medium">{labels.actions}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  <tbody className="divide-y divide-ui-line">
                     {filteredInstances.map(instance => {
                       const isRunning = instance.status === 'running'
                       const lifecyclePhase = instanceLifecycle[instance.id]
@@ -588,15 +588,15 @@ export default function Dashboard() {
                       const engineName = engineNameFor(instance)
 
                       return (
-                        <tr key={instance.id} className="h-[68px] text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-900/70">
+                        <tr key={instance.id} className="h-[68px] text-ui-body transition hover:bg-ui-hover">
                           <td className="px-5 py-3 align-middle">
                             <div className="min-w-0">
-                              <div className="truncate font-medium text-slate-950 dark:text-slate-100" title={instance.name}>{instance.name}</div>
-                              <div className="mt-1 text-xs text-slate-500 dark:text-slate-500">{labels.uptime} {formatUptime(instance.startTime)}</div>
+                              <div className="truncate font-medium text-ui-ink" title={instance.name}>{instance.name}</div>
+                              <div className="mt-1 text-xs text-ui-muted">{labels.uptime} {formatUptime(instance.startTime)}</div>
                             </div>
                           </td>
                           <td className="px-5 py-3 align-middle">
-                            <div className="truncate text-slate-600 dark:text-slate-400" title={engineName}>{engineName}</div>
+                            <div className="truncate text-ui-muted" title={engineName}>{engineName}</div>
                           </td>
                           <td className="px-5 py-3 align-middle">
                             <Badge tone={isLifecycleBusy ? 'blue' : statusTone(instance)}>
@@ -608,13 +608,13 @@ export default function Dashboard() {
                             </Badge>
                           </td>
                           <td className="px-5 py-3 align-middle">
-                            <span className="inline-flex min-w-0 items-center gap-2 text-slate-600 dark:text-slate-400">
+                            <span className="inline-flex min-w-0 items-center gap-2 text-ui-muted">
                               <span className={`h-2 w-2 shrink-0 rounded-full ${healthDotClass(instance)}`} />
                               <span className="truncate">{healthText(instance)}</span>
                             </span>
                           </td>
                           <td className="px-5 py-3 align-middle">
-                            <div className="truncate font-mono text-xs text-slate-600 dark:text-slate-400" title={endpoint}>{endpoint}</div>
+                            <div className="truncate font-mono text-xs text-ui-muted" title={endpoint}>{endpoint}</div>
                           </td>
                           <td className="px-5 py-3 align-middle">
                             <div className="ml-auto grid w-[172px] grid-cols-[92px_34px_34px] items-center justify-end gap-2">
@@ -669,15 +669,15 @@ export default function Dashboard() {
             <SectionHeader title={labels.operations} />
             <InsetSurface className="grid grid-cols-3 gap-2 p-3 text-xs">
               <div className="flex flex-col items-center gap-1 text-center">
-                <span className="text-slate-500 dark:text-slate-500">{labels.healthy}</span>
+                <span className="text-ui-muted">{labels.healthy}</span>
                 <span className="font-medium text-emerald-600 dark:text-emerald-300">{healthyCount}</span>
               </div>
               <div className="flex flex-col items-center gap-1 text-center">
-                <span className="text-slate-500 dark:text-slate-500">{labels.attention}</span>
-                <span className={attentionCount > 0 ? 'font-medium text-amber-600 dark:text-amber-300' : 'font-medium text-slate-700 dark:text-slate-300'}>{attentionCount}</span>
+                <span className="text-ui-muted">{labels.attention}</span>
+                <span className={attentionCount > 0 ? 'font-medium text-amber-600 dark:text-amber-300' : 'font-medium text-ui-body'}>{attentionCount}</span>
               </div>
               <div className="flex flex-col items-center gap-1 text-center">
-                <span className="text-slate-500 dark:text-slate-500">{labels.autoStart}</span>
+                <span className="text-ui-muted">{labels.autoStart}</span>
                 <span className="font-medium text-blue-600 dark:text-blue-300">{autoStartCount}</span>
               </div>
             </InsetSurface>
@@ -711,19 +711,19 @@ export default function Dashboard() {
             <InsetSurface className="grid grid-cols-3 gap-2 p-3 text-center text-xs">
               <div>
                 <div className="font-semibold text-blue-600 dark:text-blue-300">{activeDownloadCount}</div>
-                <div className="mt-1 truncate text-slate-500 dark:text-slate-500">{labels.activeDownloads}</div>
+                <div className="mt-1 truncate text-ui-muted">{labels.activeDownloads}</div>
               </div>
               <div>
                 <div className="font-semibold text-violet-600 dark:text-violet-300">{queuedDownloadCount}</div>
-                <div className="mt-1 truncate text-slate-500 dark:text-slate-500">{labels.queuedDownloads}</div>
+                <div className="mt-1 truncate text-ui-muted">{labels.queuedDownloads}</div>
               </div>
               <div>
                 <div className="font-semibold text-rose-600 dark:text-rose-300">{failedDownloadCount}</div>
-                <div className="mt-1 truncate text-slate-500 dark:text-slate-500">{labels.failedDownloads}</div>
+                <div className="mt-1 truncate text-ui-muted">{labels.failedDownloads}</div>
               </div>
             </InsetSurface>
             {recentDownloads.length === 0 ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-500">
+              <div className="rounded-md border border-ui-line bg-ui-inset px-3 py-4 text-center text-xs text-ui-muted">
                 {labels.noDownloads}
               </div>
             ) : (
@@ -731,10 +731,10 @@ export default function Dashboard() {
                 {recentDownloads.map(task => {
                   const progress = task.total > 0 ? Math.min(100, Math.max(0, (task.downloaded / task.total) * 100)) : 0
                   return (
-                    <div key={task.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-950/60">
+                    <div key={task.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-ui-line bg-ui-inset px-3 py-2 text-xs">
                       <div className="min-w-0">
-                        <div className="truncate text-slate-700 dark:text-slate-300" title={task.fileName}>{task.fileName}</div>
-                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                        <div className="truncate text-ui-body" title={task.fileName}>{task.fileName}</div>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ui-line">
                           <div className="h-full rounded-full bg-blue-500" style={{ width: `${progress}%` }} />
                         </div>
                       </div>

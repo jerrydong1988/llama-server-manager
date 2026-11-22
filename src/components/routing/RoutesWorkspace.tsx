@@ -245,7 +245,7 @@ export default function RoutesWorkspace({
               {w.routeHelp}
               <ChevronRight size={14} className="router-chevron" />
             </summary>
-            <div className="router-setting-body text-xs leading-5 text-slate-600 dark:text-slate-400">
+            <div className="router-setting-body text-xs leading-5 text-ui-muted">
               <p>{l.routeTableHint}</p>
               <p>{l.routeIdentityHint}</p>
               <p>{l.routeHealthHint}</p>

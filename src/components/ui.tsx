@@ -1,15 +1,8 @@
-import { createContext, useContext, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { formatPathForDisplay } from '../utils/path'
 
-// Opt in per workspace. Portalled controls inherit the same appearance as their owner.
-export const ConsoleTheme = createContext(false)
-
-// Content panels are intentionally opaque. Applying backdrop-filter to every panel
-// creates many compositor layers and can leave off-screen panels temporarily
-// unrasterized after a long scroll in WebView2.
-export const surfaceClassName = 'rounded-lg border border-slate-200 bg-white text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.08)] dark:border-slate-800/80 dark:bg-slate-900 dark:text-slate-100 dark:shadow-[0_16px_48px_rgba(15,23,42,0.28)]'
-export const insetSurfaceClassName = 'rounded-lg border border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-100'
-export const controlClassName = 'rounded-lg border border-slate-300 bg-white text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500'
+// Opaque panels avoid extra compositor layers during long WebView2 scrolls.
+export const surfaceClassName = 'console-surface'
 
 export function joinClassNames(...items: Array<string | false | null | undefined>) {
   return items.filter(Boolean).join(' ')
@@ -26,8 +19,7 @@ export function Surface({
   children: ReactNode
 } & Omit<HTMLAttributes<HTMLElement>, 'children' | 'className'>) {
   const Component = as
-  const modern = useContext(ConsoleTheme)
-  return <Component {...elementProps} className={joinClassNames(modern ? 'console-surface' : surfaceClassName, className)}>{children}</Component>
+  return <Component {...elementProps} className={joinClassNames(surfaceClassName, className)}>{children}</Component>
 }
 
 export function InsetSurface({
@@ -37,8 +29,7 @@ export function InsetSurface({
   className?: string
   children: ReactNode
 }) {
-  const modern = useContext(ConsoleTheme)
-  return <div className={joinClassNames(modern ? 'console-inset' : insetSurfaceClassName, className)}>{children}</div>
+  return <div className={joinClassNames('console-inset', className)}>{children}</div>
 }
 
 export function MetricCard({
@@ -58,17 +49,17 @@ export function MetricCard({
     <Surface className="p-5">
       <div className="flex items-start justify-between">
         <div className="min-w-0">
-          <p className="text-sm text-slate-600 dark:text-slate-400">{label}</p>
-          <p className={`mt-3 truncate font-semibold text-slate-950 dark:text-slate-50 ${valueClassName}`} title={typeof value === 'string' ? value : undefined}>
+          <p className="text-sm text-ui-muted">{label}</p>
+          <p className={`mt-3 truncate font-semibold text-ui-ink ${valueClassName}`} title={typeof value === 'string' ? value : undefined}>
             {value}
           </p>
         </div>
         {icon ? (
-          <div className={`rounded-lg border p-3 ${tone || 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+          <div className={`rounded-lg border p-3 ${tone || 'border-ui-line bg-ui-inset text-ui-body'}`}>
             {icon}
           </div>
         ) : (
-          <div className={`rounded-lg border px-3 py-2 text-xs ${tone || 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+          <div className={`rounded-lg border px-3 py-2 text-xs ${tone || 'border-ui-line bg-ui-inset text-ui-body'}`}>
             {label}
           </div>
         )}
@@ -86,12 +77,11 @@ export function SectionHeader({
   description?: ReactNode
   action?: ReactNode
 }) {
-  const modern = useContext(ConsoleTheme)
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className={joinClassNames('text-lg font-semibold', modern ? 'text-ui-ink' : 'text-slate-950 dark:text-slate-50')}>{title}</h2>
-        {description ? <p className={joinClassNames('mt-1 text-sm leading-6', modern ? 'text-ui-muted' : 'text-slate-500 dark:text-slate-400')}>{description}</p> : null}
+        <h2 className="text-lg font-semibold text-ui-ink">{title}</h2>
+        {description ? <p className="mt-1 text-sm leading-6 text-ui-muted">{description}</p> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
@@ -109,25 +99,16 @@ export function EmptyState({
   description?: ReactNode
   className?: string
 }) {
-  const modern = useContext(ConsoleTheme)
   return (
     <Surface className={`flex min-h-[360px] flex-col items-center justify-center p-10 text-center ${className}`}>
-      <div className={joinClassNames('mb-4 rounded-lg border p-4', modern ? 'border-ui-line bg-ui-inset text-ui-muted' : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-300')}>{icon}</div>
-      <h2 className={joinClassNames('text-2xl font-semibold', modern ? 'text-ui-ink' : 'text-slate-950 dark:text-slate-50')}>{title}</h2>
-      {description ? <p className={joinClassNames('mt-3 max-w-2xl text-sm leading-6', modern ? 'text-ui-muted' : 'text-slate-500 dark:text-slate-400')}>{description}</p> : null}
+      <div className="mb-4 rounded-lg border p-4 border-ui-line bg-ui-inset text-ui-muted">{icon}</div>
+      <h2 className="text-2xl font-semibold text-ui-ink">{title}</h2>
+      {description ? <p className="mt-3 max-w-2xl text-sm leading-6 text-ui-muted">{description}</p> : null}
     </Surface>
   )
 }
 
-const buttonVariants = {
-  primary: 'border border-blue-500/20 bg-blue-600 text-white hover:bg-blue-500',
-  secondary: 'border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-800',
-  subtle: 'border border-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white',
-  danger: 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15',
-  success: 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/15',
-  cyan: 'border border-cyan-500/20 bg-cyan-600 text-white hover:bg-cyan-500',
-  violet: 'border border-violet-500/20 bg-violet-600 text-white hover:bg-violet-500',
-} as const
+type ButtonVariant = 'primary' | 'secondary' | 'subtle' | 'danger' | 'success' | 'cyan' | 'violet'
 
 const buttonSizes = {
   sm: 'gap-1 rounded-lg px-2.5 py-1.5 text-xs',
@@ -146,17 +127,16 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   icon?: ReactNode
-  variant?: keyof typeof buttonVariants
+  variant?: ButtonVariant
   size?: keyof typeof buttonSizes
 }) {
-  const modern = useContext(ConsoleTheme)
   return (
     <button
       type={type}
       data-variant={variant}
       className={joinClassNames(
         'inline-flex items-center justify-center font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-        modern ? 'console-btn' : buttonVariants[variant],
+        'console-btn',
         buttonSizes[size],
         className,
       )}
@@ -177,17 +157,7 @@ export function Badge({
   tone?: 'slate' | 'blue' | 'emerald' | 'amber' | 'red' | 'violet'
   className?: string
 }) {
-  const tones = {
-    slate: 'border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
-    blue: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300',
-    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300',
-    red: 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300',
-    violet: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300',
-  }
-
-  const modern = useContext(ConsoleTheme)
-  return <span data-tone={tone} className={joinClassNames('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs', modern ? 'console-badge' : tones[tone], className)}>{children}</span>
+  return <span data-tone={tone} className={joinClassNames('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs', 'console-badge', className)}>{children}</span>
 }
 
 export function TextInput({
@@ -199,16 +169,14 @@ export function TextInput({
   leadingIcon?: ReactNode
   inputClassName?: string
 }) {
-  const modern = useContext(ConsoleTheme)
-  const appearance = modern ? 'console-input h-9' : `h-11 ${controlClassName}`
   if (!leadingIcon) {
-    return <input className={joinClassNames('w-full min-w-0 max-w-full px-3', appearance, className)} {...props} />
+    return <input className={joinClassNames('w-full min-w-0 max-w-full px-3 console-input h-9', className)} {...props} />
   }
 
   return (
     <label className={joinClassNames('relative block min-w-0', className)}>
-      <span className={joinClassNames('pointer-events-none absolute left-3 top-1/2 -translate-y-1/2', modern ? 'text-ui-muted' : 'text-slate-500')}>{leadingIcon}</span>
-      <input className={joinClassNames('w-full min-w-0 max-w-full pl-10 pr-3', appearance, inputClassName)} {...props} />
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ui-muted">{leadingIcon}</span>
+      <input className={joinClassNames('w-full min-w-0 max-w-full pl-10 pr-3 console-input h-9', inputClassName)} {...props} />
     </label>
   )
 }
@@ -220,9 +188,8 @@ export function SelectInput({
 }: SelectHTMLAttributes<HTMLSelectElement> & {
   children: ReactNode
 }) {
-  const modern = useContext(ConsoleTheme)
   return (
-    <select className={joinClassNames('select-custom min-w-0 max-w-full pl-3 pr-8', modern ? 'console-input h-9' : `h-11 ${controlClassName}`, className)} {...props}>
+    <select className={joinClassNames('select-custom min-w-0 max-w-full pl-3 pr-8', 'console-input h-9', className)} {...props}>
       {children}
     </select>
   )
@@ -273,12 +240,12 @@ export function PageHeader({
   return (
     <div className={joinClassNames('flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between', className)}>
       <div className="min-w-0">
-        {eyebrow ? <div className="mb-1 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">{eyebrow}</div> : null}
+        {eyebrow ? <div className="mb-1 text-xs font-semibold uppercase text-ui-muted">{eyebrow}</div> : null}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 className="truncate text-xl font-semibold leading-7 text-slate-950 dark:text-slate-50">{title}</h2>
+          <h2 className="truncate text-xl font-semibold leading-7 text-ui-ink">{title}</h2>
           {meta}
         </div>
-        {description ? <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
+        {description ? <p className="mt-1 max-w-3xl text-sm leading-6 text-ui-muted">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>
@@ -293,7 +260,7 @@ export function PageToolbar({
   className?: string
 }) {
   return (
-    <div className={joinClassNames('flex min-h-12 min-w-0 flex-col gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between', className)}>
+    <div className={joinClassNames('flex min-h-12 min-w-0 flex-col gap-3 rounded-lg border border-ui-line bg-ui-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between', className)}>
       {children}
     </div>
   )
@@ -341,7 +308,6 @@ export function IconButton({
   icon: ReactNode
   label: string
 }) {
-  const modern = useContext(ConsoleTheme)
   return (
     <button
       type="button"
@@ -349,7 +315,7 @@ export function IconButton({
       title={title || label}
       className={joinClassNames(
         'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-50',
-        modern ? 'console-btn' : 'border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-800',
+        'console-btn',
         className,
       )}
       {...props}
@@ -374,7 +340,7 @@ export function ActionGroup({
     <div className={joinClassNames('flex min-w-0 items-center justify-end gap-1.5', className)}>
       {primary ? <div className="shrink-0">{primary}</div> : null}
       {children ? <div className="flex shrink-0 items-center gap-1.5">{children}</div> : null}
-      {destructive ? <div className="ml-1 flex shrink-0 items-center gap-1.5 border-l border-slate-700 pl-2">{destructive}</div> : null}
+      {destructive ? <div className="ml-1 flex shrink-0 items-center gap-1.5 border-l border-ui-line pl-2">{destructive}</div> : null}
     </div>
   )
 }
@@ -423,10 +389,10 @@ export function DataTable<T>({
   ), 0)
 
   return (
-    <div className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900', className)}>
+    <div className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-ui-line bg-ui-surface', className)}>
       <div className="overflow-x-auto">
         <table className="w-full min-w-full table-fixed border-collapse text-left text-sm" style={{ minWidth: minTableWidth || undefined }}>
-          <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-400">
+          <thead className="border-b border-ui-line bg-ui-inset text-xs uppercase text-ui-muted">
             <tr>
               {columns.map(column => (
                 <th
@@ -440,10 +406,10 @@ export function DataTable<T>({
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+          <tbody className="divide-y divide-ui-line">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                <td colSpan={columns.length} className="px-4 py-10 text-center text-sm text-ui-muted">
                   {empty || 'No data'}
                 </td>
               </tr>
@@ -462,7 +428,7 @@ export function DataTable<T>({
                       return (
                         <td
                           key={column.key}
-                          className={joinClassNames('min-w-0 align-middle text-slate-700 dark:text-slate-200', rowPadding, column.align === 'right' && 'text-right', column.align === 'center' && 'text-center', column.className)}
+                          className={joinClassNames('min-w-0 align-middle text-ui-body', rowPadding, column.align === 'right' && 'text-right', column.align === 'center' && 'text-center', column.className)}
                         >
                           {cell}
                         </td>
@@ -493,11 +459,11 @@ export function InspectorPanel({
   className?: string
 }) {
   return (
-    <aside className={joinClassNames('sticky top-4 min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900', className)}>
-      <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+    <aside className={joinClassNames('sticky top-4 min-w-0 rounded-lg border border-ui-line bg-ui-surface', className)}>
+      <div className="border-b border-ui-line px-4 py-3">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-slate-950 dark:text-slate-50">{title}</h3>
-          {subtitle ? <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{subtitle}</div> : null}
+          <h3 className="truncate text-sm font-semibold text-ui-ink">{title}</h3>
+          {subtitle ? <div className="mt-1 truncate text-xs text-ui-muted">{subtitle}</div> : null}
         </div>
         {actions ? <div className="mt-3">{actions}</div> : null}
       </div>
@@ -517,8 +483,8 @@ export function DetailField({
 }) {
   return (
     <div className="grid min-w-0 grid-cols-[104px_minmax(0,1fr)] gap-3 text-sm">
-      <dt className="truncate text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{label}</dt>
-      <dd className="min-w-0 text-slate-700 dark:text-slate-200">
+      <dt className="truncate text-xs font-medium uppercase text-ui-muted">{label}</dt>
+      <dd className="min-w-0 text-ui-body">
         {path && typeof value === 'string' ? <PathText value={value} /> : value}
       </dd>
     </div>
@@ -550,15 +516,15 @@ export function ResourceMeter({
   }
 
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+    <div className="min-w-0 rounded-lg border border-ui-line bg-ui-surface p-3">
       <div className="mb-2 flex min-w-0 items-center justify-between gap-3 text-sm">
-        <span className="truncate font-medium text-slate-700 dark:text-slate-200">{label}</span>
-        <span className="shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">{Math.round(value)}{unit}</span>
+        <span className="truncate font-medium text-ui-body">{label}</span>
+        <span className="shrink-0 text-xs font-semibold text-ui-muted">{Math.round(value)}{unit}</span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+      <div className="h-2 overflow-hidden rounded-full bg-ui-inset">
         <div className={joinClassNames('h-full rounded-full transition-[width]', meterColors[tone])} style={{ width: `${percent}%` }} />
       </div>
-      {description ? <div className="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">{description}</div> : null}
+      {description ? <div className="mt-2 truncate text-xs text-ui-muted">{description}</div> : null}
     </div>
   )
 }
@@ -573,10 +539,10 @@ export function MetricStrip({
   return (
     <div className={joinClassNames('grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4', className)}>
       {items.map(item => (
-        <div key={String(item.label)} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
-          <div className="truncate text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{item.label}</div>
-          <div className="mt-2 truncate text-xl font-semibold text-slate-950 dark:text-slate-50">{item.value}</div>
-          {item.detail ? <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{item.detail}</div> : null}
+        <div key={String(item.label)} className="min-w-0 rounded-lg border border-ui-line bg-ui-surface p-3">
+          <div className="truncate text-xs font-medium uppercase text-ui-muted">{item.label}</div>
+          <div className="mt-2 truncate text-xl font-semibold text-ui-ink">{item.value}</div>
+          {item.detail ? <div className="mt-1 truncate text-xs text-ui-muted">{item.detail}</div> : null}
         </div>
       ))}
     </div>
@@ -595,9 +561,9 @@ export function EmptyPanel({
   className?: string
 }) {
   return (
-    <div className={joinClassNames('flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-900', className)}>
-      <h3 className="text-base font-semibold text-slate-950 dark:text-slate-50">{title}</h3>
-      {description ? <p className="mt-2 max-w-lg text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
+    <div className={joinClassNames('flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-ui-line bg-ui-surface px-6 py-8 text-center', className)}>
+      <h3 className="text-base font-semibold text-ui-ink">{title}</h3>
+      {description ? <p className="mt-2 max-w-lg text-sm leading-6 text-ui-muted">{description}</p> : null}
       {action ? <div className="mt-4">{action}</div> : null}
     </div>
   )
@@ -615,17 +581,18 @@ export function SegmentedControl<T extends string>({
   className?: string
 }) {
   return (
-    <div className={joinClassNames('inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950', className)}>
+    <div className={joinClassNames('inline-flex rounded-lg border border-ui-line bg-ui-inset p-1', className)}>
       {options.map(option => {
         const selected = option.value === value
         return (
           <button
             key={option.value}
             type="button"
+            aria-pressed={selected}
             onClick={() => onChange(option.value)}
             className={joinClassNames(
               'h-8 rounded-md px-3 text-sm font-medium transition',
-              selected ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-slate-50' : 'text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-slate-100',
+              selected ? 'bg-ui-action text-ui-action-ink' : 'text-ui-muted hover:text-ui-ink',
             )}
           >
             {option.label}
@@ -648,7 +615,7 @@ export function StatusBadge({
   className?: string
 }) {
   const dotColors = {
-    slate: 'bg-slate-400',
+    slate: 'bg-ui-control',
     blue: 'bg-blue-400',
     emerald: 'bg-emerald-400',
     amber: 'bg-amber-400',
@@ -675,7 +642,7 @@ export function CommandBar({
 }) {
   return (
     <div
-      className={joinClassNames('flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900', className)}
+      className={joinClassNames('flex min-w-0 items-center gap-2 rounded-lg border border-ui-line bg-ui-surface px-3 py-2', className)}
       style={style}
     >
       {children}

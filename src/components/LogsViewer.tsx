@@ -153,17 +153,17 @@ const LogsViewer = () => {
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3 text-sky-300">
+            <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3 text-ui-info">
               <Activity className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.logs.title}</h1>
-                <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400">
+                <h1 className="text-2xl font-semibold tracking-tight text-ui-ink">{t.logs.title}</h1>
+                <span className="rounded-full border border-ui-line bg-ui-surface px-2.5 py-1 text-xs text-ui-muted">
                   {sourceLogs.length} {t.logs.entries}
                 </span>
               </div>
-              <p className="mt-1 max-w-3xl text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl text-sm text-ui-muted">{labels.subtitle}</p>
             </div>
           </div>
         </div>
@@ -188,10 +188,10 @@ const LogsViewer = () => {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: labels.visible, value: displayLogs.length, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
-          { label: labels.errors, value: stats.error, tone: 'text-red-300 bg-red-500/10 border-red-500/20' },
-          { label: labels.warnings, value: stats.warn, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
-          { label: labels.info, value: stats.info, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
+          { label: labels.visible, value: displayLogs.length, tone: 'text-ui-info bg-sky-500/10 border-sky-500/20' },
+          { label: labels.errors, value: stats.error, tone: 'text-ui-danger bg-red-500/10 border-red-500/20' },
+          { label: labels.warnings, value: stats.warn, tone: 'text-ui-warn bg-amber-500/10 border-amber-500/20' },
+          { label: labels.info, value: stats.info, tone: 'text-ui-positive bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
           <MetricCard key={card.label} label={card.label} value={card.value} tone={card.tone} />
         ))}
@@ -200,12 +200,12 @@ const LogsViewer = () => {
       <div className="grid gap-6 2xl:grid-cols-[320px,minmax(0,1fr)]">
         <Surface as="aside" className="h-fit p-5">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-slate-50">{labels.logScope}</h2>
-            <p className="mt-1 text-sm text-slate-400">{labels.logScopeDesc}</p>
+            <h2 className="text-lg font-semibold text-ui-ink">{labels.logScope}</h2>
+            <p className="mt-1 text-sm text-ui-muted">{labels.logScopeDesc}</p>
           </div>
 
           <label className="mb-4 block">
-            <span className="mb-2 block text-xs font-medium text-slate-400">{t.logs.selectInstance}</span>
+            <span className="mb-2 block text-xs font-medium text-ui-muted">{t.logs.selectInstance}</span>
             <SelectInput
               value={selectedInstanceId}
               onChange={event => handleInstanceChange(event.target.value)}
@@ -234,22 +234,22 @@ const LogsViewer = () => {
               [labels.runningSource, hasRunningInstance ? labels.yes : labels.no],
             ].map(([label, value]) => (
               <div key={label} className="flex items-center justify-between gap-3">
-                <span className="text-sm text-slate-500">{label}</span>
-                <span className="max-w-[160px] truncate text-right text-sm text-slate-200" title={value}>
+                <span className="text-sm text-ui-muted">{label}</span>
+                <span className="max-w-[160px] truncate text-right text-sm text-ui-body" title={value}>
                   {value}
                 </span>
               </div>
             ))}
           </InsetSurface>
 
-          <p className="mt-4 text-xs leading-6 text-slate-500">{t.logs.hint}</p>
+          <p className="mt-4 text-xs leading-6 text-ui-muted">{t.logs.hint}</p>
         </Surface>
 
         <Surface as="section" className="overflow-hidden">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/90 px-5 py-3">
+          <div className="flex items-center justify-between gap-3 border-b border-ui-line bg-ui-inset px-5 py-3">
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-semibold text-slate-50">{labels.liveConsole}</h2>
-              <p className="mt-1 truncate text-sm text-slate-400" title={selectionActive ? t.logs.selectionHint : undefined}>
+              <h2 className="text-lg font-semibold text-ui-ink">{labels.liveConsole}</h2>
+              <p className="mt-1 truncate text-sm text-ui-muted" title={selectionActive ? t.logs.selectionHint : undefined}>
                 {selectionActive ? t.logs.selectionHint : selectedInstanceId ? labels.focusedStream : labels.mergedTimeline}
               </p>
             </div>
@@ -270,12 +270,12 @@ const LogsViewer = () => {
             data-log-console
             onScroll={handleScroll}
             onMouseDownCapture={event => { if (beginSelection(event)) setAutoScroll(false) }}
-            className="relative h-[560px] overflow-y-auto bg-[#050816] px-5 py-4 font-mono text-sm leading-7"
+            className="relative h-[560px] overflow-y-auto bg-ui-inset text-ui-body px-5 py-4 font-mono text-sm leading-7"
           >
             {!hasLogs ? (
               <div className="flex h-full flex-col items-center justify-center text-center">
-                <Activity className="mb-4 h-10 w-10 text-slate-700" />
-                <p className="text-slate-400">
+                <Activity className="mb-4 h-10 w-10 text-ui-body" />
+                <p className="text-ui-muted">
                   {instances.length === 0 ? t.logs.noInstances : selectedInstanceId ? t.logs.noLogsForInstance : t.logs.noLogs}
                 </p>
               </div>
@@ -291,15 +291,15 @@ const LogsViewer = () => {
                   const text = entry.text
                   const lower = text.toLowerCase()
 
-                  let tone = 'text-slate-300'
+                  let tone = 'text-ui-body'
                   if (ERROR_LOG_PATTERN.test(text)) {
-                    tone = 'text-red-300'
+                    tone = 'text-ui-danger'
                   } else if (WARNING_LOG_PATTERN.test(text)) {
-                    tone = 'text-amber-300'
+                    tone = 'text-ui-warn'
                   } else if (/listening|ready|ok|success|loaded/.test(lower)) {
-                    tone = 'text-emerald-300'
+                    tone = 'text-ui-positive'
                   } else if (/token|speed|t\/s/.test(lower)) {
-                    tone = 'text-sky-300'
+                    tone = 'text-ui-info'
                   }
 
                   return (
@@ -311,9 +311,9 @@ const LogsViewer = () => {
                       className="absolute left-0 top-0 w-full pb-1"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      <div className="grid grid-cols-[84px,minmax(120px,180px),minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-white/5">
-                        <span className="text-xs text-slate-600">{time}</span>
-                        <span className="truncate text-xs text-slate-500">{instanceName}</span>
+                      <div className="grid grid-cols-[84px,minmax(120px,180px),minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-ui-hover">
+                        <span className="text-xs text-ui-muted">{time}</span>
+                        <span className="truncate text-xs text-ui-muted">{instanceName}</span>
                         <span className={`${tone} whitespace-pre-wrap break-all`}>{text}</span>
                       </div>
                     </div>
@@ -323,7 +323,7 @@ const LogsViewer = () => {
             )}
 
             {autoScroll && hasLogs && hasRunningInstance && (
-              <div className="absolute bottom-3 left-4 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
+              <div className="absolute bottom-3 left-4 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-ui-positive">
                 <Play className="h-3 w-3" />
                 {t.logs.following}
               </div>

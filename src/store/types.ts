@@ -354,6 +354,9 @@ export interface DownloadManagerSnapshot {
 }
 
 export interface SystemMetrics {
+  gpu_temperature_c?: number | null
+  gpu_power_w?: number | null
+  gpu_board_power_w?: number | null
   cpu_percent: number
   memory_mb: number
   uptime_secs: number
@@ -424,6 +427,7 @@ export interface TelemetrySessionSummary {
   started_at: number
   stopped_at: number | null
   duration_secs: number | null
+  avg_items_per_sec?: number | null
   avg_tokens_per_second?: number
   avg_tokens_per_sec: number
   peak_vram_mb: number
@@ -613,8 +617,21 @@ export interface DiagnosticFinding {
 export interface TelemetrySessionDetail {
   samples: TelemetrySampleSummary[]
   requests: InferenceRequestSummary[]
+  vector_activity?: RecentVectorActivity[]
+  context_usage?: { ts: number; used: number; capacity: number } | null
   analysis: TelemetrySessionAnalysis
   diagnostics: DiagnosticFinding[]
+}
+
+export interface RecentVectorActivity {
+  id: number
+  source: 'log' | 'proxy'
+  completed_at: number
+  duration_ms: number
+  item_count: number
+  input_tokens: number | null
+  http_status: number | null
+  error_text: string | null
 }
 
 export interface AppState {
@@ -639,6 +656,7 @@ export interface AppState {
     statusFilter: 'all' | 'running' | 'stopped'
     engineFilter: string
   }
+  monitoringInstanceId: string
   activeConfigInstanceId: string | null
   activeTab: string
   darkMode: boolean
@@ -654,6 +672,7 @@ export interface AppState {
   lastCompletedTaskByInstance: Record<string, RunningInferenceTask | null>
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
+  setMonitoringInstanceId: (id: string) => void
   setActiveConfigInstanceId: (id: string | null) => void
   setSysMetrics: (m: SystemMetrics | null) => void
   addRuntimeWarning: (message: string) => void

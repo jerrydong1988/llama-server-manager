@@ -70,16 +70,16 @@ export function DownloadSettingsPanel({
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 text-left dark:border-slate-800"
+        className="flex w-full items-start justify-between gap-3 border-b border-ui-line px-4 py-4 text-left"
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Settings2 className="h-4 w-4 text-slate-500" />
-            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{copy.strategyTitle}</span>
+            <Settings2 className="h-4 w-4 text-ui-muted" />
+            <span className="text-sm font-semibold text-ui-ink">{copy.strategyTitle}</span>
           </div>
-          <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{copy.strategySub}</div>
+          <div className="mt-1 text-xs leading-5 text-ui-muted">{copy.strategySub}</div>
         </div>
-        {open ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" /> : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />}
+        {open ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-ui-muted" /> : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-ui-muted" />}
       </button>
 
       {open && (
@@ -91,33 +91,33 @@ export function DownloadSettingsPanel({
           )}
 
           <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg border border-slate-200 px-3 py-3 dark:border-slate-800">
-              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{copy.strategy}</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">{resumePolicyLabel}</div>
+            <div className="rounded-lg border border-ui-line px-3 py-3">
+              <div className="text-[11px] font-medium text-ui-muted">{copy.strategy}</div>
+              <div className="mt-1 text-sm font-semibold text-ui-ink">{resumePolicyLabel}</div>
             </div>
-            <div className="rounded-lg border border-slate-200 px-3 py-3 dark:border-slate-800">
-              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{copy.bandwidth}</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">{bandwidthSummary}</div>
+            <div className="rounded-lg border border-ui-line px-3 py-3">
+              <div className="text-[11px] font-medium text-ui-muted">{copy.bandwidth}</div>
+              <div className="mt-1 text-sm font-semibold text-ui-ink">{bandwidthSummary}</div>
             </div>
           </div>
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{labels.resumePolicy}</label>
+              <label className="text-xs font-medium text-ui-muted">{labels.resumePolicy}</label>
               <BackendBadge label={copy.backendSaved} />
             </div>
-            <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+            <div className="grid grid-cols-2 gap-2 rounded-lg bg-ui-inset p-1">
               <button
                 type="button"
                 onClick={() => onResumePolicyChange('manual')}
-                className={`rounded-md px-3 py-2 text-xs font-medium transition ${resumePolicy === 'manual' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                className={`rounded-md px-3 py-2 text-xs font-medium transition ${resumePolicy === 'manual' ? 'bg-ui-surface text-ui-ink shadow-sm' : 'text-ui-muted hover:text-ui-ink'}`}
               >
                 {labels.resumeManual}
               </button>
               <button
                 type="button"
                 onClick={() => onResumePolicyChange('auto_on_launch')}
-                className={`rounded-md px-3 py-2 text-xs font-medium transition ${resumePolicy === 'auto_on_launch' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                className={`rounded-md px-3 py-2 text-xs font-medium transition ${resumePolicy === 'auto_on_launch' ? 'bg-ui-surface text-ui-ink shadow-sm' : 'text-ui-muted hover:text-ui-ink'}`}
               >
                 {labels.resumeAuto}
               </button>
@@ -126,7 +126,7 @@ export function DownloadSettingsPanel({
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{labels.maxConcurrent}</label>
+              <label className="text-xs font-medium text-ui-muted">{labels.maxConcurrent}</label>
               <BackendBadge label={copy.backendSaved} />
             </div>
             <div className="flex items-center gap-3">
@@ -136,7 +136,7 @@ export function DownloadSettingsPanel({
                 max={8}
                 value={concurrency}
                 onChange={event => onConcurrencyChange(parseInt(event.target.value, 10))}
-                className="min-w-0 flex-1 accent-blue-600"
+                className="min-w-0 flex-1 accent-ui-positive"
               />
               <input
                 type="number"
@@ -144,15 +144,15 @@ export function DownloadSettingsPanel({
                 max={8}
                 value={concurrency}
                 onChange={event => onConcurrencyChange(parseInt(event.target.value, 10))}
-                className="w-24 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-center text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                className="w-24 rounded-lg border border-ui-line bg-ui-surface px-3 py-2.5 text-center text-sm text-ui-ink outline-none transition focus:border-ui-focus"
               />
             </div>
-            <div className="text-[11px] text-slate-400">1-8</div>
+            <div className="text-[11px] text-ui-muted">1-8</div>
           </div>
 
-          <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <div className="space-y-3 border-t border-ui-line pt-4">
             <div className="flex items-center justify-between gap-3">
-              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{copy.bandwidth}</label>
+              <label className="text-xs font-medium text-ui-muted">{copy.bandwidth}</label>
               <BackendBadge label={copy.backendSaved} />
             </div>
             <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
@@ -162,38 +162,38 @@ export function DownloadSettingsPanel({
                 step={bandwidthUnit === 'MiB/s' ? 1 : 64}
                 value={bandwidthLimit}
                 onChange={event => onBandwidthLimitChange(Number(event.target.value))}
-                className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                className="min-w-0 rounded-lg border border-ui-line bg-ui-surface px-3 py-2.5 text-sm text-ui-ink outline-none transition focus:border-ui-focus"
               />
               <select
                 value={bandwidthUnit}
                 onChange={event => onBandwidthUnitChange(event.target.value as DownloadBandwidthUnit)}
                 aria-label={copy.displayUnit}
-                className="rounded-lg border border-slate-200 bg-white px-2 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                className="rounded-lg border border-ui-line bg-ui-surface px-2 py-2.5 text-sm text-ui-ink outline-none transition focus:border-ui-focus"
               >
                 <option value="MiB/s">MiB/s</option>
                 <option value="KiB/s">KiB/s</option>
               </select>
             </div>
-            <div className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">{copy.limitHelp}</div>
+            <div className="text-[11px] leading-5 text-ui-muted">{copy.limitHelp}</div>
           </div>
 
-          <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <div className="space-y-3 border-t border-ui-line pt-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{copy.lowPriorityThrottle}</div>
+                  <div className="text-xs font-medium text-ui-body">{copy.lowPriorityThrottle}</div>
                   <BackendBadge label={copy.backendSaved} />
                 </div>
-                <div className="mt-1 text-[11px] leading-5 text-slate-400">{copy.throttleHelp}</div>
+                <div className="mt-1 text-[11px] leading-5 text-ui-muted">{copy.throttleHelp}</div>
               </div>
               <button
                 type="button"
                 role="switch"
                 aria-checked={lowPriorityThrottle}
                 onClick={() => onLowPriorityThrottleChange(!lowPriorityThrottle)}
-                className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${lowPriorityThrottle ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}
+                className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${lowPriorityThrottle ? 'bg-ui-positive' : 'bg-ui-line'}`}
               >
-                <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition ${lowPriorityThrottle ? 'left-6' : 'left-1'}`} />
+                <span className={`absolute top-1 h-4 w-4 rounded-full bg-ui-surface shadow-sm transition ${lowPriorityThrottle ? 'left-6' : 'left-1'}`} />
               </button>
             </div>
           </div>
@@ -201,7 +201,7 @@ export function DownloadSettingsPanel({
           <button
             type="button"
             onClick={onResetDefaults}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-ui-line bg-ui-surface px-3 py-2.5 text-xs font-medium text-ui-body transition hover:bg-ui-hover hover:text-ui-ink"
           >
             <RotateCcw className="h-3.5 w-3.5" />
             <span>{copy.resetDefaults}</span>

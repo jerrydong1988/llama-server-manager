@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invokeApp as invoke } from '../../lib/ipc'
-import { Activity, AlertTriangle, BarChart3, Clock, Cpu, FastForward, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Clock, Cpu, FastForward, Gauge, HardDrive, Radio, Maximize2, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
 import { pathsEqual } from '../../utils/path'
@@ -17,10 +17,15 @@ import type {
   TelemetrySessionAnalysis,
   TelemetrySessionSummary,
 } from '../../store/types'
-import { Badge, Button, EmptyPanel, PageFrame, PageHeader } from '../ui'
-import { ActiveRequestRow, ComparisonTable, MonitorPanel, SessionCard, SignalMeter, StatusTile, TrendChart } from '../monitoring/MonitoringPrimitives'
+import { Badge, Button, SelectInput } from '../ui'
+import { ActiveRequestRow, ComparisonTable, MonitorPanel, SignalMeter, StatusTile, TrendChart } from '../monitoring/MonitoringPrimitives'
 import { formatDuration, formatMemory, formatMs, formatRate, formatTime } from '../monitoring/monitoringFormat'
 import { DualThroughput, DualThroughputTrends, InferenceTasks } from '../monitoring/InferencePanels'
+import { SessionRecords } from '../monitoring/MonitorRecords'
+import { LiveOverview } from './LiveOverview'
+import { getMonitorWorkspaceCopy } from '../../i18n/monitorWorkspace'
+import { currentHost, numberText } from '../monitoring/MonitorReadings'
+import '../monitoring/workspace.css'
 import { inferenceTrend } from '../monitoring/inferenceThroughput'
 import {
   buildRequestPressure,
@@ -64,6 +69,10 @@ const TELEMETRY_DETAIL_REFRESH_MS = 5000
 
 export default function PerformancePage() {
   const { lang } = useI18n()
+  const copy = getMonitorWorkspaceCopy(lang)
+  const [tab, setTab] = useState<'live' | 'history' | 'diagnostics'>('live')
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const setActiveTab = useAppStore(state => state.setActiveTab)
   const inferenceLabels = getInferenceLabels(lang)
   const labels = useMemo(() => getPerformanceLabels(lang), [lang])
   const speculativeLabels = useMemo(() => getSpeculativeDecodingLabels(lang), [lang])
@@ -71,12 +80,15 @@ export default function PerformancePage() {
   const sysMetrics = useAppStore(state => state.sysMetrics)
   const systemMetricsHistory = useAppStore(state => state.systemMetricsHistory)
   const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
-  const [selectedInstanceId, setSelectedInstanceId] = useState('')
+  const selectedInstanceId = useAppStore(state => state.monitoringInstanceId)
+  const setSelectedInstanceId = useAppStore(state => state.setMonitoringInstanceId)
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
   const [loadedSamples, setSamples] = useState<TelemetrySampleSummary[]>([])
   const [loadedRequests, setRequests] = useState<InferenceRequestSummary[]>([])
+  const [vectorRecords, setVectorRecords] = useState<TelemetrySessionDetail['vector_activity']>([])
+  const [slotUsage, setSlotUsage] = useState<TelemetrySessionDetail['context_usage']>(null)
   const [loadedAnalysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
   const [loadedDiagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
   const [detailSessionId, setDetailSessionId] = useState('')
@@ -85,7 +97,6 @@ export default function PerformancePage() {
   const [trendRange, setTrendRange] = useState<'1m' | '5m' | '15m' | '1h'>('5m')
   const [vectorTrendMetric, setVectorTrendMetric] = useState<'input' | 'items'>('input')
   const selectedSessionIdRef = useRef('')
-  const sessionSelectionInitializedRef = useRef(false)
   const telemetryInFlightRef = useRef(false)
   const detailInFlightRef = useRef(new Set<string>())
   const detailReady = Boolean(selectedSessionId) && detailSessionId === selectedSessionId
@@ -131,17 +142,13 @@ export default function PerformancePage() {
       ])
       setOverview(nextOverview)
       setSessions(nextSessions)
-      setSelectedSessionId(current => {
-        let nextSessionId = ''
-        if (current && nextSessions.some(session => session.id === current)) {
-          nextSessionId = current
-        } else if (!sessionSelectionInitializedRef.current && nextSessions.length > 0) {
-          nextSessionId = (nextSessions.find(session => !session.stopped_at) || nextSessions[0]).id
-          sessionSelectionInitializedRef.current = true
-        }
-        selectedSessionIdRef.current = nextSessionId
-        return nextSessionId
-      })
+      const targetId = useAppStore.getState().monitoringInstanceId
+      const matching = targetId ? nextSessions.filter(session => session.instance_id === targetId) : nextSessions
+      if (!matching.some(session => session.id === selectedSessionIdRef.current)) {
+        const next = (matching.find(session => !session.stopped_at) ?? matching[0])?.id ?? ''
+        selectedSessionIdRef.current = next
+        setSelectedSessionId(next)
+      }
       setTelemetryError(null)
     } catch (error) {
       setTelemetryError(error instanceof Error ? error.message : String(error))
@@ -163,6 +170,8 @@ export default function PerformancePage() {
       if (selectedSessionIdRef.current !== sessionId) return
       setSamples(detail.samples)
       setRequests(detail.requests)
+      setVectorRecords(detail.vector_activity ?? [])
+      setSlotUsage(detail.context_usage)
       setAnalysis(detail.analysis)
       setDiagnostics(detail.diagnostics)
       setDetailSessionId(sessionId)
@@ -184,19 +193,21 @@ export default function PerformancePage() {
 
   useEffect(() => {
     if (instances.length === 0) {
-      if (selectedInstanceId) setSelectedInstanceId('')
+      if (selectedInstanceId && !sessions.some(s => s.instance_id === selectedInstanceId)) setSelectedInstanceId('')
       return
     }
-    if (!selectedInstanceId || !instances.some(instance => instance.id === selectedInstanceId)) {
+    if (!selectedInstanceId || (!instances.some(instance => instance.id === selectedInstanceId) && !sessions.some(session => session.instance_id === selectedInstanceId))) {
       setSelectedInstanceId(running[0]?.id || instances[0].id)
     }
-  }, [instances, running, selectedInstanceId])
+  }, [instances, running, selectedInstanceId, sessions, setSelectedInstanceId])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
     setDetailSessionId('')
     setSamples([])
     setRequests([])
+    setVectorRecords([])
+    setSlotUsage(null)
     setAnalysis(null)
     setDiagnostics([])
     if (!selectedSessionId) {
@@ -213,7 +224,7 @@ export default function PerformancePage() {
 
   useEffect(() => {
     if (selectedSession) setSelectedInstanceId(selectedSession.instance_id)
-  }, [selectedSession])
+  }, [selectedSession, setSelectedInstanceId])
 
   const historicalAnchor = selectedSession?.stopped_at || Date.now()
   const selectedOverviewSamples = useMemo(
@@ -342,23 +353,33 @@ export default function PerformancePage() {
     ? diagnostics.filter(finding => !inferenceOnlyDiagnosticIds.has(finding.id))
     : diagnostics
   const visibleDiagnostics = workloadDiagnostics.slice(0, 3)
+  const chooseInstance = (id: string) => {
+    setSelectedInstanceId(id)
+    const target = sessions.find(s => s.instance_id === id && !s.stopped_at) ?? sessions.find(s => s.instance_id === id)
+    selectedSessionIdRef.current = target?.id || ''
+    setSelectedSessionId(selectedSessionIdRef.current)
+  }
+  const currentSystem = currentHost(sysMetrics, systemMetricsHistory, Date.now())
+  const names = new Map(instances.map(i => [i.id, i.name]))
+  for (const session of sessions) if (!names.has(session.instance_id)) names.set(session.instance_id, session.instance_name)
   return (
-    <PageFrame
-      className="text-slate-900 dark:text-slate-100"
-      header={
-        <PageHeader
-          title={labels.title}
-          description={labels.description}
-          meta={<Badge tone="violet">{labels.sqliteBacked}</Badge>}
-          actions={
-            <Button icon={<RefreshCw className="h-4 w-4" />} onClick={() => void refreshTelemetry()} disabled={loading}>
-              {labels.refresh}
-            </Button>
-          }
-        />
-      }
-    >
-      <div className="space-y-4">
+    <section className="monitor-workspace" data-monitor-view={tab}>
+      <div className="monitor-heading"><h2>{copy.monitor}</h2><div className="monitor-actions">
+        <label data-guide="perf-select">{labels.monitoringInstance}
+          <SelectInput value={selectedInstanceId} onChange={event => chooseInstance(event.target.value)}>
+            {!names.size && <option value="">{labels.noInstances}</option>}
+            {[...names].map(([id,name]) => <option key={id} value={id}>{name}</option>)}
+          </SelectInput>
+        </label>
+        <Button size="sm" icon={<Maximize2 size={14}/>} onClick={() => setActiveTab('bigscreen')}>{copy.wall}</Button>
+        <Button size="sm" aria-label={labels.refresh} title={labels.refresh} disabled={loading} onClick={() => void refreshTelemetry()} icon={<RefreshCw size={14}/>}/>
+      </div></div>
+      <nav className="monitor-tabs" aria-label={copy.monitor}>
+        {(['live','history','diagnostics'] as const).map(id => <button type="button" key={id} aria-current={tab === id ? 'page' : undefined} onClick={() => {
+          if (id === 'live') chooseInstance(selectedInstanceId)
+          setTab(id)
+        }}>{copy[id]}</button>)}
+      </nav>
         {telemetryError ? (
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
             <div className="font-semibold">{labels.telemetryError}</div>
@@ -376,72 +397,38 @@ export default function PerformancePage() {
           </div>
         ) : null}
 
-        <div className="grid min-h-[calc(100vh-178px)] gap-4 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[310px_minmax(0,1fr)_360px]">
-          <aside className="min-w-0 space-y-4">
-            <MonitorPanel title={labels.monitoringObject} icon={<Server className="h-5 w-5" />} action={<Badge tone="emerald">{running.length}</Badge>}>
-              <div className="space-y-4">
-                <div data-guide="perf-select">
-                  <label className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.monitoringInstance}</label>
-                  <select
-                    value={selectedInstanceId}
-                    onChange={event => {
-                      const nextId = event.target.value
-                      setSelectedInstanceId(nextId)
-                      const nextSession = sessions.find(session => session.instance_id === nextId && !session.stopped_at)
-                        || sessions.find(session => session.instance_id === nextId)
-                      setSelectedSessionId(nextSession?.id || '')
-                    }}
-                    className="select-custom h-11 w-full rounded-lg border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  >
-                    {instances.length === 0 ? <option value="">{labels.noInstances}</option> : null}
-                    {instances.map(instance => (
-                      <option key={instance.id} value={instance.id}>
-                        {instance.name} · {instance.status === 'running' ? labels.running : labels.finished}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{labels.sessionHistory}</div>
-                    <Badge tone="blue">{sessions.length}</Badge>
-                  </div>
-                  <div className="max-h-[calc(100vh-374px)] space-y-2 overflow-y-auto pr-1">
-                    {sessions.length === 0 ? (
-                      <EmptyPanel title={labels.noHistory} description={labels.noHistoryDesc} />
-                    ) : sessions.map(session => (
-                      <SessionCard
-                        key={session.id}
-                        title={session.instance_name}
-                        subtitle={session.model_name || labels.unknown}
-                        meta={`${session.workload === 'inference' ? formatRate(session.avg_tokens_per_sec) : workloadLabel(session.workload, lang)} · ${formatMemory(session.peak_vram_mb)} · ${formatTime(session.started_at)}`}
-                        selected={session.id === selectedSessionId}
-                        running={!session.stopped_at}
-                        statusLabel={!session.stopped_at ? labels.running : labels.finished}
-                        workload={workloadLabel(session.workload, lang)}
-                        workloadTone={session.workload === 'embedding' ? 'violet' : session.workload === 'reranker' ? 'blue' : 'slate'}
-                        onClick={() => {
-                          setSelectedSessionId(session.id)
-                          setSelectedInstanceId(session.instance_id)
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </MonitorPanel>
-          </aside>
-
-          <main className="min-w-0 space-y-4">
-            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
+      {tab === 'live' && <LiveOverview key={selectedInstanceId} lang={lang} instance={selectedInstance} workload={performanceMode.workload}
+        frame={liveTargetId ? currentFrame : null} frames={liveFrames} samples={samples} system={sysMetrics} history={systemMetricsHistory}
+        requests={requests} batches={detailReady ? vectorRecords ?? [] : []} context={detailReady ? slotUsage : null}/>}
+      {tab === 'history' && <SessionRecords copy={copy} sessions={sessions.filter(s => s.instance_id === selectedInstanceId)}
+        selected={selectedSession} analysis={analysis} choose={s => { selectedSessionIdRef.current = s.id; setSelectedSessionId(s.id) }}>
+        {selectedSession && <div className="console-surface monitor-detail"><h3>{formatTime(selectedSession.started_at)} · {selectedSession.model_name || selectedSession.instance_name}</h3>
+          <p className="monitor-note">{performanceMode.kind === 'vector' ? (performanceMode.itemName === 'document' ? labels.completedDocuments : labels.completedVectors) : labels.requests}　{numberText(performanceMode.kind === 'vector' ? analysis?.vector_analysis?.completedItems : analysis?.request_count, 0)}　·　{copy.maxMemory}　{formatMemory(selectedSession.peak_vram_mb)}</p>
+          <ComparisonTable rows={comparisonRows}/></div>}
+      </SessionRecords>}
+      {tab === 'diagnostics' && <>
+        <section className="console-surface monitor-detail"><header><h3>{copy.hardware}</h3><span className="monitor-note">{sysMetrics?.gpu_name}</span></header>
+          <dl className="monitor-readouts">
+            {[[copy.gpuLoad, currentSystem?.gpu_percent, '%'],[copy.temperature, currentSystem?.gpu_temperature_c, '°C'],
+              [copy.power, currentSystem?.gpu_power_w, 'W'],[copy.board, currentSystem?.gpu_board_power_w, 'W'],
+              [copy.cpu, currentSystem?.system_cpu_percent, '%']].map(([label,value,unit]) =>
+              <div key={String(label)}><dt>{label}</dt><dd>{typeof value === 'number' ? numberText(value) + ' ' + unit : '—'}</dd></div>)}
+            <div><dt>{copy.ram}</dt><dd>{formatMemory(currentSystem?.system_memory_used_mb)} / {formatMemory(currentSystem?.system_memory_total_mb)}</dd></div>
+          </dl>
+          <p className="monitor-note">{currentSystem?.gpu_vendor === 'NVIDIA' ? copy.nvmlMax + ' · ' + copy.nvmlPower
+            : currentSystem?.gpu_vendor === 'AMD' ? 'AMD ADLX · GPUTemperature / GPUPower / GPUTotalBoardPower' : copy.missing}</p>
+        </section>
+        <details className="monitor-disclosure" data-monitor-diagnostics open={diagnosticsOpen} onToggle={event => setDiagnosticsOpen(event.currentTarget.open)}><summary>{copy.inferenceDetails}</summary>
+          {diagnosticsOpen && <div className="grid min-w-0 gap-3 pt-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(260px,1fr)]">
+          <div className="min-w-0 space-y-4">
+            <section className="rounded-lg border border-ui-line bg-ui-surface p-4 shadow-sm">
               <div className="flex min-w-0 flex-wrap items-center gap-3">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-300/40 bg-blue-500/10 text-blue-600 dark:text-blue-300">
                   <Server className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h2 className="truncate text-xl font-semibold text-slate-950 dark:text-white" title={selectedSession?.instance_name || selectedInstance?.name || labels.noSelection}>
+                    <h2 className="truncate text-xl font-semibold text-ui-ink" title={selectedSession?.instance_name || selectedInstance?.name || labels.noSelection}>
                       {selectedSession?.instance_name || selectedInstance?.name || labels.noSelection}
                     </h2>
                     <Badge tone={selectedRunning ? 'emerald' : 'slate'}>
@@ -485,7 +472,7 @@ export default function PerformancePage() {
 
             <section className="space-y-2" aria-label={labels.systemResources}>
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                <div className="text-xs font-semibold uppercase tracking-wide text-ui-muted">
                   {labels.systemResources}
                 </div>
                 <Badge tone="emerald">{labels.realtime}</Badge>
@@ -510,13 +497,13 @@ export default function PerformancePage() {
               title={labels.throughputTrend}
               icon={<BarChart3 className="h-5 w-5" />}
               action={
-                <div data-vector-trend-control={performanceMode.kind === 'vector' || undefined} className="flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950">
+                <div data-vector-trend-control={performanceMode.kind === 'vector' || undefined} className="flex rounded-lg border border-ui-line bg-ui-inset p-1">
                   {performanceMode.kind === 'vector' ? (['input', 'items'] as const).map(metric => (
                     <button
                       key={metric}
                       type="button"
                       onClick={() => setVectorTrendMetric(metric)}
-                      className={`h-7 min-w-[84px] rounded-md px-2 text-xs font-medium transition ${vectorTrendMetric === metric ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'}`}
+                      className={`h-7 min-w-[84px] rounded-md px-2 text-xs font-medium transition ${vectorTrendMetric === metric ? 'bg-ui-action text-ui-action-ink' : 'text-ui-muted hover:text-ui-ink'}`}
                     >
                       {metric === 'input' ? labels.inputThroughput : performanceMode.itemName === 'document' ? labels.documentThroughput : labels.vectorThroughput}
                     </button>
@@ -525,7 +512,7 @@ export default function PerformancePage() {
                       key={range}
                       type="button"
                       onClick={() => setTrendRange(range)}
-                      className={`h-7 rounded-md px-2 text-xs font-medium transition ${trendRange === range ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'}`}
+                      className={`h-7 rounded-md px-2 text-xs font-medium transition ${trendRange === range ? 'bg-ui-action text-ui-action-ink' : 'text-ui-muted hover:text-ui-ink'}`}
                     >
                       {labels.ranges[range]}
                     </button>
@@ -546,7 +533,7 @@ export default function PerformancePage() {
                   : performanceMode.kind === 'vector' ? 'input tok/s' : 'tok/s'}
               />}
               {performanceMode.kind === 'vector' ? (
-                <div data-vector-source-state={performanceMode.source.kind} className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
+                <div data-vector-source-state={performanceMode.source.kind} className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-ui-line pt-3 text-xs text-ui-body">
                   <span className="min-w-0 flex-1">{performanceMode.source.summary}</span>
                   <div className="flex flex-wrap gap-2">
                     <Badge tone={performanceMode.analysis?.logAvailable ? 'emerald' : 'slate'}>{performanceMode.source.log}</Badge>
@@ -560,7 +547,7 @@ export default function PerformancePage() {
               {performanceMode.kind === 'inference' ? (
                 <InferenceTasks entries={[{ frame: selectedRunning ? currentFrame ?? undefined : undefined, name: selectedSession?.instance_name || selectedInstance?.name }]} lang={lang} />
               ) : activeTasks.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                <div className="rounded-lg border border-dashed border-ui-line px-4 py-8 text-center text-sm text-ui-muted">
                   {selectedSession?.stopped_at ? labels.sessionFinishedNoActive : labels.noActiveRequests}
                 </div>
               ) : (
@@ -590,18 +577,18 @@ export default function PerformancePage() {
               >
                 {speculativeSummary.hasData ? (
                   <div data-speculative-analysis className="grid gap-4 md:grid-cols-[minmax(210px,0.9fr)_minmax(0,1.5fr)] md:items-center">
-                    <div className="min-w-0 md:border-r md:border-slate-200 md:pr-5 dark:md:border-slate-800">
-                      <div className="text-xs font-medium text-slate-500">{speculativeLabels.acceptanceRate}</div>
+                    <div className="min-w-0 md:border-r md:border-ui-line md:pr-5">
+                      <div className="text-xs font-medium text-ui-muted">{speculativeLabels.acceptanceRate}</div>
                       <div className="mt-2 text-4xl font-semibold text-violet-700 dark:text-violet-300">
                         {formatRatio(speculativeSummary.acceptanceRate)}
                       </div>
-                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-ui-line">
                         <div
                           className="h-full rounded-full bg-violet-500 transition-[width] duration-500"
                           style={{ width: `${Math.round((speculativeSummary.acceptanceRate || 0) * 100)}%` }}
                         />
                       </div>
-                      <div className="mt-2 text-xs text-slate-500">
+                      <div className="mt-2 text-xs text-ui-muted">
                         {speculativeLabels.tokenRatio(
                           speculativeSummary.acceptedTokens.toLocaleString(),
                           speculativeSummary.generatedTokens.toLocaleString(),
@@ -616,18 +603,18 @@ export default function PerformancePage() {
                     </div>
                   </div>
                 ) : (
-                  <div data-speculative-analysis="waiting" className="rounded-lg border border-dashed border-slate-300 px-4 py-7 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  <div data-speculative-analysis="waiting" className="rounded-lg border border-dashed border-ui-line px-4 py-7 text-center text-sm text-ui-muted">
                     {speculativeLabels.waiting}
                   </div>
                 )}
               </MonitorPanel>
             ) : null}
-          </main>
+          </div>
 
-          <aside className="min-w-0 space-y-4 xl:col-span-2 2xl:col-span-1">
+          <aside className="min-w-0 space-y-4">
             <MonitorPanel title={labels.diagnosis} icon={<AlertTriangle className="h-5 w-5" />} action={<Badge tone={workloadDiagnostics.length > 0 ? 'amber' : 'emerald'}>{workloadDiagnostics.length}</Badge>}>
               {visibleDiagnostics.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 px-3 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                <div className="rounded-lg border border-dashed border-ui-line px-3 py-8 text-center text-sm text-ui-muted">
                   {labels.noDiagnostics}
                 </div>
               ) : (
@@ -635,24 +622,24 @@ export default function PerformancePage() {
                   {visibleDiagnostics.map(finding => (
                     <div key={finding.id} className={`rounded-lg border p-3 ${diagnosticPanelClass(finding.severity)}`}>
                       <div className="mb-2 flex items-start justify-between gap-3">
-                        <div className="min-w-0 font-semibold text-slate-950 dark:text-slate-100">{finding.title}</div>
+                        <div className="min-w-0 font-semibold text-ui-ink">{finding.title}</div>
                         <Badge tone={diagnosticTone(finding.severity)}>{diagnosticSeverityLabel(finding.severity, labels)}</Badge>
                       </div>
-                      <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{finding.summary}</p>
+                      <p className="text-xs leading-5 text-ui-muted">{finding.summary}</p>
                       {finding.recommendation[0] ? (
                         <div className="mt-2 text-xs font-medium text-blue-600 dark:text-blue-300">{finding.recommendation[0]}</div>
                       ) : null}
                     </div>
                   ))}
                   {workloadDiagnostics.length > visibleDiagnostics.length ? (
-                    <div className="text-center text-xs text-slate-500">{labels.moreDiagnostics(workloadDiagnostics.length - visibleDiagnostics.length)}</div>
+                    <div className="text-center text-xs text-ui-muted">{labels.moreDiagnostics(workloadDiagnostics.length - visibleDiagnostics.length)}</div>
                   ) : null}
                 </div>
               )}
             </MonitorPanel>
 
             <MonitorPanel title={labels.historyBaseline} icon={<Clock className="h-5 w-5" />}>
-              <div className="mb-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              <div className="mb-3 text-xs leading-5 text-ui-muted">
                 {performanceMode.kind === 'vector'
                   ? analysis?.vector_baseline && analysis.vector_baseline.sessionCount > 0
                     ? labels.vectorHistory(analysis.vector_baseline.sessionCount)
@@ -690,17 +677,18 @@ export default function PerformancePage() {
               )}
             </MonitorPanel>
           </aside>
-        </div>
-      </div>
-    </PageFrame>
+          </div>}
+        </details>
+      </>}
+    </section>
   )
 }
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
-      <div className="truncate text-xs text-slate-500">{label}</div>
-      <div className="mt-2 truncate text-lg font-semibold text-slate-950 dark:text-slate-100" title={String(value)}>{value}</div>
+    <div className="min-w-0 rounded-lg border border-ui-line bg-ui-inset p-3">
+      <div className="truncate text-xs text-ui-muted">{label}</div>
+      <div className="mt-2 truncate text-lg font-semibold text-ui-ink" title={String(value)}>{value}</div>
     </div>
   )
 }
@@ -708,8 +696,8 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
 function InlineStat({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-xs text-slate-500" title={label}>{label}</div>
-      <div className="mt-1 truncate text-lg font-semibold text-slate-950 dark:text-slate-100" title={String(value)}>{value}</div>
+      <div className="truncate text-xs text-ui-muted" title={label}>{label}</div>
+      <div className="mt-1 truncate text-lg font-semibold text-ui-ink" title={String(value)}>{value}</div>
     </div>
   )
 }

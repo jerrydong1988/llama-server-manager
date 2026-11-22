@@ -234,7 +234,7 @@ export default function DownloadManager() {
       case 'mmproj':
         return 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300'
       case 'imatrix':
-        return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+        return 'bg-ui-inset text-ui-body'
       default:
         return 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
     }
@@ -433,15 +433,15 @@ export default function DownloadManager() {
                 </span>
               )}
             </div>
-            <div className="mt-2 truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={task.fileName}>
+            <div className="mt-2 truncate text-sm font-medium text-ui-ink" title={task.fileName}>
               {task.fileName}
             </div>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ui-muted">
               <span className="shrink-0">{sourceName(task.source)}</span>
               <span className="min-w-0 max-w-full truncate" title={task.repoId}>{task.repoId}</span>
             </div>
             {task.remotePath && task.remotePath !== task.fileName && (
-              <PathText value={task.remotePath} maxLength={88} className="mt-1 max-w-full text-slate-400 dark:text-slate-500" />
+              <PathText value={task.remotePath} maxLength={88} className="mt-1 max-w-full text-ui-muted" />
             )}
           </div>
 
@@ -500,7 +500,7 @@ export default function DownloadManager() {
                 </button>
                 <button
                   onClick={() => handleOpenTaskLocation(task)}
-                  className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                  className="inline-flex items-center gap-1 rounded-lg bg-ui-inset px-2.5 py-2 text-xs font-medium text-ui-body transition hover:bg-ui-hover"
                   title={ui.openLocation}
                 >
                   <FolderOpen className="h-3.5 w-3.5" />
@@ -512,7 +512,7 @@ export default function DownloadManager() {
             {(task.status === 'completed' || task.status === 'cancelled') && task.path && (
               <button
                 onClick={() => void handleDeleteCompleted(task)}
-                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-rose-500 dark:hover:bg-slate-800"
+                className="rounded-lg p-2 text-ui-muted transition hover:bg-ui-hover hover:text-rose-500"
                 title={t.common.delete}
               >
                 <Trash2 className="h-4 w-4" />
@@ -523,7 +523,7 @@ export default function DownloadManager() {
               <>
                 <button
                   onClick={() => retryFailedDownload(task.id)}
-                  className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-2 text-xs font-medium text-blue-700 transition hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/70"
+                  className="inline-flex items-center gap-1 rounded-lg bg-ui-action px-2.5 py-2 text-xs font-medium text-ui-action-ink transition hover:bg-ui-action-hover"
                   title={t.downloadPage.retry}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
@@ -542,26 +542,26 @@ export default function DownloadManager() {
           </div>
         </div>
 
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ui-line">
           <div className={`h-full rounded-full ${barColor} transition-all duration-300`} style={{ width: `${pct}%` }} />
         </div>
 
         <div className="mt-3 grid min-w-0 grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <div className="min-w-0">
-            <div className="text-slate-400 dark:text-slate-500">{ui.progress}</div>
-            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{pct.toFixed(1)}%</div>
+            <div className="text-ui-muted">{ui.progress}</div>
+            <div className="mt-0.5 truncate text-ui-body">{pct.toFixed(1)}%</div>
           </div>
           <div className="min-w-0">
-            <div className="text-slate-400 dark:text-slate-500">{ui.downloaded}</div>
-            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{formatSize(task.downloaded)} / {formatSize(task.total)}</div>
+            <div className="text-ui-muted">{ui.downloaded}</div>
+            <div className="mt-0.5 truncate text-ui-body">{formatSize(task.downloaded)} / {formatSize(task.total)}</div>
           </div>
           <div className="min-w-0">
-            <div className="text-slate-400 dark:text-slate-500">{ui.speed}</div>
-            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{task.status === 'active' ? formatSpeed(task.speed || 0) : '-'}</div>
+            <div className="text-ui-muted">{ui.speed}</div>
+            <div className="mt-0.5 truncate text-ui-body">{task.status === 'active' ? formatSpeed(task.speed || 0) : '-'}</div>
           </div>
           <div className="min-w-0">
-            <div className="text-slate-400 dark:text-slate-500">{ui.eta}</div>
-            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{task.status === 'active' ? taskEtaText(task) : queueStateDetail(task)}</div>
+            <div className="text-ui-muted">{ui.eta}</div>
+            <div className="mt-0.5 truncate text-ui-body">{task.status === 'active' ? taskEtaText(task) : queueStateDetail(task)}</div>
           </div>
         </div>
 
@@ -573,11 +573,11 @@ export default function DownloadManager() {
         )}
 
         {task.status === 'completed' && (
-          <PathText value={taskLocalPath(task)} maxLength={110} className="mt-3 max-w-full text-xs text-slate-400 dark:text-slate-500" />
+          <PathText value={taskLocalPath(task)} maxLength={110} className="mt-3 max-w-full text-xs text-ui-muted" />
         )}
 
         {modelImportStatus && isSelected && (
-          <div className="mt-3 truncate rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400" title={modelImportStatus}>
+          <div className="mt-3 truncate rounded-lg border border-ui-line bg-ui-surface px-3 py-2 text-xs text-ui-muted" title={modelImportStatus}>
             {modelImportStatus}
           </div>
         )}
@@ -593,16 +593,16 @@ export default function DownloadManager() {
       : 0
 
     return (
-      <div key={file.path} className="min-w-0 border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
+      <div key={file.path} className="min-w-0 border-b border-ui-line px-4 py-4 last:border-b-0">
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={file.name}>{file.name}</div>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <div className="truncate text-sm font-medium text-ui-ink" title={file.name}>{file.name}</div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ui-muted">
               <span className={`rounded-full px-2 py-1 ${modelTypeColor(file.file_type)}`}>{modelTypeLabel(file.file_type)}</span>
               <span>{formatSize(file.size)}</span>
             </div>
             {file.path && file.path !== file.name && (
-              <PathText value={file.path} maxLength={88} className="mt-1 max-w-full text-slate-400 dark:text-slate-500" />
+              <PathText value={file.path} maxLength={88} className="mt-1 max-w-full text-ui-muted" />
             )}
           </div>
 
@@ -610,7 +610,7 @@ export default function DownloadManager() {
             {!task && (
               <button
                 onClick={() => handleDownloadFile(file)}
-                className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-700"
+                className="inline-flex items-center gap-1 rounded-lg bg-ui-action px-3 py-2 text-xs font-medium text-ui-action-ink transition hover:bg-ui-action-hover"
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>{t.modelRepo.downloadBtn}</span>
@@ -664,7 +664,7 @@ export default function DownloadManager() {
             {task?.status === 'error' && (
               <button
                 onClick={() => handleDownloadFile(file)}
-                className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 transition hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/70"
+                className="inline-flex items-center gap-1 rounded-lg bg-ui-action px-3 py-2 text-xs font-medium text-ui-action-ink transition hover:bg-ui-action-hover"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>{t.modelRepo.retry}</span>
@@ -674,13 +674,13 @@ export default function DownloadManager() {
         </div>
 
         {pending && (
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ui-line">
             <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
           </div>
         )}
 
         {task && (
-          <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-ui-muted">
             {task.status === 'active' || task.status === 'pausing' ? (
               <span className="truncate">{formatSize(task.downloaded)} / {formatSize(task.total)} &middot; {formatSpeed(task.speed || 0)} &middot; {formatETA(task.downloaded, task.total, task.speed || 0)}</span>
             ) : task.status === 'paused' ? (
@@ -702,10 +702,10 @@ export default function DownloadManager() {
     if (!selectedTask) {
       return (
         <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
-          <div className="border-b border-slate-200 px-4 py-4 dark:border-slate-800">
-            <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.taskSummary}</div>
+          <div className="border-b border-ui-line px-4 py-4">
+            <div className="text-sm font-semibold text-ui-ink">{ui.taskSummary}</div>
           </div>
-          <div className="px-4 py-8 text-sm text-slate-400 dark:text-slate-500">{ui.noSelectedTask}</div>
+          <div className="px-4 py-8 text-sm text-ui-muted">{ui.noSelectedTask}</div>
         </section>
       )
     }
@@ -719,11 +719,11 @@ export default function DownloadManager() {
 
     return (
       <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
-        <div className="border-b border-slate-200 px-4 py-4 dark:border-slate-800">
+        <div className="border-b border-ui-line px-4 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.taskSummary}</div>
-              <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={selectedTask.fileName}>{selectedTask.fileName}</div>
+              <div className="text-sm font-semibold text-ui-ink">{ui.taskSummary}</div>
+              <div className="mt-1 truncate text-xs text-ui-muted" title={selectedTask.fileName}>{selectedTask.fileName}</div>
             </div>
             <StatusBadge status={selectedTask.status} label={taskStatusLabel(selectedTask)} />
           </div>
@@ -732,36 +732,36 @@ export default function DownloadManager() {
         <div className="space-y-4 px-4 py-4">
           <div>
             <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-              <span className="font-medium text-slate-500 dark:text-slate-400">{ui.progress}</span>
-              <span className="text-slate-600 dark:text-slate-300">{pct.toFixed(1)}%</span>
+              <span className="font-medium text-ui-muted">{ui.progress}</span>
+              <span className="text-ui-body">{pct.toFixed(1)}%</span>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+            <div className="h-2 overflow-hidden rounded-full bg-ui-line">
               <div className="h-full rounded-full bg-blue-500 transition-all duration-300" style={{ width: `${pct}%` }} />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
-              <div className="text-slate-400 dark:text-slate-500">{ui.downloaded}</div>
-              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{formatSize(selectedTask.downloaded)} / {formatSize(selectedTask.total)}</div>
+            <div className="min-w-0 rounded-lg border border-ui-line px-3 py-2.5">
+              <div className="text-ui-muted">{ui.downloaded}</div>
+              <div className="mt-1 truncate font-medium text-ui-body">{formatSize(selectedTask.downloaded)} / {formatSize(selectedTask.total)}</div>
             </div>
-            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
-              <div className="text-slate-400 dark:text-slate-500">{ui.speed}</div>
-              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{selectedTask.status === 'active' ? formatSpeed(selectedTask.speed || 0) : '-'}</div>
+            <div className="min-w-0 rounded-lg border border-ui-line px-3 py-2.5">
+              <div className="text-ui-muted">{ui.speed}</div>
+              <div className="mt-1 truncate font-medium text-ui-body">{selectedTask.status === 'active' ? formatSpeed(selectedTask.speed || 0) : '-'}</div>
             </div>
-            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
-              <div className="text-slate-400 dark:text-slate-500">{ui.eta}</div>
-              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{selectedTask.status === 'active' ? taskEtaText(selectedTask) : '-'}</div>
+            <div className="min-w-0 rounded-lg border border-ui-line px-3 py-2.5">
+              <div className="text-ui-muted">{ui.eta}</div>
+              <div className="mt-1 truncate font-medium text-ui-body">{selectedTask.status === 'active' ? taskEtaText(selectedTask) : '-'}</div>
             </div>
-            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
-              <div className="text-slate-400 dark:text-slate-500">{ui.queueState}</div>
-              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{queueStateDetail(selectedTask)}</div>
+            <div className="min-w-0 rounded-lg border border-ui-line px-3 py-2.5">
+              <div className="text-ui-muted">{ui.queueState}</div>
+              <div className="mt-1 truncate font-medium text-ui-body">{queueStateDetail(selectedTask)}</div>
             </div>
           </div>
 
           <div className="space-y-2 text-xs">
-            <div className="text-slate-400 dark:text-slate-500">{ui.localPath}</div>
-            <PathText value={taskLocalPath(selectedTask)} maxLength={120} className="max-w-full text-slate-600 dark:text-slate-300" />
+            <div className="text-ui-muted">{ui.localPath}</div>
+            <PathText value={taskLocalPath(selectedTask)} maxLength={120} className="max-w-full text-ui-body" />
           </div>
 
           {isFailed && (
@@ -786,7 +786,7 @@ export default function DownloadManager() {
               <button
                 type="button"
                 onClick={() => handleOpenTaskLocation(selectedTask)}
-                className="inline-flex items-center justify-center gap-1 rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                className="inline-flex items-center justify-center gap-1 rounded-lg bg-ui-inset px-3 py-2 text-xs font-medium text-ui-body transition hover:bg-ui-hover"
               >
                 <FolderOpen className="h-3.5 w-3.5" />
                 <span>{ui.openLocation}</span>
@@ -795,7 +795,7 @@ export default function DownloadManager() {
           )}
 
           {modelImportStatus && (
-            <div className="truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-400" title={modelImportStatus}>
+            <div className="truncate rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-xs text-ui-muted" title={modelImportStatus}>
               {modelImportStatus}
             </div>
           )}
@@ -810,17 +810,17 @@ export default function DownloadManager() {
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[1, 2, 3, 4].map(i => (
             <div key={i} className={`${surfaceClassName} animate-pulse px-4 py-4`}>
-              <div className="h-6 w-24 rounded bg-slate-200 dark:bg-slate-800" />
-              <div className="mt-4 h-8 w-16 rounded bg-slate-200 dark:bg-slate-800" />
-              <div className="mt-2 h-4 w-28 rounded bg-slate-200 dark:bg-slate-800" />
+              <div className="h-6 w-24 rounded bg-ui-line" />
+              <div className="mt-4 h-8 w-16 rounded bg-ui-line" />
+              <div className="mt-2 h-4 w-28 rounded bg-ui-line" />
             </div>
           ))}
         </div>
         <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.65fr)_380px]">
-          <div className={`${surfaceClassName} h-[520px] animate-pulse bg-slate-100 dark:bg-slate-900`} />
+          <div className={`${surfaceClassName} h-[520px] animate-pulse bg-ui-inset`} />
           <div className="space-y-5">
-            <div className={`${surfaceClassName} h-[220px] animate-pulse bg-slate-100 dark:bg-slate-900`} />
-            <div className={`${surfaceClassName} h-[275px] animate-pulse bg-slate-100 dark:bg-slate-900`} />
+            <div className={`${surfaceClassName} h-[220px] animate-pulse bg-ui-inset`} />
+            <div className={`${surfaceClassName} h-[275px] animate-pulse bg-ui-inset`} />
           </div>
         </div>
       </div>
@@ -840,12 +840,12 @@ export default function DownloadManager() {
         <div className="flex flex-col gap-3 px-4 py-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.batchTools}</span>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+              <span className="text-sm font-semibold text-ui-ink">{ui.batchTools}</span>
+              <span className="rounded-full bg-ui-inset px-2 py-0.5 text-[11px] text-ui-muted">
                 {hasAnyActionable ? `${actionableCount} ${ui.controllable}` : ui.noActionable}
               </span>
             </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ui-muted">
               <span>{ui.totalSpeed}: {formatSpeed(activeSpeed)}</span>
               <span>{ui.strategy}: {resumePolicyLabel}</span>
               <span>{ui.concurrencyShort}: {concurrency}</span>
@@ -884,17 +884,17 @@ export default function DownloadManager() {
 
       <div className="grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1.65fr)_380px]">
         <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-4 dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ui-line px-4 py-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.addTaskTitle}</div>
-              <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={browsedRepoId || status || t.downloadPage.repoLabel}>
+              <div className="text-sm font-semibold text-ui-ink">{ui.addTaskTitle}</div>
+              <div className="mt-1 truncate text-xs text-ui-muted" title={browsedRepoId || status || t.downloadPage.repoLabel}>
                 {browsedRepoId ? `${sourceName(source)} · ${browsedRepoId}` : ui.addTaskSub}
               </div>
             </div>
             {files.length > 0 && (
               <button
                 onClick={handleDownloadAll}
-                className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-700"
+                className="inline-flex items-center gap-1 rounded-lg bg-ui-action px-3 py-2 text-xs font-medium text-ui-action-ink transition hover:bg-ui-action-hover"
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>{t.downloadPage.downloadAll} ({files.filter(file => taskForFile(file)?.status !== 'completed').length})</span>
@@ -904,22 +904,22 @@ export default function DownloadManager() {
 
           <div className="space-y-4 px-4 py-4">
             <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.62fr)]">
-              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
+              <div className="min-w-0 rounded-lg border border-ui-line bg-ui-inset p-3">
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{ui.sourceSection}</div>
-                    <div className="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.sourceHelp}</div>
+                    <div className="text-xs font-semibold text-ui-ink">{ui.sourceSection}</div>
+                    <div className="mt-1 text-[11px] leading-5 text-ui-muted">{ui.sourceHelp}</div>
                   </div>
-                  <div className="inline-flex max-w-full shrink-0 rounded-lg bg-slate-200/70 p-1 dark:bg-slate-800" data-guide="download-source">
+                  <div className="inline-flex max-w-full shrink-0 rounded-lg bg-ui-line p-1" data-guide="download-source">
                     <button
                       onClick={() => handleSourceChange('modelscope')}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'modelscope' ? 'bg-ui-action text-ui-action-ink' : 'text-ui-muted hover:text-ui-ink'}`}
                     >
                       ModelScope
                     </button>
                     <button
                       onClick={() => handleSourceChange('huggingface')}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'huggingface' ? 'bg-ui-action text-ui-action-ink' : 'text-ui-muted hover:text-ui-ink'}`}
                     >
                       HuggingFace
                     </button>
@@ -936,12 +936,12 @@ export default function DownloadManager() {
                       if (e.key === 'Enter') void handleBrowse()
                     }}
                     placeholder={source === 'modelscope' ? t.modelRepo.repoIdPlaceholder : t.modelRepo.hfRepoIdPlaceholder}
-                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                    className="min-w-0 flex-1 rounded-lg border border-ui-line bg-ui-surface px-3 py-2.5 text-sm text-ui-ink outline-none transition placeholder:text-ui-muted focus:border-ui-focus"
                   />
                   <button
                     onClick={handleBrowse}
                     disabled={browsing}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-ui-action px-4 py-2.5 text-sm font-medium text-ui-action-ink transition hover:bg-ui-action-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Download className="h-4 w-4" />
                     <span>{t.modelRepo.browseFiles}</span>
@@ -949,10 +949,10 @@ export default function DownloadManager() {
                 </div>
               </div>
 
-              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
+              <div className="min-w-0 rounded-lg border border-ui-line bg-ui-inset p-3">
                 <div className="mb-3 min-w-0">
-                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{ui.storageSection}</div>
-                  <div className="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.storageHelp}</div>
+                  <div className="text-xs font-semibold text-ui-ink">{ui.storageSection}</div>
+                  <div className="mt-1 text-[11px] leading-5 text-ui-muted">{ui.storageHelp}</div>
                 </div>
 
                 <div className="flex min-w-0 gap-2" data-guide="download-save-dir">
@@ -969,25 +969,25 @@ export default function DownloadManager() {
                     }}
                     placeholder={ui.storageSection}
                     aria-label={ui.storageSection}
-                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                    className="min-w-0 flex-1 rounded-lg border border-ui-line bg-ui-surface px-3 py-2.5 text-sm text-ui-ink outline-none transition placeholder:text-ui-muted focus:border-ui-focus"
                   />
                   <button
                     onClick={handleBrowseSaveDir}
                     title={ui.chooseFolder}
                     aria-label={ui.chooseFolder}
-                    className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white"
+                    className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg border border-ui-line bg-ui-surface text-ui-body transition hover:bg-ui-hover hover:text-ui-ink"
                   >
                     <FolderOpen className="h-4 w-4" />
                   </button>
                 </div>
 
-                <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{ui.storagePreview}</div>
-                  <PathText value={storagePreview} maxLength={96} className="mt-1 max-w-full text-xs text-slate-600 dark:text-slate-300" />
+                <div className="mt-3 rounded-lg border border-ui-line bg-ui-surface px-3 py-2">
+                  <div className="text-[11px] font-medium text-ui-muted">{ui.storagePreview}</div>
+                  <PathText value={storagePreview} maxLength={96} className="mt-1 max-w-full text-xs text-ui-body" />
                 </div>
 
                 {status && (
-                  <div className="mt-3 truncate rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400" title={status}>
+                  <div className="mt-3 truncate rounded-lg border border-ui-line bg-ui-surface px-3 py-2 text-xs text-ui-muted" title={status}>
                     {status}
                   </div>
                 )}
@@ -995,9 +995,9 @@ export default function DownloadManager() {
             </div>
           </div>
 
-          <div className="max-h-[560px] overflow-y-auto border-t border-slate-200 dark:border-slate-800">
+          <div className="max-h-[560px] overflow-y-auto border-t border-ui-line">
             {files.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-slate-400 dark:text-slate-500">
+              <div className="px-4 py-10 text-center text-sm text-ui-muted">
                 {browsing ? t.downloadPage.loading : t.modelRepo.browseFiles}
               </div>
             ) : (
@@ -1043,19 +1043,19 @@ export default function DownloadManager() {
           >
             <div className="max-h-[440px] overflow-y-auto">
               {queueGroups.length === 0 ? (
-                <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">{t.downloadPage.noQueue}</div>
+                <div className="px-4 py-8 text-center text-sm text-ui-muted">{t.downloadPage.noQueue}</div>
               ) : (
                 queueGroups.map((group, index) => (
-                  <div key={group.key} className="border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
+                  <div key={group.key} className="border-b border-ui-line px-4 py-4 last:border-b-0">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          <span className="rounded-full bg-ui-inset px-2 py-1 text-[11px] text-ui-body">
                             {sourceName(group.entry.source)}
                           </span>
-                          <span className="min-w-0 max-w-full truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={group.entry.repoId}>{group.entry.repoId}</span>
+                          <span className="min-w-0 max-w-full truncate text-sm font-medium text-ui-ink" title={group.entry.repoId}>{group.entry.repoId}</span>
                         </div>
-                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        <div className="mt-2 text-xs text-ui-muted">
                           {group.files.length} {t.downloadPage.files} &middot; {formatSize(group.files.reduce((sum, file) => sum + file.size, 0))}
                         </div>
                       </div>
@@ -1063,26 +1063,26 @@ export default function DownloadManager() {
                         <button
                           onClick={() => moveQueueEntry(group.entry.id, 'up')}
                           disabled={index === 0}
-                          className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-slate-800 dark:hover:text-white"
+                          className="rounded-lg p-2 text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <ChevronUp className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => moveQueueEntry(group.entry.id, 'down')}
                           disabled={index === queueGroups.length - 1}
-                          className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-slate-800 dark:hover:text-white"
+                          className="rounded-lg p-2 text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <ChevronDown className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => removeFromDownloadQueue(group.entry.id)}
-                          className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-rose-500 dark:hover:bg-slate-800"
+                          className="rounded-lg p-2 text-ui-muted transition hover:bg-ui-hover hover:text-rose-500"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </div>
-                    <div className="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+                    <div className="mt-3 space-y-1 text-xs text-ui-muted">
                       {group.files.slice(0, 4).map(file => (
                         <div key={file.task_id || file.name} className="truncate" title={formatPathForDisplay(file.path || file.name)}>{file.name}</div>
                       ))}
@@ -1107,7 +1107,7 @@ export default function DownloadManager() {
         >
           <div className="max-h-[520px] overflow-y-auto">
             {activeTasks.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">{t.downloadPage.noActive}</div>
+              <div className="px-4 py-8 text-center text-sm text-ui-muted">{t.downloadPage.noActive}</div>
             ) : (
               activeTasks.map(renderTaskCard)
             )}
@@ -1122,7 +1122,7 @@ export default function DownloadManager() {
         >
           <div className="max-h-[520px] overflow-y-auto">
             {pausedTasks.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">{t.downloadPage.noPaused}</div>
+              <div className="px-4 py-8 text-center text-sm text-ui-muted">{t.downloadPage.noPaused}</div>
             ) : (
               pausedTasks.map(renderTaskCard)
             )}
@@ -1139,7 +1139,7 @@ export default function DownloadManager() {
           extra={failedTasks.length > 0 ? (
             <button
               onClick={() => clearFailedDownloadTasks()}
-              className="rounded-lg px-2.5 py-1 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
+              className="rounded-lg px-2.5 py-1 text-[11px] text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink"
             >
               {t.downloadPage.clearFailed}
             </button>
@@ -1147,7 +1147,7 @@ export default function DownloadManager() {
         >
           <div className="max-h-[420px] overflow-y-auto">
             {failedTasks.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">{t.downloadPage.noFailed}</div>
+              <div className="px-4 py-8 text-center text-sm text-ui-muted">{t.downloadPage.noFailed}</div>
             ) : (
               failedTasks.map(renderTaskCard)
             )}
@@ -1162,7 +1162,7 @@ export default function DownloadManager() {
           extra={completedTasks.length > 0 ? (
             <button
               onClick={() => clearCompletedDownloadTasks()}
-              className="rounded-lg px-2.5 py-1 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
+              className="rounded-lg px-2.5 py-1 text-[11px] text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink"
             >
               {t.downloadPage.clearCompleted}
             </button>
@@ -1170,7 +1170,7 @@ export default function DownloadManager() {
         >
           <div className="max-h-[420px] overflow-y-auto">
             {completedTasks.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">{t.downloadPage.noCompleted}</div>
+              <div className="px-4 py-8 text-center text-sm text-ui-muted">{t.downloadPage.noCompleted}</div>
             ) : (
               completedTasks.map(renderTaskCard)
             )}

@@ -59,7 +59,7 @@ for (const marker of ['data-workload-badge', 'data-vector-source-state', 'data-v
     failures.push(`PerformancePage.tsx: missing vector monitoring marker "${marker}".`)
   }
 }
-if (!/data-vector-source-state[\s\S]{0,500}text-slate-600[\s\S]{0,120}dark:text-slate-300/.test(performancePage)) {
+if (!/data-vector-source-state[\s\S]{0,500}text-ui-body/.test(performancePage)) {
   failures.push('PerformancePage.tsx: vector source state must define readable light and dark text colors.')
 }
 if (!/data-vector-trend-control[\s\S]{0,800}min-w-\[84px\]/.test(performancePage)) {

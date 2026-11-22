@@ -1,5 +1,7 @@
 /* Appearance is owned by the existing html.dark preference, including body portals. */
 :root {
+  color-scheme: light;
+  --ui-action-hover: color-mix(in srgb, var(--ui-action) 85%, var(--ui-accent));
   --ui-canvas: #f9fafb;
   --ui-surface: #fff;
   --ui-inset: #f3f5f6;
@@ -26,6 +28,7 @@
   --ui-pop-shadow: 0 8px 26px rgb(21 35 32 / 14%);
 }
 html.dark {
+  color-scheme: dark;
   --ui-canvas: #0e1113;
   --ui-surface: #161a1d;
   --ui-inset: #1d2226;
@@ -57,7 +60,7 @@ html.dark {
 .console-btn { border: 1px solid var(--ui-line); background: var(--ui-surface); color: var(--ui-body); }
 .console-btn:hover:not(:disabled) { background: var(--ui-hover); border-color: var(--ui-control); }
 .console-btn[data-variant=primary] { background: var(--ui-action); color: var(--ui-action-ink); border-color: var(--ui-action-line); }
-.console-btn[data-variant=primary]:hover:not(:disabled) { background: color-mix(in srgb,var(--ui-action) 85%,var(--ui-accent)); border-color: var(--ui-positive); }
+.console-btn[data-variant=primary]:hover:not(:disabled) { background: var(--ui-action-hover); border-color: var(--ui-positive); }
 .console-btn[data-variant=success] { color: var(--ui-positive); }
 .console-btn[data-variant=subtle] { background: transparent; border-color: transparent; }
 .console-btn[data-variant=danger] { color: var(--ui-danger); background: var(--ui-danger-bg); border-color: color-mix(in srgb,var(--ui-danger) 32%,var(--ui-line)); }
@@ -72,11 +75,11 @@ html.dark {
 .console-input:disabled { opacity: .65; cursor: not-allowed; }
 .console-input[aria-invalid=true] { border-color: var(--ui-danger); }
 .console-page, .console-chrome, .console-overlay { color: var(--ui-ink); accent-color: var(--ui-positive); }
-:is(.console-page,.console-chrome,.console-overlay) :is(button,input,textarea,select,summary,[tabindex]):focus-visible,
+:where(button, input, textarea, select, summary, a, [tabindex]):focus-visible,
 .console-btn:focus-visible, .console-input:focus-visible {
   outline: 2px solid var(--ui-focus); outline-offset: 2px;
 }
-.console-page ::selection, .console-chrome ::selection { color: var(--ui-ink); background: var(--ui-action); }
+::selection { color: var(--ui-ink); background: var(--ui-action); }
 .console-page { min-width: 0; }
 .console-title { color: var(--ui-ink); font-size: 1.5rem; font-weight: 650; letter-spacing: -.025em; line-height: 1.35; }
 .console-heading-row, .console-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

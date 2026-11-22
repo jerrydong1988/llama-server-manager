@@ -137,7 +137,7 @@ export default function ProxyUsagePanel() {
   return <div className="space-y-5" data-testid="router-usage-panel">
     <Surface as="section" className="p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-xl font-semibold">{l.title}</h2><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{l.description}</p></div>
+        <div><h2 className="text-xl font-semibold">{l.title}</h2><p className="mt-1 text-sm text-ui-muted">{l.description}</p></div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setRevision(r => r + 1)} disabled={loading || !valid} icon={<RefreshCw className="h-4 w-4" />}>{l.refresh}</Button>
           <Button onClick={exportSummary} disabled={!report || !groups.length} icon={<Download className="h-4 w-4" />}>{l.export}</Button>
@@ -162,8 +162,8 @@ export default function ProxyUsagePanel() {
           <option value="">{l.business}</option>{['generation', 'embedding', 'rerank', 'count'].map(k => <option key={k} value={k}>{label(k)}</option>)}
         </SelectInput></label>
       </div>
-      <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.retention}</p>
-      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.accounting}</p>
+      <p className="mt-4 text-xs leading-5 text-ui-muted">{l.retention}</p>
+      <p className="mt-1 text-xs leading-5 text-ui-muted">{l.accounting}</p>
     </Surface>
     <ManagementPanel revision={revision} />
     {error ? <Surface className="p-4 text-sm text-red-700 dark:text-red-300" role="alert">{error}</Surface> : null}
@@ -171,7 +171,7 @@ export default function ProxyUsagePanel() {
       {l.storageWarning} {l.dropped}: {number(report.droppedRecords)} · {l.errors}: {number(report.writeErrors)}
       {report.lastWriteError ? <p className="mt-2 break-words">{report.lastWriteError}</p> : null}
     </Surface> : null}
-    {!report && loading ? <p role="status" className="text-sm text-slate-500">{l.loading}</p> : null}
+    {!report && loading ? <p role="status" className="text-sm text-ui-muted">{l.loading}</p> : null}
     {summary ? <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label={l.requests} value={number(summary.requests)} />
@@ -193,14 +193,14 @@ export default function ProxyUsagePanel() {
       <Surface as="section" className="p-5">
         <h3 className="font-semibold">{d.protocolCoverage}</h3>
         <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">{report.endpoints.map(e => <span key={e.id}>{e.name}: {percent(e.summary.complete, e.summary.complete + e.summary.partial + e.summary.unknown)}</span>)}</div>
-        <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.qualityHint}</p>
+        <p className="mt-3 text-xs leading-5 text-ui-muted">{l.qualityHint}</p>
         {report.storage ? <div className="mt-4 space-y-2 text-sm">
           <p>{d.pending}: {number(report.storage.pendingRecords)} · {d.delay}: {report.storage.writeDelayMs == null ? '—' : `${number(report.storage.writeDelayMs)} ms`}</p>
           <p>{d.lastCommit}: {time(report.storage.lastCommitAt || 0)}</p>
           {report.storage.interruptedSessions > 0 ? <div role="status" className="text-amber-700 dark:text-amber-300">
             <p>{d.interruptions}: {number(report.storage.interruptedSessions)} · {time(report.storage.lastInterruptionAt || 0)}</p><p>{d.interruptionHint}</p>
           </div> : null}
-          <p className="text-xs text-slate-500 dark:text-slate-400">{d.storageScope}</p>
+          <p className="text-xs text-ui-muted">{d.storageScope}</p>
         </div> : null}
       </Surface>
       <Surface as="section" className="p-5">
@@ -209,10 +209,10 @@ export default function ProxyUsagePanel() {
             <option value="keys">{l.key}</option><option value="models">{l.model}</option><option value="instances">{l.instance}</option><option value="endpoints">{l.endpoint}</option>
           </SelectInput>
         </div>
-        {!groups.length ? <p className="py-6 text-sm text-slate-500">{l.empty}</p> : <div className="max-h-[440px] overflow-auto"><table className="w-full text-sm">
-          <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800"><tr>{[l.group, l.requests, l.success, l.failed, l.input, l.output, l.cached, l.coverage, l.lastUsed].map(h => <th key={h} className={cell}>{h}</th>)}</tr></thead>
-          <tbody>{groups.map(g => <tr key={g.id} className="border-b border-slate-200 dark:border-slate-800">
-            <td className={cell}><span className="block max-w-64 truncate" title={g.name}>{name(g.id, g.name)}</span><span className="block max-w-64 truncate text-xs text-slate-500" title={g.id}>{g.id}</span></td>
+        {!groups.length ? <p className="py-6 text-sm text-ui-muted">{l.empty}</p> : <div className="max-h-[440px] overflow-auto"><table className="w-full text-sm">
+          <thead className="sticky top-0 bg-ui-inset"><tr>{[l.group, l.requests, l.success, l.failed, l.input, l.output, l.cached, l.coverage, l.lastUsed].map(h => <th key={h} className={cell}>{h}</th>)}</tr></thead>
+          <tbody>{groups.map(g => <tr key={g.id} className="border-b border-ui-line">
+            <td className={cell}><span className="block max-w-64 truncate" title={g.name}>{name(g.id, g.name)}</span><span className="block max-w-64 truncate text-xs text-ui-muted" title={g.id}>{g.id}</span></td>
             <td className={cell}>{number(g.summary.requests)}</td><td className={cell}>{number(g.summary.success)}</td><td className={cell}>{number(g.summary.failed)}</td>
             <td className={cell}>{g.summary.inputKnown ? number(g.summary.input) : '—'}</td><td className={cell}>{g.summary.outputKnown ? number(g.summary.output) : '—'}</td>
             <td className={cell}>{g.summary.cacheKnown ? number(g.summary.cached) : '—'}</td><td className={cell}>{percent(g.summary.complete, g.summary.complete + g.summary.partial + g.summary.unknown)}</td><td className={cell}>{time(g.summary.lastUsed)}</td>

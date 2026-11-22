@@ -33,8 +33,8 @@ for (const dark of [false, true]) {
     await expect(page.locator('#config-advanced-custom')).toBeInViewport()
     await page.locator('[data-nav-id="model-repo"]').click()
     await expect(page.locator('[data-guide="model-search"]')).toBeVisible()
-    await expect(page.locator('[data-workspace-scroll] .console-page')).toHaveCount(0)
-    await expect(page.locator('[data-guide="model-directories"] .console-btn')).toHaveCount(0)
+    await expect(page.locator('[data-workspace-scroll]')).toHaveCSS('background-color', dark ? 'rgb(14, 17, 19)' : 'rgb(249, 250, 251)')
+    await expect(page.locator('[data-guide="model-directories"] .console-btn').first()).toBeVisible()
   })
 }
 

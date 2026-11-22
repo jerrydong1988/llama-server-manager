@@ -881,7 +881,11 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
   return { command, unsupportedFlags, emittedOverrideKeys: emitted }
 }
 
+const missingSensors = new URLSearchParams(location.search).get('sensors') === 'missing'
 const systemMetrics: SystemMetrics = {
+  gpu_temperature_c: HAS_MONITORING_DATA && !missingSensors ? 48 : null,
+  gpu_power_w: HAS_MONITORING_DATA && !missingSensors ? (IS_DOCS_SCENARIO ? 76 : 36) : null,
+  gpu_board_power_w: null,
   cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 24 : 8) : 0,
   memory_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 11 * 1024 : 14 * 1024) : 128,
   uptime_secs: 30,
@@ -891,27 +895,28 @@ const systemMetrics: SystemMetrics = {
   system_cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 31 : 9) : 0,
   system_memory_total_mb: IS_DOCS_SCENARIO ? 65_536 : 32_768,
   system_memory_used_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 27 * 1024 : 14 * 1024) : 8_192,
-  gpu_vendor: IS_DOCS_SCENARIO ? 'NVIDIA' : 'Mock',
+  gpu_vendor: IS_DOCS_SCENARIO ? 'NVIDIA' : 'AMD',
   gpu_name: IS_DOCS_SCENARIO ? 'NVIDIA GeForce RTX 5080' : 'Browser Test GPU',
 }
 
 const monitoringNow = Date.now()
 const monitoringSessionId = 'browser-monitoring-session'
 const stoppedMonitoringSessionId = 'browser-stopped-monitoring-session'
+const vectorDemo = new URLSearchParams(location.search).get('workload') === 'vector'
 const monitoringFrame: MonitoringFrame = {
   instanceId: INSTANCE_ID,
   sessionId: monitoringSessionId,
   sessionStartedAt: monitoringNow - 120_000,
   ts: monitoringNow,
-  workload: 'inference',
+  workload: vectorDemo ? 'embedding' : 'inference',
   state: 'active',
   throughput: IS_DOCS_SCENARIO ? 47.6 : 25.8,
   throughputUnit: 'tok/s',
   outputTokensPerSecond: IS_DOCS_SCENARIO ? 47.6 : 25.8,
   inputTokensPerSecond: 0,
-  itemsPerSecond: null,
+  itemsPerSecond: vectorDemo ? 12 : null,
   activeRequests: 1,
-  queuedRequests: 0,
+  queuedRequests: vectorDemo ? 2 : 0,
   slotCapacity: 1,
   busySlots: 1,
   averageLatencyMs: null,
@@ -936,10 +941,11 @@ const monitoringSessions = [
     config_hash: 'browser-active-config',
     engine_id: ENGINE_ID,
     backend: IS_DOCS_SCENARIO ? 'CUDA' : 'Vulkan',
-    workload: 'inference',
+    workload: vectorDemo ? 'embedding' : 'inference',
     started_at: monitoringNow - 120_000,
     stopped_at: null,
     duration_secs: null,
+    avg_items_per_sec: vectorDemo ? 12 : null,
     avg_tokens_per_second: IS_DOCS_SCENARIO ? 47.6 : 25.8,
     avg_tokens_per_sec: IS_DOCS_SCENARIO ? 47.6 : 25.8,
     peak_vram_mb: IS_DOCS_SCENARIO ? 9_420 : 31 * 1024,
@@ -1426,8 +1432,15 @@ mockIPC((command, payload) => {
       return HAS_MONITORING_DATA ? clone(monitoringSessions) : []
     case 'get_telemetry_session_detail':
       return {
-        samples: HAS_MONITORING_DATA ? clone(monitoringSamples) : [],
-        requests: [],
+        samples: HAS_MONITORING_DATA ? clone(monitoringSamples.filter(s => s.session_id === args.sessionId)) : [],
+        requests: HAS_MONITORING_DATA && args.sessionId === monitoringSessionId ? Array.from({length: 5}, (_,i) => ({
+          task_id: 784-i, completed_at: monitoringNow - (i+1)*18000, source:'log', prompt_tokens: 1800+i*64, generated_tokens: 192+i,
+          prompt_tps: 510+i*5, generation_tps: 25+i/10, total_time_ms: 8200+i*150, http_status: 200,
+        })) : [],
+        vector_activity: vectorDemo && args.sessionId === monitoringSessionId ? [
+          {id:42,source:'log',completed_at:monitoringNow-5000,duration_ms:2000,item_count:24,input_tokens:48,http_status:null,error_text:null}
+        ] : [],
+        context_usage: HAS_MONITORING_DATA && args.sessionId === monitoringSessionId ? {ts:monitoringNow, used:8960, capacity:32768} : null,
         analysis: clone(emptyMonitoringAnalysis),
         diagnostics: [],
       }
