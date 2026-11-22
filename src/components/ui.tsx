@@ -111,6 +111,7 @@ export function EmptyState({
 type ButtonVariant = 'primary' | 'secondary' | 'subtle' | 'danger' | 'success' | 'cyan' | 'violet'
 
 const buttonSizes = {
+  toolbar: 'console-toolbar-button',
   sm: 'gap-1 rounded-lg px-2.5 py-1.5 text-xs',
   md: 'gap-2 rounded-lg px-4 py-2.5 text-sm',
   lg: 'gap-2 rounded-lg px-5 py-3 text-sm',

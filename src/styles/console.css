@@ -108,7 +108,13 @@ html.dark {
 .console-menu-item { display: flex; width: 100%; align-items: center; gap: 8px; padding: 8px 12px; color: var(--ui-body); text-align: left; }
 .console-menu-item:hover:not(:disabled) { background: var(--ui-hover); }
 .console-menu-item:disabled { opacity: .55; cursor: not-allowed; }
-.console-review-link { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: .8125rem; color: var(--ui-warn); background: var(--ui-warn-bg); border-radius: 6px; }
+.console-toolbar-button { height: 2.25rem; padding-inline: .75rem; gap: .375rem; border-radius: 7px; font-size: .8125rem; line-height: 1.25rem; white-space: nowrap; }
+.console-toolbar-button > svg { width: 1rem; height: 1rem; flex: none; }
+.console-review-link { color: var(--ui-warn); background: var(--ui-warn-bg); border-color: color-mix(in srgb, currentColor 30%, var(--ui-line)); }
+.console-review-link:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-surface) 90%, currentColor); border-color: currentColor; }
+.model-tree-viewport { max-height: clamp(18rem, 60vh, 42rem); overflow: auto; border-top: 1px solid var(--ui-line); }
+.model-tree-row { display: flex; width: 100%; min-height: 39px; align-items: center; gap: 8px; padding-block: 7px; padding-inline-end: 20px; text-align: start; }
+.model-tree-size { flex: none; width: 5.5rem; text-align: end; font-variant-numeric: tabular-nums; }
 .console-review-link[data-tone=red] { color: var(--ui-danger); background: var(--ui-danger-bg); }
 .console-review-link[data-tone=sky] { color: var(--ui-info); background: var(--ui-info-bg); }
 .config-workspace-tools { display: grid; grid-template-columns: minmax(0,1fr) minmax(155px,205px); gap: 10px; align-items: center; }

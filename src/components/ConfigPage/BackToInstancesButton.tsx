@@ -7,7 +7,7 @@ export function BackToInstancesButton({ disabled, compact }: { disabled?: boolea
   const { t } = useI18n()
   const setActiveTab = useAppStore(state => state.setActiveTab)
   return (
-    <Button variant="secondary" size={compact ? 'sm' : undefined} disabled={disabled}
+    <Button variant="secondary" size={compact ? 'sm' : 'toolbar'} disabled={disabled}
       onClick={() => setActiveTab('instances')} icon={<ArrowLeft className="h-4 w-4" />}>
       {t.configPage.backToInstances}
     </Button>

@@ -25,6 +25,13 @@ for (const dark of [false, true]) {
     await expect(page.locator('.instance-list-row[aria-selected=true]')).toHaveCSS('background-color', selected)
     await page.locator('.instance-inspector').getByRole('button', { name: '配置参数', exact: true }).click()
     await expect(page.locator('[data-guide=config-save]')).toHaveCSS('background-color', action)
+    const actions = page.locator('#config-page-actions .console-action-row button')
+    await expect(actions).toHaveCount(4)
+    const bounds = await actions.evaluateAll(buttons => buttons.map(b => ({
+      height: b.getBoundingClientRect().height, y: b.getBoundingClientRect().y,
+      font: getComputedStyle(b).fontSize, icon: b.querySelector('svg')?.getBoundingClientRect().width,
+    })))
+    expect(bounds.every(b => b.height === 36 && b.y === bounds[0].y && b.font === '13px' && b.icon === 16)).toBe(true)
     const port = page.locator('[data-config-field="port"] input')
     await expect(port).toHaveCSS('background-color', surface)
     await port.fill('18503')
@@ -129,6 +136,20 @@ for (const dark of [false, true]) {
     await model.click()
     await expect(model).toHaveCSS('background-color', selected)
     await expect(model).toHaveAttribute('aria-pressed', 'true')
+    await expect(model).toHaveCSS('border-radius', '0px')
+    expect(await model.evaluate(el => {
+      const viewport = el.closest('.model-tree-viewport')!
+      return el.getBoundingClientRect().left === viewport.getBoundingClientRect().left
+        && el.getBoundingClientRect().width === viewport.clientWidth
+    })).toBe(true)
+    const folder = page.locator('.model-tree-viewport button[aria-expanded]').first()
+    await folder.click()
+    await expect(folder).toHaveAttribute('aria-expanded', 'false')
+    await expect(model).toHaveCount(0)
+    await folder.click()
+    await expect(model).toBeVisible()
+    await page.locator('[data-guide=model-search] input').fill('absent-model-7732')
+    await expect(page.locator('.model-tree-viewport')).toContainText('没有匹配的文件或目录')
     await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
   })
 }

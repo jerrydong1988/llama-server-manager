@@ -540,6 +540,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     sourceCount: '{count} source(s)',
     description: 'Curate local model assets, keep scan roots clean, and inspect the repo as one operational surface.',
     capacity: 'Capacity', scanRoots: 'Scan Roots', scanRootsDescription: 'Local directories included in repository scans.',
+    noSearchResults: 'No matching files or folders.',
     explorer: 'Repository Explorer', explorerDescription: 'Search by file name, architecture, quantization, or artifact type.',
     emptyDescription: 'Add one or more model directories, then run a scan to populate the repository explorer.',
     assetDetails: 'Asset Details', assetDetailsDescription: 'Inspect the currently selected file and jump to its location.',

@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from 'react'
-import { ChevronDown, FolderOpen } from 'lucide-react'
+import { ChevronDown, Eye, FolderOpen, LoaderCircle, Save } from 'lucide-react'
 import { useAppStore } from '../../store'
 import type { GufoConfig, Instance, InstanceConfig } from '../../store/types'
 import { useConfigDraft } from './useConfigDraft'
@@ -159,8 +159,9 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
       <div className="console-action-row">
         {changed && <span role="status" className="text-xs text-ui-warn">{labels.unsavedChanges}</span>}
         <BackToInstancesButton disabled={busy} />
-        <Button size="sm" disabled={busy || running || !engine} onClick={() => void validate(false)}>{copy.preview}</Button>
-        <Button variant="primary" disabled={busy || running || !engine} onClick={() => void validate(true)}>{busy ? copy.busy : copy.save}</Button>
+        <Button size="toolbar" icon={<Eye size={16}/>} disabled={busy || running || !engine} onClick={() => void validate(false)}>{copy.preview}</Button>
+        <Button size="toolbar" variant="primary" icon={busy ? <LoaderCircle size={16} className="animate-spin"/> : <Save size={16}/>}
+          disabled={busy || running || !engine} onClick={() => void validate(true)}>{busy ? copy.busy : copy.save}</Button>
       </div>
     </header>
     {error && <p role="alert" className="break-words text-sm text-ui-danger">{error}</p>}

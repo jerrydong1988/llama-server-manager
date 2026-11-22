@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { confirm, message } from '@tauri-apps/plugin-dialog'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppStore, type ModelDeletionPreview, type ModelInfo } from '../store'
@@ -289,7 +289,7 @@ const ModelRepo = () => {
   const renderNode = (node: TreeNode, depth: number): ReactNode => {
     const nodeKey = node.path
     const displayName = formatPathForDisplay(node.name)
-    const isCollapsed = collapsed.has(nodeKey)
+    const expanded = Boolean(searchQuery) || !collapsed.has(nodeKey)
     const isMatch = !!searchQuery && matchNode(node, searchQuery)
     const hasChildMatch = !!searchQuery && !isMatch && matchingPaths.has(node.path)
     const isVisible = !searchQuery || isMatch || hasChildMatch
@@ -303,6 +303,8 @@ const ModelRepo = () => {
       return (
         <div key={nodeKey}>
           <button
+            type="button"
+            aria-expanded={expanded}
             onClick={() => {
               const next = new Set(collapsed)
               if (next.has(nodeKey)) {
@@ -312,12 +314,12 @@ const ModelRepo = () => {
               }
               setCollapsed(next)
             }}
-            style={{ paddingLeft: `${depth * 18 + 14}px` }}
-            className={`console-list-row flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left ${
+            style={{ paddingInlineStart: `min(${depth * 16 + 16}px, 30%)` }}
+            className={`console-list-row model-tree-row ${
               !isMatch && hasChildMatch ? 'opacity-80' : ''
             }`}
           >
-            <span className="w-4 shrink-0 text-ui-muted">{isCollapsed ? '>' : 'v'}</span>
+            <ChevronRight aria-hidden="true" size={14} className={expanded ? 'shrink-0 rotate-90 text-ui-muted' : 'shrink-0 text-ui-muted'} />
             <FolderTree className="h-4 w-4 shrink-0 text-ui-warn" />
             <span className="min-w-0 flex-1 truncate text-sm text-ui-ink">
               {highlightText(displayName, searchQuery)}
@@ -348,8 +350,8 @@ const ModelRepo = () => {
         onClick={() => setSelectedPath(model.path)}
         data-selected={isSelected}
         aria-pressed={isSelected}
-        style={{ paddingLeft: `${depth * 18 + 34}px` }}
-        className="console-list-row flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left"
+        style={{ paddingInlineStart: `min(${depth * 16 + 38}px, 34%)` }}
+        className="console-list-row model-tree-row"
       >
         {model.file_type === 'mmproj' ? (
           <Image className="h-4 w-4 shrink-0 text-fuchsia-700 dark:text-fuchsia-300" />
@@ -363,7 +365,7 @@ const ModelRepo = () => {
         <span className="hidden shrink-0 rounded-full border border-ui-line px-2 py-0.5 text-[11px] text-ui-body md:inline">
           {kindLabel}
         </span>
-        <span className="shrink-0 text-xs text-ui-muted">{formatSize(model.size)}</span>
+        <span className="model-tree-size text-xs text-ui-muted">{formatSize(model.size)}</span>
       </button>
     )
   }
@@ -471,8 +473,8 @@ const ModelRepo = () => {
           </div>
         </Surface>
 
-        <Surface as="section" className="min-h-[620px] min-w-0 p-5" data-guide="model-search">
-          <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <Surface as="section" className="min-w-0 overflow-hidden" data-guide="model-search">
+          <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-ui-ink">{copy.explorer}</h2>
               <p className="mt-1 text-sm text-ui-muted">
@@ -489,7 +491,7 @@ const ModelRepo = () => {
           </div>
 
           {models.length === 0 ? (
-            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-ui-line text-center">
+            <div className="flex min-h-52 flex-col items-center justify-center border-t border-ui-line p-5 text-center">
               <Database className="mb-4 h-12 w-12 text-ui-body" />
               <p className="text-base text-ui-body">{t.modelRepo.noModels}</p>
               <p className="mt-2 max-w-md text-sm text-ui-muted">
@@ -499,8 +501,11 @@ const ModelRepo = () => {
           ) : (
             <div
               ref={treeScrollRef}
-              className="h-[520px] overflow-y-auto rounded-2xl border border-ui-line bg-ui-inset p-3"
+              role="region"
+              aria-label={copy.explorer}
+              className="model-tree-viewport"
             >
+              {flatNodes.length === 0 && <p className="px-5 py-8 text-center text-sm text-ui-muted">{copy.noSearchResults}</p>}
               <div className="relative w-full" style={{ height: `${treeVirtualizer.getTotalSize()}px` }}>
                 {treeVirtualizer.getVirtualItems().map(virtualRow => {
                   const row = flatNodes[virtualRow.index]

@@ -479,16 +479,16 @@ const LlamaConfigPage = () => {
         </div>
         <div className="console-action-row">
           {configChanges.length > 0 && <span role="status" className="text-xs font-medium text-ui-warn">{labels.unsavedChanges} {configChanges.length}</span>}
-          {liveWarnings.length > 0 && <button type="button" className="console-review-link" data-tone={warningTone} onClick={() => document.getElementById('config-validation')?.focus()}>
-            <AlertTriangle size={14} />{labels.warnings} {liveWarnings.length}
-          </button>}
+          {liveWarnings.length > 0 && <Button size="toolbar" className="console-review-link" data-tone={warningTone} onClick={() => document.getElementById('config-validation')?.focus()}>
+            <AlertTriangle size={16} />{labels.warnings} {liveWarnings.length}
+          </Button>}
           <BackToInstancesButton disabled={saving} />
-          {!manualMode && !isEmbedding && <Button size="sm" data-guide="config-presets" icon={<Sparkles size={14} />}
+          {!manualMode && !isEmbedding && <Button size="toolbar" data-guide="config-presets" icon={<Sparkles size={14} />}
             onClick={() => setShowPresetAssistant(true)} disabled={engineCompatibilityMode !== 'full'}
             title={engineCompatibilityMode !== 'full' ? labels.templateCompatibilityDisabled : labels.quickTemplatesDesc}>
             {labels.openPresetAssistant}
           </Button>}
-          <Button onClick={save} disabled={saveDisabled} variant="primary" data-guide="config-save"
+          <Button size="toolbar" onClick={save} disabled={saveDisabled} variant="primary" data-guide="config-save"
             icon={saving ? <LoaderCircle size={15} className="animate-spin" /> : saved ? <CheckCircle2 size={15} /> : <Save size={15} />}>
             {saving ? savingLabel : saved ? t.configPage.saved : t.configPage.save}
           </Button>
