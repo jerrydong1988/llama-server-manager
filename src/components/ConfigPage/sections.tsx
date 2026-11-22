@@ -96,9 +96,9 @@ const countActive = (emittedParams: Set<keyof InstanceConfig>, keys: Array<keyof
 
 const countSummary = (emitted: number, changed: number, labels: Props['statusLabels']) =>
   emitted > 0 || changed > 0 ? (
-    <span className="inline-flex items-center gap-2 text-[11px] text-slate-500">
+    <span className="inline-flex items-center gap-2 text-[11px] text-ui-muted">
       {changed > 0 && <span>{labels.changedMarker} {changed}</span>}
-      {emitted > 0 && <span className="text-blue-400">{labels.emittedMarker} {emitted}</span>}
+      {emitted > 0 && <span className="text-ui-info">{labels.emittedMarker} {emitted}</span>}
     </span>
   ) : undefined
 
@@ -325,7 +325,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
   return (
     <Section id="config-advanced" title={t.configPage.advSectionTitle} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={summary(ADVANCED_CONFIG_KEYS)}>
       <div className="flex items-center justify-end mb-2">
-        <span className="mr-2 text-xs text-slate-500">{t.configPage.advSectionReset}</span>
+        <span className="mr-2 text-xs text-ui-muted">{t.configPage.advSectionReset}</span>
         <ResetButton onClick={resetAll} title={t.configPage.advSectionReset} />
       </div>
       <div className="space-y-2">
@@ -428,7 +428,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         {/* 推测解码 (9) */}
         {!isEmbedding && (
         <CollapsibleGroup id="config-advanced-spec" title={t.configPage.subAdvSpec} onReset={() => resetGroup('advancedSpec')} disabled={!specActive} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedSpec)}>
-          {!specActive && <div className="mb-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-500">{t.configPage.specDisabled}</div>}
+          {!specActive && <div className="mb-2 rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-xs text-ui-muted">{t.configPage.specDisabled}</div>}
           <div className={formGridClassName}>
             <SearchTarget label={`${t.configPage.draftModel} (--draft-model, -md)`} fieldKey="draft_model_path" title={t.configPage.draftModelTip}>
               <div className="flex gap-1">
@@ -678,20 +678,20 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
           fieldKey="custom_args"
         >
           <div className="space-y-2">
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_64px] gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_64px] gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-ui-muted">
               <span>{t.configPage.customArgName}</span>
               <span>{t.configPage.customArgValue}</span>
               <span className="text-right">{customArgAction}</span>
             </div>
             {entries.length === 0 && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-500">
+              <div className="rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-xs text-ui-muted">
                 {t.configPage.customArgEmpty}
               </div>
             )}
             {entries.map((e, i) => (
               <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_64px] items-center gap-2">
-                <span className="min-w-0 truncate rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200" title={e.name}>{e.name}</span>
-                <span className="min-w-0 truncate rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400" title={e.value}>
+                <span className="min-w-0 truncate rounded-lg border border-ui-line bg-ui-surface px-2 py-1 font-mono text-xs text-ui-ink" title={e.name}>{e.name}</span>
+                <span className="min-w-0 truncate rounded-lg border border-ui-line bg-ui-surface px-2 py-1 font-mono text-xs text-ui-muted" title={e.value}>
                   {e.value || '-'}
                 </span>
                 <Button onClick={() => removeEntry(i)} variant="danger" size="icon" className="h-7 w-7 shrink-0 justify-self-end" title={customArgAction} aria-label={customArgAction}><X className="w-3.5 h-3.5"/></Button>
@@ -723,7 +723,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
               <Button onClick={addEntry} variant="primary" size="icon" className="h-9 w-9 shrink-0 justify-self-end" title={t.configPage.customArgAdd}><Plus className="w-4 h-4"/></Button>
             </div>
             {newName.trim().startsWith('-') && KNOWN_FLAGS.has(newName.trim()) && (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">! {t.configPage.warnD1}</div>
+              <div className="rounded-lg border border-ui-line bg-ui-danger-bg px-3 py-2 text-xs text-ui-danger">! {t.configPage.warnD1}</div>
             )}
           </div>
         </CollapsibleGroup>

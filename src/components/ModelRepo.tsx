@@ -122,7 +122,7 @@ const highlightText = (text: string, query: string): ReactNode => {
   return (
     <>
       {text.slice(0, index)}
-      <mark className="rounded bg-blue-500/20 px-0.5 text-blue-100">
+      <mark className="rounded bg-ui-warn-bg px-0.5 text-ui-warn">
         {text.slice(index, index + query.length)}
       </mark>
       {text.slice(index + query.length)}
@@ -313,13 +313,13 @@ const ModelRepo = () => {
               setCollapsed(next)
             }}
             style={{ paddingLeft: `${depth * 18 + 14}px` }}
-            className={`flex w-full items-center gap-2 rounded-xl py-2 pr-3 text-left transition hover:bg-slate-800/80 ${
+            className={`console-list-row flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left ${
               !isMatch && hasChildMatch ? 'opacity-80' : ''
             }`}
           >
             <span className="w-4 shrink-0 text-slate-500">{isCollapsed ? '>' : 'v'}</span>
             <FolderTree className="h-4 w-4 shrink-0 text-amber-400" />
-            <span className={`min-w-0 flex-1 truncate text-sm ${isMatch ? 'text-blue-100' : 'text-slate-100'}`}>
+            <span className="min-w-0 flex-1 truncate text-sm text-ui-ink">
               {highlightText(displayName, searchQuery)}
             </span>
             <span className="shrink-0 text-xs text-slate-500">
@@ -346,24 +346,24 @@ const ModelRepo = () => {
       <button
         key={nodeKey}
         onClick={() => setSelectedPath(model.path)}
+        data-selected={isSelected}
+        aria-pressed={isSelected}
         style={{ paddingLeft: `${depth * 18 + 34}px` }}
-        className={`flex w-full items-center gap-2 rounded-xl py-2 pr-3 text-left transition ${
-          isSelected ? 'bg-blue-500/12 ring-1 ring-blue-500/40' : 'hover:bg-slate-800/80'
-        } ${model.is_shard ? 'opacity-60' : ''}`}
+        className="console-list-row flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left"
       >
         {model.file_type === 'mmproj' ? (
           <Image className="h-4 w-4 shrink-0 text-fuchsia-400" />
         ) : (
           <File className="h-4 w-4 shrink-0 text-sky-400" />
         )}
-        <span className={`min-w-0 flex-1 truncate text-sm ${isSelected ? 'text-blue-100' : 'text-slate-100'}`}>
+        <span className={`min-w-0 flex-1 truncate text-sm ${model.is_shard ? 'text-ui-muted' : 'text-ui-ink'}`}>
           {highlightText(model.name, searchQuery)}
         </span>
-        <span className="hidden shrink-0 text-xs text-slate-500 lg:inline">{model.quant_type ?? ''}</span>
-        <span className="hidden shrink-0 rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 md:inline">
+        <span className="hidden shrink-0 text-xs text-ui-muted lg:inline">{model.quant_type ?? ''}</span>
+        <span className="hidden shrink-0 rounded-full border border-ui-line px-2 py-0.5 text-[11px] text-ui-body md:inline">
           {kindLabel}
         </span>
-        <span className="shrink-0 text-xs text-slate-500">{formatSize(model.size)}</span>
+        <span className="shrink-0 text-xs text-ui-muted">{formatSize(model.size)}</span>
       </button>
     )
   }

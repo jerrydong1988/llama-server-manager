@@ -514,6 +514,7 @@
   },
 
   instanceWorkspace: {
+    noMatches: '没有符合条件的实例', clearFilters: '清除筛选',
     preparingCommand: '正在准备命令…',
     incompleteCommandProbe: '未能完整检测所选引擎。请在引擎管理中查看检测结果，然后重试。',
     instances: '\u5B9E\u4F8B', running: '\u8FD0\u884C\u4E2D', runningTitle: '\u8FD0\u884C\u4E2D', stoppedTitle: '\u5DF2\u505C\u6B62',
@@ -694,10 +695,11 @@
   },
 
   appShell: {
+    navigation: '页面导航', downloadTasks: '下载任务',
     pageDescriptions: {
       dashboard: '\u7CFB\u7EDF\u603B\u89C8\u4E0E llama-server \u5B9E\u4F8B\u6D3B\u52A8', modelRepo: '\u6D4F\u89C8\u672C\u5730\u4E0E\u8FDC\u7A0B\u6A21\u578B\u8D44\u6E90',
       downloads: '\u6A21\u578B\u4F20\u8F93\u961F\u5217\u4E0E\u6D3B\u52A8\u4EFB\u52A1', engine: '\u8FD0\u884C\u65F6\u4E8C\u8FDB\u5236\u4E0E\u6267\u884C\u540E\u7AEF',
-      instances: '\u670D\u52A1\u5B9E\u4F8B\u3001\u7AEF\u53E3\u4E0E\u8FDB\u7A0B\u72B6\u6001', config: '\u5E94\u7528\u9ED8\u8BA4\u503C\u4E0E\u8FD0\u884C\u65F6\u504F\u597D',
+      instances: '\u670D\u52A1\u5B9E\u4F8B\u3001\u7AEF\u53E3\u4E0E\u8FDB\u7A0B\u72B6\u6001', config: '所选实例的引擎与启动参数',
       cluster: '\u5206\u5E03\u5F0F worker \u4E0E\u7F51\u7EDC\u53EF\u7528\u6027', proxy: '\u7EDF\u4E00 API \u5165\u53E3\u4E0E\u6A21\u578B\u522B\u540D\u8DEF\u7531',
       perf: '\u6027\u80FD\u9065\u6D4B\u4E0E\u8D44\u6E90\u4FE1\u53F7', logs: '\u8FD0\u884C\u65E5\u5FD7\u4E0E\u8BCA\u65AD\u8F93\u51FA', storage: '伴生产物、缓存、授权与保留策略', guide: '\u53C2\u8003\u8D44\u6599\u4E0E\u64CD\u4F5C\u8BF4\u660E',
       fallback: '\u7BA1\u7406\u672C\u5730 llama-server \u8FD0\u884C\u72B6\u6001',

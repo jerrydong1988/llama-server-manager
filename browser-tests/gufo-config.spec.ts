@@ -297,7 +297,7 @@ test('Gufo file selection can be cancelled and cannot change a running instance'
   const choose = page.getByRole('button', { name: '选择文件: 主模型 GGUF（第一分片）', exact: true })
   const picker = page.locator('.fixed.inset-0.z-50').filter({ has: page.getByRole('heading', { name: '从模型仓库选择', exact: true }) })
   await choose.click()
-  await picker.getByRole('button', { name: 'Close', exact: true }).click()
+  await picker.getByRole('button', { name: '关闭', exact: true }).click()
   await expect(model).toHaveValue('C:\\模型目录 with spaces\\keep.gguf')
   await choose.click()
   await page.evaluate(async () => {
@@ -319,6 +319,6 @@ test('Gufo file selection can be cancelled and cannot change a running instance'
   })
   await choose.click()
   await expect(picker).toContainText('没有匹配的 GGUF 文件')
-  await picker.getByRole('button', { name: 'Close', exact: true }).click()
+  await picker.getByRole('button', { name: '关闭', exact: true }).click()
   await expect(model).toHaveValue('C:\\模型目录 with spaces\\keep.gguf')
 })

@@ -20,7 +20,7 @@ import { _startupTimings } from './store'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
 import { I18nProvider, nextLanguage, useI18n } from './i18n'
-import { Button } from './components/ui'
+import { Button, ConsoleTheme } from './components/ui'
 import { AppShell, type ShellStatusChip } from './components/shell/AppShell'
 import { CommandCenter } from './components/shell/CommandCenter'
 import { RuntimeExitDialogs } from './components/shell/RuntimeExitDialogs'
@@ -148,9 +148,9 @@ function AppInner() {
   const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard, icon: BarChart3 },
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
-    { id: 'downloads', name: t.nav.downloads, icon: Download, badge: activeDownloadCount },
+    { id: 'downloads', name: t.nav.downloads, icon: Download },
     { id: 'engine', name: t.nav.engine, icon: Cpu },
-    { id: 'instances', name: t.nav.instances, icon: Server, badge: upCount },
+    { id: 'instances', name: t.nav.instances, icon: Server },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'proxy', name: t.nav.proxy, icon: Route },
@@ -159,7 +159,7 @@ function AppInner() {
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'storage', name: t.nav.storage, icon: HardDrive },
     { id: 'guide', name: t.nav.guide, icon: BookOpen, separator: true },
-  ], [t, upCount, activeDownloadCount])
+  ], [t])
 
   const { productIssues, commandActions } = useCommandCenterModel()
 
@@ -323,9 +323,9 @@ function AppInner() {
   const immersiveContent = activeTab === 'bigscreen'
   const layoutWide = activeTab === 'logs' || activeTab === 'guide' || activeTab === 'storage' || immersiveContent || activeTab === 'proxy'
   const statusChips: ShellStatusChip[] = [
-    { label: t.nav.up || 'up', value: upCount, tone: 'emerald' },
-    { label: t.nav.down || 'down', value: downCount, tone: 'slate' },
-    { label: t.nav.downloads || 'Downloads', value: activeDownloadCount, tone: 'blue' },
+    { label: t.nav.up, value: upCount },
+    { label: t.nav.down, value: downCount },
+    { label: t.appShell.downloadTasks, value: activeDownloadCount },
   ]
   const pageContext: Record<string, string> = {
     dashboard: shellCopy.pageDescriptions.dashboard,
@@ -384,6 +384,7 @@ function AppInner() {
       appTitle={t.common.appTitle}
       version={version}
       navigation={navigation}
+      navigationLabel={shellCopy.navigation}
       activeId={activeTab}
       onNavigate={tab => {
         const { instanceListView, setActiveConfigInstanceId } = useAppStore.getState()
@@ -443,37 +444,39 @@ function AppInner() {
           {renderTabContent(activeTab)}
         </Suspense>
       )}
-      <CommandCenter
-        open={commandCenterOpen}
-        issues={productIssues}
-        commands={commandActions}
-        onClose={closeCommandCenter}
-      />
-      <RuntimeExitDialogs
-        confirmationOpen={proxyExitConfirmOpen}
-        confirmationError={proxyExitError}
-        detachError={backgroundDetachError}
-        busy={proxyExitBusy}
-        copy={shellCopy}
-        onCloseConfirmation={() => {
-          setProxyExitConfirmOpen(false)
-          setProxyExitError('')
-        }}
-        onKeepInTray={() => void handleKeepInTray()}
-        onOpenSettingsFromConfirmation={() => {
-          setActiveTab('proxy')
-          setProxyExitConfirmOpen(false)
-          setProxyExitError('')
-        }}
-        onStopAndQuit={() => void handleStopProxyAndQuit()}
-        onEnableBackgroundAndQuit={() => void handleEnableBackgroundAndQuit()}
-        onCloseDetachError={() => setBackgroundDetachError('')}
-        onOpenSettingsFromDetachError={() => {
-          setActiveTab('proxy')
-          setBackgroundDetachError('')
-        }}
-        onRetryDetach={() => void handleRetryBackgroundDetach()}
-      />
+      <ConsoleTheme.Provider value>
+        <CommandCenter
+          open={commandCenterOpen}
+          issues={productIssues}
+          commands={commandActions}
+          onClose={closeCommandCenter}
+        />
+        <RuntimeExitDialogs
+          confirmationOpen={proxyExitConfirmOpen}
+          confirmationError={proxyExitError}
+          detachError={backgroundDetachError}
+          busy={proxyExitBusy}
+          copy={shellCopy}
+          onCloseConfirmation={() => {
+            setProxyExitConfirmOpen(false)
+            setProxyExitError('')
+          }}
+          onKeepInTray={() => void handleKeepInTray()}
+          onOpenSettingsFromConfirmation={() => {
+            setActiveTab('proxy')
+            setProxyExitConfirmOpen(false)
+            setProxyExitError('')
+          }}
+          onStopAndQuit={() => void handleStopProxyAndQuit()}
+          onEnableBackgroundAndQuit={() => void handleEnableBackgroundAndQuit()}
+          onCloseDetachError={() => setBackgroundDetachError('')}
+          onOpenSettingsFromDetachError={() => {
+            setActiveTab('proxy')
+            setBackgroundDetachError('')
+          }}
+          onRetryDetach={() => void handleRetryBackgroundDetach()}
+        />
+      </ConsoleTheme.Provider>
     </AppShell>
   )
 }

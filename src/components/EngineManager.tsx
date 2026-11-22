@@ -32,9 +32,9 @@ const backendTone = (backend: string) => {
 }
 
 const capabilityTone = (status: string) => {
-  if (status === 'detected') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-  if (status === 'unprobed') return 'border-slate-700 bg-slate-800 text-slate-300'
-  return 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+  if (status === 'detected') return 'border-ui-line bg-ui-selected text-ui-positive'
+  if (status === 'unprobed') return 'border-ui-line bg-ui-inset text-ui-muted'
+  return 'border-ui-line bg-ui-warn-bg text-ui-warn'
 }
 
 const EngineManager = () => {
@@ -468,9 +468,8 @@ const EngineManager = () => {
                   return (
                     <div
                       key={engine.id}
-                      className={`grid grid-cols-[minmax(0,2.1fr)_120px_140px_180px] gap-4 px-4 py-4 transition ${
-                        isSelected ? 'bg-blue-500/10' : 'hover:bg-slate-900/80'
-                      }`}
+                      data-selected={isSelected}
+                      className="console-list-row grid cursor-pointer grid-cols-[minmax(0,2.1fr)_120px_140px_180px] gap-4 px-4 py-4"
                       onClick={() => setSelectedEngineId(engine.id)}
                     >
                       <div className="min-w-0">
@@ -504,7 +503,11 @@ const EngineManager = () => {
                             />
                           ) : (
                             <>
-                              <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">{engine.name}</p>
+                              <button type="button" aria-pressed={isSelected} title={engine.name}
+                                className="min-w-0 flex-1 truncate text-left text-sm font-medium text-ui-ink"
+                                onClick={event => { event.stopPropagation(); setSelectedEngineId(engine.id) }}>
+                                {engine.name}
+                              </button>
                               <button
                                 onClick={event => {
                                   event.stopPropagation()
@@ -517,7 +520,7 @@ const EngineManager = () => {
                               </button>
                               {isDefault && (
                                 <span
-                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-amber-500/20 bg-amber-500/10 text-amber-300"
+                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-ui-line bg-ui-warn-bg text-ui-warn"
                                   aria-label={t.engineMgr.defaultEngine}
                                   title={t.engineMgr.defaultEngine}
                                 >
@@ -527,15 +530,15 @@ const EngineManager = () => {
                             </>
                           )}
                         </div>
-                        <PathText value={engine.dir} maxLength={64} className="mt-1 text-xs text-slate-500" />
+                        <PathText value={engine.dir} maxLength={64} className="mt-1 text-xs text-ui-muted" />
                       </div>
                       <div className="flex items-center">
-                        <span className={`rounded-full border px-2.5 py-1 text-xs ${backendTone(engine.backend)}`}>
+                        <span className="rounded-full border border-ui-line bg-ui-inset px-2.5 py-1 text-xs text-ui-body">
                           {engine.backend}
                         </span>
                       </div>
                       <div className="min-w-0 self-center">
-                        <p className="truncate text-sm text-slate-300" title={versionLabel(engine)}>{versionLabel(engine)}</p>
+                        <p className="truncate text-sm text-ui-body" title={versionLabel(engine)}>{versionLabel(engine)}</p>
                         <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] ${capabilityTone(normalizeEngineCapabilityStatus(engine.capabilities))}`}>
                           {capabilityLabel(normalizeEngineCapabilityStatus(engine.capabilities))}
                         </span>
@@ -548,8 +551,8 @@ const EngineManager = () => {
                           }}
                           className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs transition ${
                             isDefault
-                              ? 'bg-blue-600 text-white'
-                              : 'border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 hover:bg-slate-800'
+                              ? 'border border-ui-line bg-ui-inset text-ui-body'
+                              : 'console-btn'
                           }`}
                         >
                           {isDefault ? t.engineMgr.defaultEngine : t.engineMgr.setDefault}

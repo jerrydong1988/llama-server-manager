@@ -511,6 +511,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
   },
 
   instanceWorkspace: {
+    noMatches: 'No matching instances', clearFilters: 'Clear filters',
     preparingCommand: 'Preparing command…',
     incompleteCommandProbe: 'Could not fully detect the selected engine. Check its probe results in Engines, then try again.',
     instances: 'instances', running: 'running', runningTitle: 'Running', stoppedTitle: 'Stopped',
@@ -694,11 +695,12 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
   },
 
   appShell: {
+    navigation: 'Page navigation', downloadTasks: 'download tasks',
     pageDescriptions: {
       dashboard: 'System overview and current llama-server activity',
       modelRepo: 'Browse local and remote model assets', downloads: 'Model transfer queue and active tasks',
       engine: 'Runtime binaries and execution backends', instances: 'Server instances, ports, and process state',
-      config: 'Application defaults and runtime preferences', cluster: 'Distributed workers and network availability',
+      config: 'Launch settings for the selected instance', cluster: 'Distributed workers and network availability',
       proxy: 'Unified API endpoint and model alias routing', perf: 'Performance telemetry and resource signals',
       logs: 'Runtime logs and diagnostic output', storage: 'Owned artifacts, caches, permissions, and retention', guide: 'Reference material and operating notes',
       fallback: 'Manage local llama-server runtime state',

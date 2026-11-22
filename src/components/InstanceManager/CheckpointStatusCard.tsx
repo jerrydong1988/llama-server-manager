@@ -45,9 +45,9 @@ export function CheckpointStatusCard({ instance }: { instance: Instance }) {
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-violet-200 bg-violet-50/70 p-3 text-sm dark:border-violet-500/20 dark:bg-violet-500/5">
+    <div className="space-y-3 rounded-lg border border-ui-line bg-ui-inset p-3 text-sm">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-semibold text-violet-700 dark:text-violet-300">{t.checkpoint.statusTitle}</div>
+        <div className="text-xs font-semibold text-ui-body">{t.checkpoint.statusTitle}</div>
         {status && (
           <Badge tone={status.last_outcome === 'failed' ? 'red' : status.phase === 'ready' ? 'emerald' : status.phase === 'ready_cold' ? 'amber' : 'violet'}>
             {checkpointPhaseLabel(status.phase, t.checkpoint)}
@@ -57,56 +57,56 @@ export function CheckpointStatusCard({ instance }: { instance: Instance }) {
       {status ? (
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
           <div>
-            <div className="text-slate-500">{t.checkpoint.routable}</div>
-            <div className="mt-0.5 text-slate-800 dark:text-slate-200">{status.routable ? t.checkpoint.yes : t.checkpoint.no}</div>
+            <div className="text-ui-muted">{t.checkpoint.routable}</div>
+            <div className="mt-0.5 text-ui-ink">{status.routable ? t.checkpoint.yes : t.checkpoint.no}</div>
           </div>
           <div>
-            <div className="text-slate-500">{t.checkpoint.lastOperation}</div>
-            <div className="mt-0.5 text-slate-800 dark:text-slate-200">
+            <div className="text-ui-muted">{t.checkpoint.lastOperation}</div>
+            <div className="mt-0.5 text-ui-ink">
               {checkpointOperationLabel(status.last_operation, t.checkpoint)} · {checkpointOutcomeLabel(status.last_outcome, t.checkpoint)}
             </div>
           </div>
           {status.slot_count !== undefined && (
             <div className="col-span-2">
-              <div className="text-slate-500">{t.checkpoint.savedSlots}</div>
-              <div className="mt-0.5 text-slate-800 dark:text-slate-200">
+              <div className="text-ui-muted">{t.checkpoint.savedSlots}</div>
+              <div className="mt-0.5 text-ui-ink">
                 {status.checkpoint_slots?.length ?? 0} / {status.slot_count}
                 {!!status.checkpoint_slots?.length && ` · Slot ${status.checkpoint_slots.join(', ')}`}
               </div>
             </div>
           )}
           <div>
-            <div className="text-slate-500">{t.checkpoint.promptTokens}</div>
-            <div className="mt-0.5 text-slate-800 dark:text-slate-200">{status.prompt_tokens?.toLocaleString() ?? '--'}</div>
+            <div className="text-ui-muted">{t.checkpoint.promptTokens}</div>
+            <div className="mt-0.5 text-ui-ink">{status.prompt_tokens?.toLocaleString() ?? '--'}</div>
           </div>
           <div>
-            <div className="text-slate-500">{t.checkpoint.bytes}</div>
-            <div className="mt-0.5 text-slate-800 dark:text-slate-200">{formatCheckpointBytes(status.bytes)}</div>
+            <div className="text-ui-muted">{t.checkpoint.bytes}</div>
+            <div className="mt-0.5 text-ui-ink">{formatCheckpointBytes(status.bytes)}</div>
           </div>
           <div>
-            <div className="text-slate-500">{t.checkpoint.duration}</div>
-            <div className="mt-0.5 text-slate-800 dark:text-slate-200">{status.duration_ms === undefined ? '--' : `${status.duration_ms.toLocaleString()} ms`}</div>
+            <div className="text-ui-muted">{t.checkpoint.duration}</div>
+            <div className="mt-0.5 text-ui-ink">{status.duration_ms === undefined ? '--' : `${status.duration_ms.toLocaleString()} ms`}</div>
           </div>
           <div>
-            <div className="text-slate-500">{t.checkpoint.updatedAt}</div>
-            <div className="mt-0.5 text-slate-800 dark:text-slate-200">{status.updated_at > 0 ? new Date(status.updated_at).toLocaleString() : '--'}</div>
+            <div className="text-ui-muted">{t.checkpoint.updatedAt}</div>
+            <div className="mt-0.5 text-ui-ink">{status.updated_at > 0 ? new Date(status.updated_at).toLocaleString() : '--'}</div>
           </div>
           <div className="col-span-2">
-            <div className="text-slate-500">{t.checkpoint.reason}</div>
-            <div className="mt-0.5 leading-5 text-slate-800 dark:text-slate-200">{checkpointReasonLabel(status, t.checkpoint)}</div>
+            <div className="text-ui-muted">{t.checkpoint.reason}</div>
+            <div className="mt-0.5 leading-5 text-ui-ink">{checkpointReasonLabel(status, t.checkpoint)}</div>
           </div>
         </div>
       ) : (
-        <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t.checkpoint.noData}</p>
+        <p className="text-xs leading-5 text-ui-muted">{t.checkpoint.noData}</p>
       )}
       {status?.phase === 'ready' && (
-        <div className="space-y-2 border-t border-violet-200 pt-2 text-xs dark:border-violet-500/20">
-          <p className="text-slate-500">{t.checkpoint.restoreVerifiedHint}</p>
+        <div className="space-y-2 border-t border-ui-line pt-2 text-xs">
+          <p className="text-ui-muted">{t.checkpoint.restoreVerifiedHint}</p>
           {observation?.slot_id !== undefined && <div>Slot {observation.slot_id}</div>}
           <div>{t.checkpoint.observedCachedTokens}: {observation?.cached_tokens.toLocaleString() ?? '--'}</div>
           <div>{t.checkpoint.observedProcessedTokens}: {observation?.processed_tokens.toLocaleString() ?? '--'}</div>
           <div>{t.checkpoint.observedPrefill}: {prefillMs == null ? '--' : `${prefillMs.toLocaleString()} ms`}</div>
-          <p className="text-slate-500">{t.checkpoint.observationHint}</p>
+          <p className="text-ui-muted">{t.checkpoint.observationHint}</p>
         </div>
       )}
       <Button

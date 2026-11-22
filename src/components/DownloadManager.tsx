@@ -412,11 +412,16 @@ export default function DownloadManager() {
         key={task.id}
         role="button"
         tabIndex={0}
+        aria-pressed={isSelected}
+        data-selected={isSelected}
         onClick={() => setSelectedTaskId(task.id)}
         onKeyDown={event => {
-          if (event.key === 'Enter' || event.key === ' ') setSelectedTaskId(task.id)
+          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault()
+            setSelectedTaskId(task.id)
+          }
         }}
-        className={`min-w-0 border-b px-4 py-4 text-left outline-none transition last:border-b-0 ${isSelected ? 'border-blue-200 bg-blue-50/60 dark:border-blue-900/50 dark:bg-blue-950/20' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900/45'}`}
+        className="console-list-row min-w-0 border-b border-ui-line px-4 py-4 text-left last:border-b-0"
       >
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">

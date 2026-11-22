@@ -45,11 +45,11 @@ export function CheckpointValidation({ config, engineExe, eligibility, labels, o
   }
   const qualification = eligibility?.qualification
   return (
-    <div className="mt-5 space-y-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+    <div className="mt-5 space-y-3 border-t border-ui-line pt-4">
       <Toggle label={labels.allowLocalValidation} value={config.kv_checkpoint.allow_local_validation ?? false}
         onChange={onChange} title={labels.localValidationTip} disabled={!config.kv_checkpoint.enabled || running} />
-      <p className="max-w-3xl text-xs leading-5 text-slate-600 dark:text-slate-300">{labels.localValidationTip}</p>
-      {qualification && <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{labels.qualification[qualification]}</p>}
+      <p className="max-w-3xl text-xs leading-5 text-ui-muted">{labels.localValidationTip}</p>
+      {qualification && <p className="text-sm font-medium text-ui-body">{labels.qualification[qualification]}</p>}
       {config.kv_checkpoint.allow_local_validation && (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" variant="secondary" size="sm" disabled={running || !eligibility?.can_validate || !engineExe}
@@ -57,7 +57,7 @@ export function CheckpointValidation({ config, engineExe, eligibility, labels, o
           {running && <Button type="button" variant="secondary" size="sm" onClick={() => void cancel()}>{labels.cancelValidation}</Button>}
         </div>
       )}
-      {message && <p role="status" aria-live="polite" className="max-w-3xl break-words text-xs leading-5 text-slate-600 dark:text-slate-300">{message}</p>}
+      {message && <p role="status" aria-live="polite" className="max-w-3xl break-words text-xs leading-5 text-ui-muted">{message}</p>}
     </div>
   )
 }

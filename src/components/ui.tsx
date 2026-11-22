@@ -1,5 +1,8 @@
-import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import { createContext, useContext, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react'
 import { formatPathForDisplay } from '../utils/path'
+
+// Opt in per workspace. Portalled controls inherit the same appearance as their owner.
+export const ConsoleTheme = createContext(false)
 
 // Content panels are intentionally opaque. Applying backdrop-filter to every panel
 // creates many compositor layers and can leave off-screen panels temporarily
@@ -23,7 +26,8 @@ export function Surface({
   children: ReactNode
 } & Omit<HTMLAttributes<HTMLElement>, 'children' | 'className'>) {
   const Component = as
-  return <Component {...elementProps} className={`${surfaceClassName} ${className}`}>{children}</Component>
+  const modern = useContext(ConsoleTheme)
+  return <Component {...elementProps} className={joinClassNames(modern ? 'console-surface' : surfaceClassName, className)}>{children}</Component>
 }
 
 export function InsetSurface({
@@ -33,7 +37,8 @@ export function InsetSurface({
   className?: string
   children: ReactNode
 }) {
-  return <div className={`${insetSurfaceClassName} ${className}`}>{children}</div>
+  const modern = useContext(ConsoleTheme)
+  return <div className={joinClassNames(modern ? 'console-inset' : insetSurfaceClassName, className)}>{children}</div>
 }
 
 export function MetricCard({
@@ -81,11 +86,12 @@ export function SectionHeader({
   description?: ReactNode
   action?: ReactNode
 }) {
+  const modern = useContext(ConsoleTheme)
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{title}</h2>
-        {description ? <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
+        <h2 className={joinClassNames('text-lg font-semibold', modern ? 'text-ui-ink' : 'text-slate-950 dark:text-slate-50')}>{title}</h2>
+        {description ? <p className={joinClassNames('mt-1 text-sm leading-6', modern ? 'text-ui-muted' : 'text-slate-500 dark:text-slate-400')}>{description}</p> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
@@ -103,11 +109,12 @@ export function EmptyState({
   description?: ReactNode
   className?: string
 }) {
+  const modern = useContext(ConsoleTheme)
   return (
     <Surface className={`flex min-h-[360px] flex-col items-center justify-center p-10 text-center ${className}`}>
-      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-slate-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-300">{icon}</div>
-      <h2 className="text-2xl font-semibold text-slate-950 dark:text-slate-50">{title}</h2>
-      {description ? <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
+      <div className={joinClassNames('mb-4 rounded-lg border p-4', modern ? 'border-ui-line bg-ui-inset text-ui-muted' : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-300')}>{icon}</div>
+      <h2 className={joinClassNames('text-2xl font-semibold', modern ? 'text-ui-ink' : 'text-slate-950 dark:text-slate-50')}>{title}</h2>
+      {description ? <p className={joinClassNames('mt-3 max-w-2xl text-sm leading-6', modern ? 'text-ui-muted' : 'text-slate-500 dark:text-slate-400')}>{description}</p> : null}
     </Surface>
   )
 }
@@ -142,12 +149,14 @@ export function Button({
   variant?: keyof typeof buttonVariants
   size?: keyof typeof buttonSizes
 }) {
+  const modern = useContext(ConsoleTheme)
   return (
     <button
       type={type}
+      data-variant={variant}
       className={joinClassNames(
         'inline-flex items-center justify-center font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
-        buttonVariants[variant],
+        modern ? 'console-btn' : buttonVariants[variant],
         buttonSizes[size],
         className,
       )}
@@ -177,7 +186,8 @@ export function Badge({
     violet: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300',
   }
 
-  return <span className={joinClassNames('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs', tones[tone], className)}>{children}</span>
+  const modern = useContext(ConsoleTheme)
+  return <span data-tone={tone} className={joinClassNames('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs', modern ? 'console-badge' : tones[tone], className)}>{children}</span>
 }
 
 export function TextInput({
@@ -189,14 +199,16 @@ export function TextInput({
   leadingIcon?: ReactNode
   inputClassName?: string
 }) {
+  const modern = useContext(ConsoleTheme)
+  const appearance = modern ? 'console-input h-9' : `h-11 ${controlClassName}`
   if (!leadingIcon) {
-    return <input className={joinClassNames('h-11 w-full min-w-0 max-w-full px-3', controlClassName, className)} {...props} />
+    return <input className={joinClassNames('w-full min-w-0 max-w-full px-3', appearance, className)} {...props} />
   }
 
   return (
     <label className={joinClassNames('relative block min-w-0', className)}>
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">{leadingIcon}</span>
-      <input className={joinClassNames('h-11 w-full min-w-0 max-w-full pl-10 pr-3', controlClassName, inputClassName)} {...props} />
+      <span className={joinClassNames('pointer-events-none absolute left-3 top-1/2 -translate-y-1/2', modern ? 'text-ui-muted' : 'text-slate-500')}>{leadingIcon}</span>
+      <input className={joinClassNames('w-full min-w-0 max-w-full pl-10 pr-3', appearance, inputClassName)} {...props} />
     </label>
   )
 }
@@ -208,8 +220,9 @@ export function SelectInput({
 }: SelectHTMLAttributes<HTMLSelectElement> & {
   children: ReactNode
 }) {
+  const modern = useContext(ConsoleTheme)
   return (
-    <select className={joinClassNames('select-custom h-11 min-w-0 max-w-full pl-3 pr-8', controlClassName, className)} {...props}>
+    <select className={joinClassNames('select-custom min-w-0 max-w-full pl-3 pr-8', modern ? 'console-input h-9' : `h-11 ${controlClassName}`, className)} {...props}>
       {children}
     </select>
   )
@@ -328,13 +341,15 @@ export function IconButton({
   icon: ReactNode
   label: string
 }) {
+  const modern = useContext(ConsoleTheme)
   return (
     <button
       type="button"
       aria-label={label}
       title={title || label}
       className={joinClassNames(
-        'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-800',
+        'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-50',
+        modern ? 'console-btn' : 'border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-800',
         className,
       )}
       {...props}
@@ -438,12 +453,9 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={rowKey}
+                    data-selected={selectedKey === rowKey}
                     onClick={onRowClick ? () => onRowClick(row, index) : undefined}
-                    className={joinClassNames(
-                      'h-12 transition',
-                      onRowClick && 'cursor-pointer',
-                      selectedKey === rowKey ? 'bg-blue-50/80 dark:bg-blue-950/30' : 'hover:bg-slate-50 dark:hover:bg-slate-800/50',
-                    )}
+                    className={joinClassNames('console-list-row h-12', onRowClick && 'cursor-pointer')}
                   >
                     {columns.map(column => {
                       const cell = column.render ? column.render(row, index) : column.accessor ? row[column.accessor] as ReactNode : null

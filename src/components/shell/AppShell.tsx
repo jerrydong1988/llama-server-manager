@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ComponentType, type ReactNode } from 'react'
-import { AlertTriangle, Download, Languages, LoaderCircle, Moon, RefreshCw, Search, Sun, Zap } from 'lucide-react'
+import { AlertTriangle, Download, Languages, LoaderCircle, Moon, RefreshCw, Search, Sun, Menu } from 'lucide-react'
 import appIconUrl from '../../../src-tauri/icons/128x128.png'
-import { Badge, Button, IconButton, joinClassNames } from '../ui'
+import { Button, ConsoleTheme, IconButton, joinClassNames } from '../ui'
 import { WorkspaceActionsProvider, WorkspaceFloatingActionsHost } from './WorkspaceActions'
 
 type NavIcon = ComponentType<{ className?: string }>
@@ -10,20 +10,19 @@ export type ShellNavigationItem = {
   id: string
   name: string
   icon: NavIcon
-  badge?: number
   separator?: boolean
 }
 
 export type ShellStatusChip = {
-  label: ReactNode
-  value: ReactNode
-  tone?: 'slate' | 'blue' | 'emerald' | 'amber' | 'red' | 'violet'
+  label: string
+  value: number
 }
 
 export function AppShell({
   appTitle,
   version,
   navigation,
+  navigationLabel,
   activeId,
   onNavigate,
   pageDescription,
@@ -56,6 +55,7 @@ export function AppShell({
 }: {
   appTitle: string
   version: string
+  navigationLabel: string
   navigation: ShellNavigationItem[]
   activeId: string
   onNavigate: (id: string) => void
@@ -88,248 +88,91 @@ export function AppShell({
   children: ReactNode
 }) {
   const activeItem = navigation.find(item => item.id === activeId) || navigation[0]
-  const ActiveIcon = activeItem?.icon || Zap
-  const runningChip = statusChips[0]
-  const secondaryChips = statusChips.slice(1)
   const activeNavRef = useRef<HTMLButtonElement | null>(null)
-  const topControlClassName = 'h-9 shrink-0 rounded-lg'
-  const topStatusChipClassName = 'h-9 min-w-[76px] shrink-0 justify-center whitespace-nowrap rounded-lg px-3 text-[12px]'
+  const pilot = activeId === 'instances' || activeId === 'config'
 
   useEffect(() => {
-    activeNavRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })
+    activeNavRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [activeId])
 
   return (
     <div className={darkMode ? 'dark' : ''}>
-      <div className="app-shell flex h-screen flex-col overflow-hidden bg-[var(--color-app-bg)] text-slate-900 dark:bg-[var(--color-app-bg-dark)] dark:text-slate-100 lg:flex-row">
-        <aside className="app-sidebar flex shrink-0 flex-col border-b border-slate-200 bg-white/95 px-3 py-3 shadow-sm shadow-slate-950/5 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:h-screen lg:w-[264px] lg:border-b-0 lg:border-r">
-          <div className="mb-3 flex items-center gap-3 px-2 lg:mb-5">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg shadow-sm">
-              <img aria-hidden="true" src={appIconUrl} alt="" className="h-10 w-10 max-w-none scale-[1.28]" />
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold leading-5">{appTitle}</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">Desktop Console v{version}</div>
-            </div>
+      <div className="app-shell shell-layout">
+        <aside className="app-sidebar console-chrome shell-sidebar" aria-label={navigationLabel}>
+          <div className="shell-brand">
+            <img src={appIconUrl} alt="" />
+            <div className="shell-brand-copy"><strong>{appTitle}</strong><small>v{version}</small></div>
           </div>
-
-          <nav className="min-h-0 snap-x overflow-x-auto overflow-y-hidden pb-1 lg:flex-1 lg:overflow-y-auto lg:pr-1">
-            <div className="flex min-w-max gap-1 lg:block lg:min-w-0 lg:space-y-1">
-              {navigation.map(item => {
-                const Icon = item.icon
-                const active = item.id === activeId
-                return (
-                  <div key={item.id} className="flex items-center lg:block">
-                    {item.separator ? <div className="mx-2 h-8 border-l border-slate-200 dark:border-slate-800 lg:my-3 lg:h-auto lg:border-l-0 lg:border-t" /> : null}
-                    <button
-                      ref={active ? activeNavRef : undefined}
-                      type="button"
-                      aria-current={active ? 'page' : undefined}
-                      data-nav-id={item.id}
-                      onClick={() => onNavigate(item.id)}
-                      className={joinClassNames(
-                        'group flex h-9 w-full snap-start items-center gap-2.5 whitespace-nowrap rounded-lg px-2.5 text-sm transition lg:h-10',
-                        active
-                          ? 'bg-slate-950 text-white shadow-sm dark:bg-slate-100 dark:text-slate-950'
-                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white',
-                      )}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-left">{item.name}</span>
-                      {item.badge != null && item.badge > 0 ? (
-                        <span
-                          className={joinClassNames(
-                            'min-w-5 rounded-md px-1.5 py-0.5 text-center text-[11px] font-semibold',
-                            active
-                              ? 'bg-white/15 text-white dark:bg-slate-900/10 dark:text-slate-950'
-                              : 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-200',
-                          )}
-                        >
-                          {item.badge}
-                        </span>
-                      ) : null}
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
+          <label className="shell-page-picker" title={navigationLabel}>
+            <Menu size={17} aria-hidden="true" />
+            <select aria-label={navigationLabel} value={activeId} onChange={event => onNavigate(event.target.value)}>
+              {navigation.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <nav className="shell-navigation" aria-label={navigationLabel}>
+            {navigation.map(item => {
+              const Icon = item.icon
+              const active = item.id === activeId
+              return <div key={item.id}>
+                {item.separator && <div className="shell-divider" aria-hidden="true" />}
+                <button ref={active ? activeNavRef : undefined} type="button" className="shell-nav-item" data-nav-id={item.id}
+                  aria-current={active ? 'page' : undefined} aria-label={item.name} title={item.name} onClick={() => onNavigate(item.id)}>
+                  <Icon aria-hidden="true" /><span className="shell-nav-name">{item.name}</span>
+                </button>
+              </div>
+            })}
           </nav>
-
-          <div className="mt-3 hidden rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/80 sm:block lg:mt-4">
-            <div className="mb-3 flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
-              <span className="truncate">{autoStartLabel}</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoStartEnabled}
-                onClick={() => onAutoStartChange(!autoStartEnabled)}
-                className={joinClassNames(
-                  'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors',
-                  autoStartEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700',
-                )}
-                title={autoStartLabel}
-              >
-                <span className={joinClassNames('pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition', autoStartEnabled ? 'translate-x-4' : 'translate-x-0')} />
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              {statusChips.map(chip => (
-                <div key={String(chip.label)} className="min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="truncate font-semibold text-slate-950 dark:text-slate-50">{chip.value}</div>
-                  <div className="mt-1 truncate text-slate-500 dark:text-slate-400">{chip.label}</div>
-                </div>
-              ))}
-            </div>
+          <div className="shell-autostart">
+            <span>{autoStartLabel}</span>
+            <button type="button" role="switch" className="console-switch" aria-label={autoStartLabel}
+              aria-checked={autoStartEnabled} title={autoStartLabel} onClick={() => onAutoStartChange(!autoStartEnabled)} />
           </div>
         </aside>
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="z-20 border-b border-slate-200 bg-[var(--color-app-panel)]/95 backdrop-blur dark:border-slate-800 dark:bg-[var(--color-app-panel-dark)]/95">
-            <div className="flex min-h-[72px] flex-col gap-3 px-4 py-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 sm:flex">
-                  <ActiveIcon className="h-5 w-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                    <h1 className="truncate text-lg font-semibold leading-7">{activeItem?.name || appTitle}</h1>
-                    {runningChip ? (
-                      <Badge tone={runningChip.tone || 'emerald'} className="hidden sm:inline-flex">
-                        <span className="font-semibold">{runningChip.value}</span>
-                        <span>{runningChip.label}</span>
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <p className="mt-0.5 truncate text-sm text-slate-500 dark:text-slate-400">{pageDescription}</p>
-                </div>
+          <ConsoleTheme.Provider value>
+            <header className="shell-header console-chrome">
+              <div className="shell-heading">
+                <h1>{activeItem?.name || appTitle}</h1>
+                {pageDescription && <p>{pageDescription}</p>}
               </div>
-
-              <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
-                <div className="flex flex-wrap items-center gap-2">
-                  {secondaryChips.map(chip => (
-                    <Badge key={String(chip.label)} tone={chip.tone || 'slate'} className={topStatusChipClassName}>
-                      <span className="font-semibold">{chip.value}</span>
-                      <span>{chip.label}</span>
-                    </Badge>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <IconButton
-                    label={updateCheckButtonTitle}
-                    title={updateCheckError ? `${updateCheckButtonTitle}: ${updateCheckError}` : updateCheckButtonTitle}
-                    onClick={onCheckUpdate}
-                    disabled={updateChecking || updateInfo?.busy}
-                    icon={<RefreshCw className={joinClassNames('h-4 w-4', updateChecking ? 'animate-spin' : '')} />}
-                    className={joinClassNames(
-                      'w-9',
-                      topControlClassName,
-                      updateCheckError ? 'border-amber-400 text-amber-700 dark:border-amber-500/50 dark:text-amber-200' : '',
-                    )}
-                  />
-                  {updateInfo ? (
-                    <button
-                      type="button"
-                      onClick={onInstallUpdate}
-                      disabled={updateInfo.busy || updateChecking}
-                      title={updateButtonTitle}
-                      aria-label={updateButtonTitle}
-                      className={joinClassNames(
-                        'inline-flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/10 px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-500/15 dark:text-emerald-200',
-                        updateInfo.busy || updateChecking ? 'cursor-wait opacity-80' : '',
-                        topControlClassName,
-                      )}
-                    >
-                      <span className="max-w-[150px] truncate">
-                        {updateInfo.busy && updateInfo.progress != null
-                          ? `${updateInfo.progress}%`
-                          : `v${updateInfo.latest_version}`}
-                      </span>
-                      {updateInfo.busy
-                        ? <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" />
-                        : <Download className="h-4 w-4 shrink-0" />}
-                    </button>
-                  ) : null}
-                  <IconButton
-                    label={commandLabel}
-                    title={commandLabel}
-                    onClick={onOpenCommandCenter}
-                    icon={<Search className="h-4 w-4" />}
-                    className={joinClassNames('w-9', topControlClassName)}
-                  />
-                  <button
-                    type="button"
-                    onClick={onOpenCommandCenter}
-                    title={attentionLabel}
-                    aria-label={attentionLabel}
-                    className={joinClassNames(
-                      'inline-flex items-center justify-center gap-1.5 border px-2.5 text-xs font-semibold transition',
-                      attentionCount > 0
-                        ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
-                        : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800',
-                      topControlClassName,
-                    )}
-                  >
-                    <AlertTriangle className="h-4 w-4 shrink-0" />
-                    <span className="tabular-nums">{attentionCount}</span>
-                  </button>
-                  <Button
-                    onClick={onToggleLanguage}
-                    size="md"
-                    title={languageTitle}
-                    icon={<Languages className="h-4 w-4" />}
-                    className={joinClassNames('min-w-[82px] px-3 text-[12px]', topControlClassName)}
-                  >
-                    {languageLabel}
-                  </Button>
-                  <IconButton
-                    label={darkModeTitle}
-                    title={darkModeTitle}
-                    onClick={onToggleDarkMode}
-                    icon={darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                    className={joinClassNames('w-9', topControlClassName)}
-                  />
-                </div>
+              <div className="shell-summary">
+                {statusChips.map(chip => <span key={chip.label}><b>{chip.value}</b> {chip.label}</span>)}
               </div>
-            </div>
-          </header>
-
+              <div className="shell-tools">
+                <IconButton label={updateCheckButtonTitle}
+                  title={updateCheckError ? `${updateCheckButtonTitle}: ${updateCheckError}` : updateCheckButtonTitle}
+                  disabled={updateChecking || updateInfo?.busy} onClick={onCheckUpdate}
+                  icon={<RefreshCw size={15} className={updateChecking ? 'animate-spin' : undefined} />}
+                  className={joinClassNames('shell-icon', !!updateCheckError && 'has-alert')} />
+                {updateInfo && <Button size="sm" variant="primary" onClick={onInstallUpdate} disabled={updateInfo.busy}
+                  title={updateButtonTitle} aria-label={updateButtonTitle}
+                  icon={updateInfo.busy ? <LoaderCircle size={15} className="animate-spin" /> : <Download size={15} />}>
+                  {updateInfo.busy && updateInfo.progress != null ? `${updateInfo.progress}%` : `v${updateInfo.latest_version}`}
+                </Button>}
+                <IconButton label={commandLabel} icon={<Search size={16} />} onClick={onOpenCommandCenter} className="shell-icon" />
+                <button type="button" title={attentionLabel} aria-label={attentionLabel} onClick={onOpenCommandCenter}
+                  className={joinClassNames('console-btn shell-attention', attentionCount > 0 && 'has-alert')}>
+                  <AlertTriangle size={15} /><span>{attentionCount}</span>
+                </button>
+                <Button size="sm" onClick={onToggleLanguage} title={languageTitle} icon={<Languages size={15} />}>{languageLabel}</Button>
+                <IconButton label={darkModeTitle} icon={darkMode ? <Sun size={16} /> : <Moon size={16} />} onClick={onToggleDarkMode} className="shell-icon" />
+              </div>
+            </header>
+          </ConsoleTheme.Provider>
           <WorkspaceActionsProvider>
             <div data-workspace-content className="relative flex min-h-0 flex-1 flex-col">
-              <div data-workspace-scroll className={joinClassNames('min-h-0 flex-1', constrainContent ? 'overflow-hidden' : 'overflow-y-auto')}>
-                <div
-                  className={joinClassNames(
-                    constrainContent ? 'flex h-full min-h-0 flex-col' : 'min-h-full',
-                    immersiveContent ? '' : 'px-4 py-4 sm:px-5',
-                    !immersiveContent && !wideContent ? 'mx-auto w-full max-w-[1480px]' : '',
-                  )}
-                >
-                  {children}
+              <div data-workspace-scroll className={joinClassNames('min-h-0 flex-1', constrainContent ? 'overflow-hidden' : 'overflow-y-auto',
+                pilot ? 'bg-ui-canvas text-ui-ink' : 'bg-[var(--color-app-bg)] text-slate-900 dark:bg-[var(--color-app-bg-dark)] dark:text-slate-100')}>
+                <div className={joinClassNames(constrainContent ? 'flex h-full min-h-0 flex-col' : 'min-h-full',
+                  !immersiveContent && 'px-4 py-4 sm:px-5', !immersiveContent && !wideContent && 'mx-auto w-full max-w-[1480px]')}>
+                  <ConsoleTheme.Provider value={pilot}>{children}</ConsoleTheme.Provider>
                 </div>
               </div>
               <WorkspaceFloatingActionsHost />
             </div>
-
             {guidePanel}
           </WorkspaceActionsProvider>
-
-          {!immersiveContent && (
-            <footer className="hidden h-9 shrink-0 items-center justify-between border-t border-slate-200 bg-white/85 px-4 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/85 dark:text-slate-400 sm:flex">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="truncate">{appTitle}</span>
-                <span className="h-3 border-l border-slate-300 dark:border-slate-700" />
-                <span className="truncate">{activeItem?.name}</span>
-              </div>
-              <div className="flex shrink-0 items-center gap-3">
-                {statusChips.map(chip => (
-                  <span key={String(chip.label)} className="inline-flex items-center gap-1">
-                    <span>{chip.label}</span>
-                    <strong className="font-semibold text-slate-700 dark:text-slate-200">{chip.value}</strong>
-                  </span>
-                ))}
-              </div>
-            </footer>
-          )}
         </main>
       </div>
     </div>

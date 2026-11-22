@@ -100,7 +100,7 @@ export default function ProxyRequestHistory({ query }: { query: Filters }) {
     {loading ? <p role="status" className="mt-4 text-sm">{l.loading}</p> : null}
     {page ? <div className="mt-4 max-h-[440px] overflow-auto"><table className="w-full text-xs">
       <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800"><tr>{[l.lastUsed, l.key, l.model, l.outcome, l.errorType, l.quality, l.view].map(h => <th key={h} className={cell}>{h}</th>)}</tr></thead>
-      <tbody>{page.records.map(r => <tr key={r.requestId} className="border-b border-slate-200 dark:border-slate-800">
+      <tbody>{page.records.map(r => <tr key={r.requestId} data-selected={selected?.requestId === r.requestId} className="console-list-row border-b border-ui-line">
         <td className={cell}>{time(r.completedAt)}</td><td className={cell}>{r.keyName}</td><td className={`${cell} max-w-48 truncate`}>{r.model || '—'}</td>
         <td className={cell}>{label(r.outcome)} {r.httpStatus || ''}</td><td className={cell}>{r.failure ? failureText(r.failure.code, lang).title : '—'}</td><td className={cell}>{label(r.quality)}</td>
         <td className={cell}><Button aria-label={`${l.view} ${r.requestId}`} onClick={() => { setSelected(r); setCopied('') }}>{l.view}</Button></td>

@@ -23,8 +23,12 @@ const configPageSource = fs.readFileSync(
   'utf8',
 )
 assert.match(configPageSource, /const warningTone = warningCounts\.high > 0 \? 'red' : warningCounts\.medium > 0 \? 'amber' : warningCounts\.low > 0 \? 'sky' : 'emerald'/)
-assert.match(configPageSource, /label: labels\.warnings[\s\S]*tone: warningTone === 'red'[\s\S]*warningTone === 'sky'/)
-assert.match(configPageSource, /message\.tone === 'amber'[\s\S]*bg-sky-50/)
+assert.match(configPageSource, /className="console-review-link" data-tone=\{warningTone\}/)
+const theme = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles', 'console.css'), 'utf8')
+assert.match(theme, /\.console-review-link \{[^}]*var\(--ui-warn\)/)
+assert.match(theme, /\.console-review-link\[data-tone=red\] \{[^}]*var\(--ui-danger\)/)
+assert.match(theme, /\.console-review-link\[data-tone=sky\] \{[^}]*var\(--ui-info\)/)
+assert.match(configPageSource, /warning\.severity === 'high'[\s\S]*bg-ui-danger-bg[\s\S]*warning\.severity === 'medium'[\s\S]*bg-ui-warn-bg[\s\S]*bg-ui-info-bg/)
 assert.match(configPageSource, /saving, saveStage, setSaveStage } = useConfigDraft/)
 assert.match(
   configPageSource,

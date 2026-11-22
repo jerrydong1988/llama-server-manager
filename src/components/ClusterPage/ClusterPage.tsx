@@ -516,13 +516,13 @@ export default function ClusterPage() {
             <div className="divide-y divide-slate-800 bg-slate-950/30">
               {workersSorted.map(worker => (
                 <Fragment key={worker.id}>
-                  <div className="px-5 py-4 transition hover:bg-slate-900/70">
+                  <div className="console-list-row px-5 py-4" data-selected={expanded.has(worker.id)}>
                     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusTone(worker.status)}`} title={statusText(worker.status)} />
-                          <p className="min-w-0 max-w-full truncate text-sm font-medium text-slate-100" title={worker.name}>{worker.name}</p>
-                          <span className="min-w-0 break-all text-xs text-slate-500">{worker.host}:{worker.port}</span>
+                          <p className="min-w-0 max-w-full truncate text-sm font-medium text-ui-ink" title={worker.name}>{worker.name}</p>
+                          <span className="min-w-0 break-all text-xs text-ui-muted">{worker.host}:{worker.port}</span>
                           {worker.auto_discovered && (
                             <Badge tone="slate" className="px-2 py-0.5 text-[11px]">{labels.auto}</Badge>
                           )}
@@ -532,7 +532,7 @@ export default function ClusterPage() {
                             </Badge>
                           )}
                         </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+                        <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-ui-muted">
                           <span>{statusText(worker.status)}</span>
                           <span>{worker.devices.length} {labels.devices}</span>
                           <span>{(worker.devices.reduce((sum, device) => sum + device.vram_mb, 0) / 1024).toFixed(1)} GB VRAM</span>
@@ -560,6 +560,8 @@ export default function ClusterPage() {
                         </Button>
                         <Button
                           onClick={() => toggleExpand(worker.id)}
+                          aria-expanded={expanded.has(worker.id)}
+                          aria-controls={expanded.has(worker.id) ? `worker-devices-${worker.id}` : undefined}
                           size="sm"
                           className="w-[108px] shrink-0 whitespace-nowrap"
                         >
@@ -596,9 +598,9 @@ export default function ClusterPage() {
                   </div>
 
                   {expanded.has(worker.id) && (
-                    <div className="bg-slate-950/70 px-5 py-4">
+                    <div id={`worker-devices-${worker.id}`} className="bg-ui-inset px-5 py-4">
                       {worker.devices.length === 0 ? (
-                        <span className="text-sm text-slate-500">{t.clusterPage.noDevices}</span>
+                        <span className="text-sm text-ui-muted">{t.clusterPage.noDevices}</span>
                       ) : (
                         <div className="space-y-3">
                           {worker.devices.map((device, index) => {

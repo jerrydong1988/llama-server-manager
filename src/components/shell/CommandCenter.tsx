@@ -88,30 +88,30 @@ export function CommandCenter({
   }
 
   return (
-    <div ref={dialog} tabIndex={-1} className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/55 px-4 py-6 sm:py-12 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="command-center-title">
-      <div className={`w-full ${view === 'tasks' ? 'max-w-6xl' : 'max-w-4xl'} overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100`}>
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+    <div ref={dialog} tabIndex={-1} className="console-overlay fixed inset-0 z-50 flex items-start justify-center bg-ui-scrim px-4 py-6 sm:py-12 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="command-center-title">
+      <div className={`w-full ${view === 'tasks' ? 'max-w-6xl' : 'max-w-4xl'} overflow-hidden rounded-lg border border-ui-line bg-ui-surface text-ui-ink shadow-2xl`}>
+        <div className="flex items-start justify-between gap-4 border-b border-ui-line px-5 py-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Search className="h-5 w-5 text-blue-500" />
+              <Search className="h-5 w-5 text-ui-info" />
               <h2 id="command-center-title" className="text-lg font-semibold">{copy.title}</h2>
               {issues.length > 0
                 ? <Badge tone="amber">{issues.length} {copy.needAttention}</Badge>
                 : <Badge tone="emerald">{copy.healthy}</Badge>}
             </div>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{copy.description}</p>
+            <p className="mt-1 text-sm text-ui-muted">{copy.description}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label={copy.close}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ui-line text-ui-muted transition hover:bg-ui-hover hover:text-ui-ink"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div role="tablist" aria-label={copy.title} className="flex gap-2 border-b border-slate-200 px-5 py-2 dark:border-slate-800"
+        <div role="tablist" aria-label={copy.title} className="flex gap-2 border-b border-ui-line px-5 py-2"
           onKeyDown={event => {
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
             event.preventDefault()
@@ -121,7 +121,7 @@ export function CommandCenter({
           }}>
           {(['shortcuts', 'tasks'] as const).map(tab => <button type="button" role="tab" key={tab} id={`command-tab-${tab}`}
             aria-selected={view === tab} aria-controls={`command-panel-${tab}`} tabIndex={view === tab ? 0 : -1}
-            onClick={() => setView(tab)} className={`min-h-11 rounded-md px-4 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${view === tab ? 'bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'text-slate-600 dark:text-slate-300'}`}>
+            onClick={() => setView(tab)} className={`min-h-11 rounded-md px-4 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ui-focus ${view === tab ? 'bg-ui-action font-semibold text-ui-action-ink' : 'text-ui-muted'}`}>
             {tab === 'tasks' ? taskCopy.title : taskCopy.shortcuts}
           </button>)}
         </div>
@@ -137,7 +137,7 @@ export function CommandCenter({
             />
 
             <section className="space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{copy.commonTasks}</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-ui-muted">{copy.commonTasks}</div>
               <div className="grid gap-2 md:grid-cols-2">
                 {filteredCommands.map(command => (
                   <button
@@ -147,14 +147,14 @@ export function CommandCenter({
                       command.action()
                       onClose()
                     }}
-                    className="flex min-w-0 items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+                    className="flex min-w-0 items-start gap-3 rounded-lg border border-ui-line bg-ui-inset px-3 py-3 text-left transition hover:border-ui-control hover:bg-ui-hover"
                   >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ui-line bg-ui-surface text-ui-info">
                       {command.icon}
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{command.title}</span>
-                      <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{command.description}</span>
+                      <span className="block truncate text-sm font-semibold text-ui-ink">{command.title}</span>
+                      <span className="mt-1 line-clamp-2 block text-xs leading-5 text-ui-muted">{command.description}</span>
                     </span>
                   </button>
                 ))}
@@ -162,24 +162,24 @@ export function CommandCenter({
             </section>
           </div>
 
-          <aside className="border-t border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/55 lg:border-l lg:border-t-0">
+          <aside className="border-t border-ui-line bg-ui-inset p-5 lg:border-l lg:border-t-0">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold">{copy.attention}</div>
               <Badge tone={issues.length > 0 ? 'amber' : 'emerald'}>{issues.length}</Badge>
             </div>
             {issues.length === 0 ? (
-              <div className="rounded-lg border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+              <div className="rounded-lg border border-ui-line bg-ui-surface px-4 py-5 text-sm text-ui-muted">
                 {copy.noIssues}
               </div>
             ) : (
               <div className="space-y-2">
                 {issues.map(issue => (
-                  <div key={issue.id} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                  <div key={issue.id} className="rounded-lg border border-ui-line bg-ui-surface p-3">
                     <div className="mb-2 flex items-center gap-2">
                       <Badge tone={severityTone[issue.severity]}>{severityLabel[issue.severity]}</Badge>
-                      <div className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{issue.title}</div>
+                      <div className="min-w-0 truncate text-sm font-semibold text-ui-ink">{issue.title}</div>
                     </div>
-                    <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{issue.description}</p>
+                    <p className="text-xs leading-5 text-ui-muted">{issue.description}</p>
                     <Button
                       onClick={() => {
                         issue.action()

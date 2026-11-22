@@ -47,12 +47,12 @@ export function ModelAssetPicker({
             type="button"
             onClick={() => onToggle(node.path)}
             style={{ paddingLeft: `${depth * 14 + 8}px` }}
-            className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-slate-200 transition hover:bg-slate-800/80"
+            className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-ui-body transition hover:bg-ui-hover"
           >
-            {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
-            <FolderOpen className="h-4 w-4 shrink-0 text-amber-400" />
+            {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ui-muted" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ui-muted" />}
+            <FolderOpen className="h-4 w-4 shrink-0 text-ui-warn" />
             {depth === 0 ? (
-              <PathText value={node.path} maxLength={78} className="flex-1 text-slate-200" />
+              <PathText value={node.path} maxLength={78} className="flex-1 text-ui-body" />
             ) : (
               <span className="min-w-0 flex-1 truncate" title={node.name}>{node.name}</span>
             )}
@@ -76,11 +76,11 @@ export function ModelAssetPicker({
             key={node.path}
             onClick={() => onPick(model.path)}
             style={{ paddingLeft: `${depth * 14 + 32}px` }}
-            className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-slate-100 transition hover:bg-fuchsia-500/10"
+            className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-ui-ink transition hover:bg-ui-hover"
           >
-            <Image className="h-4 w-4 shrink-0 text-fuchsia-400" />
+            <Image className="h-4 w-4 shrink-0 text-ui-body" />
             <span className="min-w-0 flex-1 truncate" title={formatPathForDisplay(model.path)}>{model.name}</span>
-            <span className="shrink-0 text-xs text-fuchsia-300">{t.modelRepo.typeMmprojShort}</span>
+            <span className="shrink-0 text-xs text-ui-body">{t.modelRepo.typeMmprojShort}</span>
           </button>
         )
       }
@@ -89,11 +89,11 @@ export function ModelAssetPicker({
         <div
           key={node.path}
           style={{ paddingLeft: `${depth * 14 + 32}px` }}
-          className="flex items-center gap-2 py-2 pr-3 text-sm text-slate-500"
+          className="flex items-center gap-2 py-2 pr-3 text-sm text-ui-muted"
         >
-          <Image className="h-4 w-4 shrink-0 text-fuchsia-400" />
+          <Image className="h-4 w-4 shrink-0 text-ui-body" />
           <span className="min-w-0 flex-1 truncate" title={formatPathForDisplay(model.path)}>{model.name}</span>
-          <span className="shrink-0 text-xs text-fuchsia-300">{t.modelRepo.typeMmprojShort}</span>
+          <span className="shrink-0 text-xs text-ui-body">{t.modelRepo.typeMmprojShort}</span>
         </div>
       )
     }
@@ -104,35 +104,35 @@ export function ModelAssetPicker({
         key={node.path}
         onClick={() => onPick(model.path)}
         style={{ paddingLeft: `${depth * 14 + 32}px` }}
-        className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-slate-100 transition hover:bg-blue-500/10"
+        className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-ui-ink transition hover:bg-ui-hover"
       >
-        <File className="h-4 w-4 shrink-0 text-sky-400" />
+        <File className="h-4 w-4 shrink-0 text-ui-info" />
         <span className="min-w-0 flex-1 truncate" title={formatPathForDisplay(model.path)}>{model.name}</span>
-        <span className="shrink-0 text-xs text-slate-500">{model.quant_type || ''}</span>
+        <span className="shrink-0 text-xs text-ui-muted">{model.quant_type || ''}</span>
       </button>
     )
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
-        <div className="flex items-center justify-between gap-4 border-b border-slate-800 bg-slate-950/90 px-5 py-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ui-scrim p-4 backdrop-blur-sm">
+      <div role="dialog" aria-modal="true" aria-label={t.modelRepo.selectFromRepo} className="console-surface console-popover flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-4 border-b border-ui-line bg-ui-inset px-5 py-4">
           <div className="min-w-0">
-            <h3 className="text-lg font-semibold text-slate-50">{t.modelRepo.selectFromRepo}</h3>
-            <p className="mt-1 truncate text-sm text-slate-400">{description}</p>
+            <h3 className="text-lg font-semibold text-ui-ink">{t.modelRepo.selectFromRepo}</h3>
+            <p className="mt-1 truncate text-sm text-ui-muted">{description}</p>
           </div>
-          <Button onClick={onClose} variant="subtle" size="icon" aria-label="Close">
+          <Button onClick={onClose} variant="subtle" size="icon" aria-label={t.appShell.close}>
             <X className="h-5 w-5" />
           </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {trees.length > 0 ? (
-            <div className="min-w-0 space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <div className="min-w-0 space-y-2 rounded-lg border border-ui-line bg-ui-inset p-3">
               {trees.map(tree => renderNode(tree, 0))}
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 px-4 py-10 text-center text-sm text-slate-400">
+            <div className="rounded-lg border border-dashed border-ui-line bg-ui-inset px-4 py-10 text-center text-sm text-ui-muted">
               {emptyLabel}
             </div>
           )}

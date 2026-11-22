@@ -57,7 +57,7 @@ export function ConfigFloatingActions({
     <div
       data-config-floating-actions={guideTarget ? undefined : ''}
       data-config-guide-actions={guideTarget ? '' : undefined}
-      className={joinClassNames('pointer-events-auto flex flex-wrap items-center gap-2', !guideTarget && 'rounded-xl border border-slate-200 bg-white/95 p-2 shadow-xl shadow-slate-950/15 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 dark:shadow-slate-950/50')}
+      className={joinClassNames('console-overlay pointer-events-auto flex flex-wrap items-center gap-2', !guideTarget && 'rounded-xl border border-ui-line bg-ui-surface p-2 shadow-xl')}
     >
       {!guideTarget && <BackToInstancesButton compact disabled={saving} />}
       <Button
@@ -78,9 +78,9 @@ export function ConfigFloatingActions({
         onClick={scrollToTop}
         data-config-back-to-top
         icon={<ArrowUp className="h-4 w-4" />}
-        className="h-9 w-9 border-blue-300 text-blue-700 hover:border-blue-400 hover:bg-blue-50 dark:border-blue-500/40 dark:text-blue-200 dark:hover:border-blue-400 dark:hover:bg-blue-500/10"
+        className="h-9 w-9 border-ui-action-line text-ui-info hover:border-ui-control hover:bg-ui-hover"
       />}
-      {error && <p role="alert" className="max-w-xs basis-full text-xs leading-5 text-red-700 dark:text-red-300">{error}</p>}
+      {error && <p role="alert" className="max-w-xs basis-full text-xs leading-5 text-ui-danger">{error}</p>}
     </div>, target
   )
 }

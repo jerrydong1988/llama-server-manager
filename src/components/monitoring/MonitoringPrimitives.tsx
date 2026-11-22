@@ -373,24 +373,21 @@ export function SessionCard({
     <button
       type="button"
       onClick={onClick}
-      className={joinClassNames(
-        'block w-full rounded-lg border p-3 text-left transition',
-        selected
-          ? 'border-blue-400 bg-blue-50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.22)] dark:border-blue-500/50 dark:bg-blue-500/20'
-          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700',
-      )}
+      aria-pressed={selected}
+      data-selected={selected}
+      className="console-list-row block w-full rounded-lg border border-ui-line p-3 text-left"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100" title={title}>{title}</div>
-          <div className="mt-1 truncate text-xs text-slate-500" title={subtitle}>{subtitle}</div>
+          <div className="truncate text-sm font-semibold text-ui-ink" title={title}>{title}</div>
+          <div className="mt-1 truncate text-xs text-ui-muted" title={subtitle}>{subtitle}</div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <Badge tone={running ? 'emerald' : 'slate'}>{statusLabel}</Badge>
           {workload ? <Badge tone={workloadTone}>{workload}</Badge> : null}
         </div>
       </div>
-      <div className="mt-3 truncate text-xs text-slate-500" title={meta}>{meta}</div>
+      <div className="mt-3 truncate text-xs text-ui-muted" title={meta}>{meta}</div>
     </button>
   )
 }

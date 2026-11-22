@@ -51,9 +51,9 @@ export function InstanceModelPicker({ models, modelDirs, collapsed, onToggle, on
       const isCollapsed = collapsed.has(node.path)
       return (
         <div key={node.path}>
-          <button type="button" onClick={() => onToggle(node.path)} style={{ paddingLeft: `${depth * 12 + 4}px` }} className="flex w-full items-center gap-1.5 rounded py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-800">
-            {isCollapsed ? <ChevronRight className="h-3 w-3 shrink-0 text-slate-400" /> : <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />}
-            <FolderOpen className="h-3 w-3 shrink-0 text-amber-500" />
+          <button type="button" onClick={() => onToggle(node.path)} style={{ paddingLeft: `${depth * 12 + 4}px` }} className="flex w-full items-center gap-1.5 rounded py-1 text-left text-xs hover:bg-ui-hover">
+            {isCollapsed ? <ChevronRight className="h-3 w-3 shrink-0 text-ui-muted" /> : <ChevronDown className="h-3 w-3 shrink-0 text-ui-muted" />}
+            <FolderOpen className="h-3 w-3 shrink-0 text-ui-warn" />
             {depth === 0 ? (
               <PathText value={node.name} maxLength={78} className="flex-1 font-medium" />
             ) : (
@@ -70,29 +70,29 @@ export function InstanceModelPicker({ models, modelDirs, collapsed, onToggle, on
     const model = node.model!
     if (model.file_type === 'mmproj') {
       return (
-        <div key={node.path} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex items-center gap-2 py-1 pr-2 text-xs text-slate-500">
-          <Image className="h-3 w-3 shrink-0 text-purple-500" />
+        <div key={node.path} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex items-center gap-2 py-1 pr-2 text-xs text-ui-muted">
+          <Image className="h-3 w-3 shrink-0 text-ui-body" />
           <span className="flex-1 truncate">{model.name}</span>
-          <span className="shrink-0 text-xs text-purple-400">{t.modelRepo.typeMmprojShort}</span>
+          <span className="shrink-0 text-xs text-ui-body">{t.modelRepo.typeMmprojShort}</span>
         </div>
       )
     }
 
     const mmproj = findMatchingProjector(model, models)
     return (
-      <button type="button" key={node.path} onClick={() => onPick(model, mmproj?.path || '')} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex w-full items-center gap-2 rounded py-1 pr-2 text-left text-xs hover:bg-blue-50 dark:hover:bg-blue-950/30">
-        <File className="h-3 w-3 shrink-0 text-blue-500" />
+      <button type="button" key={node.path} onClick={() => onPick(model, mmproj?.path || '')} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex w-full items-center gap-2 rounded py-1 pr-2 text-left text-xs hover:bg-ui-hover">
+        <File className="h-3 w-3 shrink-0 text-ui-info" />
         <span className="flex-1 truncate">{model.name}</span>
-        <span className="shrink-0 text-slate-400">{model.quant_type || ''}</span>
+        <span className="shrink-0 text-ui-muted">{model.quant_type || ''}</span>
       </button>
     )
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-      <Surface className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-800 dark:bg-slate-950/90">
-          <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.modelRepo.selectFromRepo}</h3>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ui-scrim p-4">
+      <Surface role="dialog" aria-modal="true" aria-label={t.modelRepo.selectFromRepo} className="console-popover flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden">
+        <div className="flex items-center justify-between border-b border-ui-line bg-ui-inset px-6 py-4">
+          <h3 className="text-lg font-semibold text-ui-ink">{t.modelRepo.selectFromRepo}</h3>
           <Button onClick={onClose} variant="subtle" size="icon" aria-label={t.instance.cancelCreate}><X className="h-5 w-5" /></Button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">

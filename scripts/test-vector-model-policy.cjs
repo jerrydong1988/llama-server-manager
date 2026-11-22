@@ -543,7 +543,7 @@ assert.ok(
   'cleanup summary must clear after persistence succeeds',
 )
 assert.match(configPageSource, /\{!isEmbedding && <ReasoningSection/, 'reasoning section must be absent in vector mode')
-assert.match(configPageSource, /\{!manualMode && !isEmbedding && \(\s*<Surface[^>]*data-guide="config-presets"/s, 'inference presets must be absent in vector and manual modes')
+assert.match(configPageSource, /\{!manualMode && !isEmbedding &&\s*<Button[^>]*data-guide="config-presets"/s, 'the inference preset action must be absent in vector and manual modes')
 assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset assistant must not render in vector mode')
 
 const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')
