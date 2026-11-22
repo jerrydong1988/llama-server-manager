@@ -115,7 +115,7 @@ function MiniStat({
   tone?: string
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-ui-line bg-ui-inset px-3 py-2">
+    <div className="flex min-w-0 flex-col justify-center rounded-md border border-ui-line bg-ui-inset px-3 py-2">
       <div className="truncate text-[11px] uppercase tracking-wide text-ui-muted" title={label}>{label}</div>
       <div className={`mt-1 truncate text-lg font-semibold ${tone}`} title={String(value)}>{value}</div>
     </div>
@@ -692,59 +692,58 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-          <Surface as="aside" className="space-y-3 p-4">
-            <SectionHeader title={labels.inventory} />
-            <div className="grid grid-cols-2 gap-2">
-              <MiniStat label={labels.instances} value={instances.length} />
-              <MiniStat label={labels.models} value={modelCount} />
-              <MiniStat label={labels.engines} value={engines.length} />
-              <MiniStat label={labels.downloads} value={downloadItems.length} />
+      <div data-testid="dashboard-footer" className="grid items-stretch gap-4 lg:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_320px]">
+        <Surface as="aside" className="flex min-w-0 flex-col gap-3 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <SectionHeader title={labels.recentDownloads} />
+            <Badge tone="blue">{formatRate(transferBytes)}</Badge>
+          </div>
+          <InsetSurface className="grid grid-cols-3 gap-2 p-3 text-center text-xs">
+            <div>
+              <div className="font-semibold text-blue-600 dark:text-blue-300">{activeDownloadCount}</div>
+              <div className="mt-1 truncate text-ui-muted">{labels.activeDownloads}</div>
             </div>
-          </Surface>
-
-          <Surface as="aside" className="space-y-3 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <SectionHeader title={labels.recentDownloads} />
-              <Badge tone="blue">{formatRate(transferBytes)}</Badge>
+            <div>
+              <div className="font-semibold text-violet-600 dark:text-violet-300">{queuedDownloadCount}</div>
+              <div className="mt-1 truncate text-ui-muted">{labels.queuedDownloads}</div>
             </div>
-            <InsetSurface className="grid grid-cols-3 gap-2 p-3 text-center text-xs">
-              <div>
-                <div className="font-semibold text-blue-600 dark:text-blue-300">{activeDownloadCount}</div>
-                <div className="mt-1 truncate text-ui-muted">{labels.activeDownloads}</div>
-              </div>
-              <div>
-                <div className="font-semibold text-violet-600 dark:text-violet-300">{queuedDownloadCount}</div>
-                <div className="mt-1 truncate text-ui-muted">{labels.queuedDownloads}</div>
-              </div>
-              <div>
-                <div className="font-semibold text-rose-600 dark:text-rose-300">{failedDownloadCount}</div>
-                <div className="mt-1 truncate text-ui-muted">{labels.failedDownloads}</div>
-              </div>
-            </InsetSurface>
-            {recentDownloads.length === 0 ? (
-              <div className="rounded-md border border-ui-line bg-ui-inset px-3 py-4 text-center text-xs text-ui-muted">
-                {labels.noDownloads}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {recentDownloads.map(task => {
-                  const progress = task.total > 0 ? Math.min(100, Math.max(0, (task.downloaded / task.total) * 100)) : 0
-                  return (
-                    <div key={task.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-ui-line bg-ui-inset px-3 py-2 text-xs">
-                      <div className="min-w-0">
-                        <div className="truncate text-ui-body" title={task.fileName}>{task.fileName}</div>
-                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ui-line">
-                          <div className="h-full rounded-full bg-blue-500" style={{ width: `${progress}%` }} />
-                        </div>
+            <div>
+              <div className="font-semibold text-rose-600 dark:text-rose-300">{failedDownloadCount}</div>
+              <div className="mt-1 truncate text-ui-muted">{labels.failedDownloads}</div>
+            </div>
+          </InsetSurface>
+          {recentDownloads.length === 0 ? (
+            <div className="grid flex-1 place-items-center rounded-md border border-ui-line bg-ui-inset px-3 py-4 text-center text-xs text-ui-muted">
+              {labels.noDownloads}
+            </div>
+          ) : (
+            <div className="grid flex-1 auto-rows-fr gap-2">
+              {recentDownloads.map(task => {
+                const progress = task.total > 0 ? Math.min(100, Math.max(0, (task.downloaded / task.total) * 100)) : 0
+                return (
+                  <div key={task.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-ui-line bg-ui-inset px-3 py-2 text-xs">
+                    <div className="min-w-0">
+                      <div className="truncate text-ui-body" title={task.fileName}>{task.fileName}</div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ui-line">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${progress}%` }} />
                       </div>
-                      <Badge tone={downloadTone(task.status)}>{task.status}</Badge>
                     </div>
-                  )
-                })}
-              </div>
-            )}
-          </Surface>
+                    <Badge tone={downloadTone(task.status)}>{task.status}</Badge>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Surface>
+        <Surface as="aside" className="flex min-w-0 flex-col gap-3 p-4">
+          <SectionHeader title={labels.inventory} />
+          <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2">
+            <MiniStat label={labels.instances} value={instances.length} />
+            <MiniStat label={labels.models} value={modelCount} />
+            <MiniStat label={labels.engines} value={engines.length} />
+            <MiniStat label={labels.downloads} value={downloadItems.length} />
+          </div>
+        </Surface>
       </div>
     </div>
   )

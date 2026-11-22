@@ -4,6 +4,38 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('same-level folders, models and projectors align and MTP children have one additional branch', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('lang', 'zh-CN'); localStorage.setItem('lastTab', 'model-repo') })
+  await page.goto('/?scenario=model-tree-layout')
+  const tree = page.locator('.model-tree-viewport')
+  const family = 'C:\\browser-test\\models\\gemma-4-12b-it-GGUF\\'
+  const label = (relative: string) => tree.getByTitle(family + relative, { exact: true })
+  const siblings = ['MTP', 'gemma-4-12b-it-UD-Q8_K_XL.gguf', 'mmproj-F16.gguf', 'mtp-gemma-4-12b-it.gguf']
+  const child = label('MTP\\mtp-gemma-4-12b-it-Q8_0.gguf')
+  for (const width of [1640, 560]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect(child).toBeVisible()
+    const positions = await Promise.all(siblings.map(name => label(name).evaluate(el => ({
+      text: el.getBoundingClientRect().left,
+      icon: el.previousElementSibling!.getBoundingClientRect().left,
+    }))))
+    expect(positions.every(pos => pos.text === positions[0].text && pos.icon === positions[0].icon)).toBe(true)
+    expect((await child.boundingBox())!.x - positions[0].text).toBe(16)
+  }
+  const folder = label('MTP').locator('..')
+  const branch = child.locator('..').locator('.model-tree-branches > :last-child')
+  await expect(branch).toHaveAttribute('data-continues', 'false')
+  await folder.click()
+  await expect(child).toHaveCount(0)
+  await expect(label('mmproj-F16.gguf')).toBeVisible()
+  await folder.click()
+  await child.locator('..').click()
+  await expect(child.locator('..')).toHaveAttribute('aria-pressed', 'true')
+  await page.locator('[data-guide=model-search] input').fill('mtp-gemma-4-12b-it-Q8_0')
+  await expect(tree.locator('button[data-selected]')).toHaveCount(1)
+  await expect(tree.locator('.model-tree-branches > [data-continues=true]')).toHaveCount(0)
+})
+
 test('a fresh configuration exposes the default model root and its scanned tree', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
@@ -74,7 +106,8 @@ test('Windows namespace aliases remain inside ordinary model and engine roots', 
   const explorer = page.locator('[data-guide="model-search"]')
   await expect(explorer.getByText('C:\\browser-test\\models', { exact: true })).toBeVisible()
   await expect(explorer.getByText('Qwen Browser Test Q8_0.gguf', { exact: true })).toBeVisible()
-  await expect(page.getByTitle('C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf')).toBeVisible()
+  await expect(explorer.getByTitle('C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf')).toBeVisible()
+  await expect(page.locator('aside').getByTitle('C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf')).toBeVisible()
 
   const leakedNamespacePaths = await page.evaluate(() => {
     const namespacePrefix = ['\\', '\\', '?', '\\'].join('')

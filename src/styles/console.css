@@ -112,8 +112,26 @@ html.dark {
 .console-toolbar-button > svg { width: 1rem; height: 1rem; flex: none; }
 .console-review-link { color: var(--ui-warn); background: var(--ui-warn-bg); border-color: color-mix(in srgb, currentColor 30%, var(--ui-line)); }
 .console-review-link:hover:not(:disabled) { background: color-mix(in srgb, var(--ui-surface) 90%, currentColor); border-color: currentColor; }
-.model-tree-viewport { max-height: clamp(18rem, 60vh, 42rem); overflow: auto; border-top: 1px solid var(--ui-line); }
-.model-tree-row { display: flex; width: 100%; min-height: 39px; align-items: center; gap: 8px; padding-block: 7px; padding-inline-end: 20px; text-align: start; }
+.model-tree-viewport {
+  --tree-step: 16px;
+  --tree-line: color-mix(in srgb, var(--ui-control) 70%, var(--ui-line));
+  max-height: clamp(18rem, 60vh, 42rem);
+  overflow: auto;
+  border-top: 1px solid var(--ui-line);
+}
+.model-tree-row { display: flex; width: 100%; min-height: 39px; align-items: center; gap: 8px; padding-inline: 16px 20px; text-align: start; }
+.model-tree-prefix { display: flex; align-self: stretch; min-width: var(--tree-step); max-width: 30%; flex: none; }
+.model-tree-branches { display: flex; min-width: 0; overflow: hidden; justify-content: flex-end; }
+.model-tree-branches > span, .model-tree-disclosure { position: relative; width: var(--tree-step); flex: none; }
+.model-tree-branches > [data-continues=true]::before, .model-tree-branches > :last-child::before {
+  content: ''; position: absolute; inset-block: 0; inset-inline-start: 50%; border-inline-start: 1px solid var(--tree-line);
+}
+.model-tree-branches > :last-child[data-continues=false]::before { inset-block-end: 50%; }
+.model-tree-branches > :last-child::after, .model-tree-disclosure:empty::after {
+  content: ''; position: absolute; inset-block-start: 50%; inset-inline: 50% 0; border-block-start: 1px solid var(--tree-line);
+}
+.model-tree-disclosure { display: grid; place-items: center; color: var(--ui-muted); }
+.model-tree-disclosure:empty::after { inset-inline: 0 2px; }
 .model-tree-size { flex: none; width: 5.5rem; text-align: end; font-variant-numeric: tabular-nums; }
 .console-review-link[data-tone=red] { color: var(--ui-danger); background: var(--ui-danger-bg); }
 .console-review-link[data-tone=sky] { color: var(--ui-info); background: var(--ui-info-bg); }

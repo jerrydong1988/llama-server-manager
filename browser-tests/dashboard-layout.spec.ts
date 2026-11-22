@@ -2,6 +2,50 @@ import { expect, test } from '@playwright/test'
 
 test.afterEach(async ({ page }) => { await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]') })
 
+test('footer panels share column edges and a baseline as download history grows', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('lang', 'zh-CN'); localStorage.setItem('lastTab', 'dashboard') })
+  await page.setViewportSize({ width: 2560, height: 1397 })
+  await page.goto('/?scenario=monitoring')
+  const footer = page.getByTestId('dashboard-footer')
+  const cards = footer.locator(':scope > aside')
+  const bounds = () => cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()))
+  await expect(footer.getByText('暂无下载任务')).toBeVisible()
+  for (const count of [0, 1, 4]) {
+    if (count) {
+      await page.evaluate(async n => {
+        const mock = window.__TAURI_BROWSER_TEST__
+        mock.downloadQueueOverride = [{
+          id: 'footer-history', repo_id: 'layout/models', source: 'huggingface', save_dir: 'models',
+          added_at: Date.now(), status: 'completed',
+          files: Array.from({ length: n }, (_,i) => ({
+            task_id: 'file-' + i, name: 'model-' + i + '.gguf', path: 'model-' + i + '.gguf',
+            size: 1024, downloaded: 1024, file_type: 'model', status: 'completed',
+          })),
+        }]
+        await mock.emitEvent('management-config-changed', { operation: 'downloads.settings', revision: 0 })
+      }, count)
+      await expect(footer.getByTitle(/^model-\d\.gguf$/)).toHaveCount(count)
+    }
+    const [downloads, inventory] = await bounds()
+    expect(downloads.top).toBe(inventory.top)
+    expect(downloads.bottom).toBe(inventory.bottom)
+    for (const [card, above] of [[downloads, page.getByTestId('dashboard-instances')], [inventory, page.getByTestId('dashboard-secondary')]] as const) {
+      const box = (await above.boundingBox())!
+      expect(card.left).toBeCloseTo(box.x, 0)
+      expect(card.width).toBeCloseTo(box.width, 0)
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const [left, right] = await bounds()
+  expect(left.bottom).toBe(right.bottom)
+  expect(left.width).toBeCloseTo(right.width, 0)
+  await page.setViewportSize({ width: 860, height: 900 })
+  const [upper, lower] = await bounds()
+  expect(lower.top).toBeGreaterThan(upper.bottom)
+  expect(lower.left).toBe(upper.left)
+  expect(lower.width).toBe(upper.width)
+})
+
 for (const lang of ['zh-CN', 'en-US']) {
   test(`dashboard prioritizes resources and instance controls in ${lang}`, async ({ page }, testInfo) => {
     await page.addInitScript(language => { localStorage.setItem('lang', language); localStorage.setItem('lastTab', 'dashboard') }, lang)

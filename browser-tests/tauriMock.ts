@@ -169,7 +169,29 @@ const docsModels: ModelInfo[] = [
   },
 ]
 
-const models = BROWSER_SCENARIO === 'guide-assets-only' ? [qwenProjector, { ...model, file_type: 'imatrix' }] : BROWSER_SCENARIO === 'guide-empty' ? [] : IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
+function modelTreeLayoutFixture(): ModelInfo[] {
+  return ['gemma-4-12b-it', 'gemma-4-26B-A4B-it'].flatMap(family => {
+    const files = [
+      { relative: 'MTP/mtp-' + family + '-Q8_0.gguf', asset: model, quant: 'Q8_0' },
+      { relative: family + '-UD-Q8_K_XL.gguf', asset: model, quant: 'Q8_K_XL' },
+      { relative: 'mmproj-BF16.gguf', asset: qwenProjector, quant: 'BF16' },
+      { relative: 'mmproj-F16.gguf', asset: qwenProjector, quant: 'F16' },
+      { relative: 'mtp-' + family + '.gguf', asset: model, quant: 'Q8_0' },
+    ]
+    return files.map(({ relative, asset, quant }) => {
+      const name = relative.slice(relative.lastIndexOf('/') + 1)
+      const path = ['C:\\browser-test\\models', family + '-GGUF', ...relative.split('/')].join('\\')
+      return { ...asset, id: path, name, path, quant_type: quant }
+    })
+  })
+}
+
+const models = (() => {
+  if (BROWSER_SCENARIO === 'model-tree-layout') return modelTreeLayoutFixture()
+  if (BROWSER_SCENARIO === 'guide-assets-only') return [qwenProjector, { ...model, file_type: 'imatrix' }]
+  if (BROWSER_SCENARIO === 'guide-empty') return []
+  return IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
+})()
 
 const engine: EngineInfo = {
   id: ENGINE_ID,

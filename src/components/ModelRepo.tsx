@@ -194,15 +194,16 @@ const ModelRepo = () => {
     return paths
   }, [searchQuery, trees])
   const flatNodes = useMemo(() => {
-    const rows: { node: TreeNode; depth: number }[] = []
-    const visit = (node: TreeNode, depth: number) => {
-      if (searchQuery && !matchingPaths.has(node.path)) return
-      rows.push({ node, depth })
-      if (node.isDir && (!collapsed.has(node.path) || searchQuery)) {
-        node.orderedChildren?.forEach(child => visit(child, depth + 1))
-      }
+    // Each level records whether its branch continues to another visible sibling.
+    const rows: { node: TreeNode; branches: boolean[] }[] = []
+    const visible = (node: TreeNode) => !searchQuery || matchingPaths.has(node.path)
+    const visit = (node: TreeNode, branches: boolean[]) => {
+      rows.push({ node, branches })
+      if (!node.orderedChildren || (collapsed.has(node.path) && !searchQuery)) return
+      const children = searchQuery ? node.orderedChildren.filter(visible) : node.orderedChildren
+      children.forEach((child, index) => visit(child, [...branches, index < children.length - 1]))
     }
-    trees.forEach(tree => visit(tree, 0))
+    trees.filter(visible).forEach(tree => visit(tree, []))
     return rows
   }, [collapsed, matchingPaths, searchQuery, trees])
   const treeVirtualizer = useVirtualizer({
@@ -286,86 +287,73 @@ const ModelRepo = () => {
     }
   }
 
-  const renderNode = (node: TreeNode, depth: number): ReactNode => {
-    const nodeKey = node.path
-    const displayName = formatPathForDisplay(node.name)
-    const expanded = Boolean(searchQuery) || !collapsed.has(nodeKey)
-    const isMatch = !!searchQuery && matchNode(node, searchQuery)
-    const hasChildMatch = !!searchQuery && !isMatch && matchingPaths.has(node.path)
-    const isVisible = !searchQuery || isMatch || hasChildMatch
-
-    if (!isVisible) {
-      return null
-    }
-
-    if (node.isDir) {
-      const stats = node.stats
-      return (
-        <div key={nodeKey}>
-          <button
-            type="button"
-            aria-expanded={expanded}
-            onClick={() => {
-              const next = new Set(collapsed)
-              if (next.has(nodeKey)) {
-                next.delete(nodeKey)
-              } else {
-                next.add(nodeKey)
-              }
-              setCollapsed(next)
-            }}
-            style={{ paddingInlineStart: `min(${depth * 16 + 16}px, 30%)` }}
-            className={`console-list-row model-tree-row ${
-              !isMatch && hasChildMatch ? 'opacity-80' : ''
-            }`}
-          >
-            <ChevronRight aria-hidden="true" size={14} className={expanded ? 'shrink-0 rotate-90 text-ui-muted' : 'shrink-0 text-ui-muted'} />
-            <FolderTree className="h-4 w-4 shrink-0 text-ui-warn" />
-            <span className="min-w-0 flex-1 truncate text-sm text-ui-ink">
-              {highlightText(displayName, searchQuery)}
-            </span>
-            <span className="shrink-0 text-xs text-ui-muted">
-              {stats.models > 0 ? `${stats.models} ${t.modelRepo.typeModelShort}` : ''}
-              {stats.models > 0 && stats.mmproj > 0 ? ' · ' : ''}
-              {stats.mmproj > 0 ? `${stats.mmproj} ${t.modelRepo.mmprojCount}` : ''}
-              {(stats.models > 0 || stats.mmproj > 0) && stats.imatrix > 0 ? ' · ' : ''}
-              {stats.imatrix > 0 ? `${stats.imatrix} ${t.modelRepo.typeImatrix}` : ''}
-            </span>
-          </button>
-        </div>
-      )
-    }
-
-    const model = node.model!
-    const isSelected = Boolean(selectedPath && pathsEqual(selectedPath, model.path))
-    const kindLabel = model.file_type === 'mmproj'
+  const renderNode = (node: TreeNode, branches: boolean[]): ReactNode => {
+    const { model, stats } = node
+    const expanded = Boolean(searchQuery) || !collapsed.has(node.path)
+    const isSelected = model ? Boolean(selectedPath && pathsEqual(selectedPath, model.path)) : undefined
+    const mutedLabel = model?.is_shard || (node.isDir && searchQuery && !matchNode(node, searchQuery))
+    const kindLabel = model?.file_type === 'mmproj'
       ? t.modelRepo.typeMmprojShort
-      : model.file_type === 'imatrix'
+      : model?.file_type === 'imatrix'
         ? t.modelRepo.typeImatrix
         : t.modelRepo.typeModelShort
 
     return (
       <button
-        key={nodeKey}
-        onClick={() => setSelectedPath(model.path)}
+        type="button"
+        onClick={() => {
+          if (model) {
+            setSelectedPath(model.path)
+            return
+          }
+          setCollapsed(previous => {
+            const next = new Set(previous)
+            if (next.has(node.path)) next.delete(node.path)
+            else next.add(node.path)
+            return next
+          })
+        }}
+        aria-expanded={node.isDir ? expanded : undefined}
         data-selected={isSelected}
         aria-pressed={isSelected}
-        style={{ paddingInlineStart: `min(${depth * 16 + 38}px, 34%)` }}
         className="console-list-row model-tree-row"
       >
-        {model.file_type === 'mmproj' ? (
+        <span className="model-tree-prefix" aria-hidden="true">
+          <span className="model-tree-branches">
+            {branches.map((continues, level) => <span key={level} data-continues={continues} />)}
+          </span>
+          <span className="model-tree-disclosure">
+            {node.isDir && <ChevronRight size={14} className={expanded ? 'rotate-90' : undefined} />}
+          </span>
+        </span>
+        {node.isDir ? (
+          <FolderTree className="h-4 w-4 shrink-0 text-ui-warn" />
+        ) : model?.file_type === 'mmproj' ? (
           <Image className="h-4 w-4 shrink-0 text-fuchsia-700 dark:text-fuchsia-300" />
         ) : (
           <File className="h-4 w-4 shrink-0 text-ui-info" />
         )}
-        <span className={`min-w-0 flex-1 truncate text-sm ${model.is_shard ? 'text-ui-muted' : 'text-ui-ink'}`}>
-          {highlightText(model.name, searchQuery)}
+        <span
+          className={`min-w-0 flex-1 truncate text-sm ${mutedLabel ? 'text-ui-muted' : 'text-ui-ink'}`}
+          title={formatPathForDisplay(node.path)}
+        >
+          {highlightText(model?.name ?? formatPathForDisplay(node.name), searchQuery)}
         </span>
-        <span className="hidden shrink-0 text-xs text-ui-muted lg:inline">{model.quant_type ?? ''}</span>
-        <span className="hidden shrink-0 rounded-full border border-ui-line px-2 py-0.5 text-[11px] text-ui-body md:inline">
-          {kindLabel}
-        </span>
-        <span className="model-tree-size text-xs text-ui-muted">{formatSize(model.size)}</span>
+        {model ? <>
+          <span className="hidden w-[9ch] shrink-0 truncate text-right text-xs text-ui-muted lg:block" title={model.quant_type ?? undefined}>{model.quant_type}</span>
+          <span className="hidden w-[4.75rem] shrink-0 justify-end md:flex">
+            <span className="truncate rounded-full border border-ui-line px-2 py-0.5 text-[11px] text-ui-body">{kindLabel}</span>
+          </span>
+          <span className="model-tree-size text-xs text-ui-muted">{formatSize(model.size)}</span>
+        </> : (
+          <span className="shrink-0 text-xs text-ui-muted">
+            {[
+              stats.models > 0 && `${stats.models} ${t.modelRepo.typeModelShort}`,
+              stats.mmproj > 0 && `${stats.mmproj} ${t.modelRepo.mmprojCount}`,
+              stats.imatrix > 0 && `${stats.imatrix} ${t.modelRepo.typeImatrix}`,
+            ].filter(Boolean).join(' · ')}
+          </span>
+        )}
       </button>
     )
   }
@@ -517,7 +505,7 @@ const ModelRepo = () => {
                       className="absolute left-0 top-0 w-full"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      {renderNode(row.node, row.depth)}
+                      {renderNode(row.node, row.branches)}
                     </div>
                   )
                 })}
