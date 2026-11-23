@@ -100,9 +100,9 @@ Explore Advanced Features separately covers the dashboard, downloads, clusters, 
 
 ### 界面导航 / Navigation
 
-左侧导航包括系统总览、模型仓库、下载管理、引擎管理、实例管理、参数配置、集群管理、实例路由、性能监控、监控大屏、服务器日志、存储维护和使用说明。路由使用统计位于实例路由内；后台任务位于顶部任务中心。
+左侧导航包括系统总览、模型仓库、下载管理、引擎管理、实例管理、参数配置、集群管理、实例路由、性能监控、监控大屏、服务器日志、存储维护和使用说明。路由使用统计位于实例路由内；后台任务位于顶部任务中心。「下载管理」末尾显示正在传输的文件数，「实例管理」末尾显示运行实例数。计数为零时隐藏。
 
-The sidebar contains Dashboard, Model Repository, Downloads, Engines, Instances, Configuration, Cluster, Instance Routing, Performance, Monitoring Wall, Logs, Storage Maintenance, and Guide. Usage statistics is inside Instance Routing; background tasks is inside the header's task center.
+The sidebar contains Dashboard, Model Repository, Downloads, Engines, Instances, Configuration, Cluster, Instance Routing, Performance, Monitoring Wall, Logs, Storage Maintenance, and Guide. Usage statistics is inside Instance Routing; background tasks is inside the header's task center. Downloads and Instances display the number of transferring files and running instances respectively while the count is positive.
 
 按 `Ctrl+K` 打开任务中心，在“常用操作”中跳转页面或操作资源，在“后台任务”中查看管理任务的进度与结果。`Ctrl+Enter` 启动或停止一个实例，`Ctrl+S` 保存配置。
 
@@ -608,7 +608,15 @@ AMD signals prefer ADLX and NVIDIA uses NVML; the app falls back to system metri
 
 ### Prefill / Decode 双指标 / Dual Throughput
 
-性能监控用短柱显示 Prefill 输入速度，用折线显示 Decode 生成速度，孤立样本显示为点。两图纵轴独立，与请求活动带共用时间轴；并行处理和生成可以同时出现。大屏优先展示实例健康检查和当前生成吞吐，下方只保留 Decode 趋势及活动带。大屏折线取 15 秒窗口内连续活跃样本的均值，不跨越空闲、缺数或部分上报区间；顶部读数仍是最新观测。
+实时概览 → 解码速度 → 预填充速度提供三种口径。
+
+- **按请求**按完成时间画点。五分钟加权均速等于实际处理的输入 Token 总数除以这些请求的 Prefill 耗时之和。超过 300 笔时按秒合并，所有有效计时都计入。Gufo 的 HTTP 完成日志提供实际处理量和舍入速度，使用这些值反推的耗时标为 ≈。
+- **实例实时**使用同一引擎进程的相邻计数器。llama.cpp 按新增输入 Token 与新增预填充计算秒数的比值显示。支持实时计数的 Gufo 每个预填充块完成后增加输入计数，管理器约每秒读取一次，按实际采样间隔计算实例吞吐。窗口覆盖该实例的所有请求，缓存复用量单列。
+- **任务实时**使用 INFO 日志或槽位连续计数。短请求完成后可以在「按请求」中查看。断连、进程更换或计数器回退后重新建立基线。
+
+In Live overview, open Decode speed, then Prefill speed. **By request** plots completed engine work, weighted by processed tokens and phase duration across the five-minute window. Busy windows group more than 300 records by second. **Live instance** uses consecutive engine counters. llama.cpp uses the change in prefill compute seconds. Gufo counts new tokens per chunk and uses elapsed polling time across all requests, normally about one second. **Live tasks** uses consecutive log or slot observations. A ≈ marks a duration inferred from a rounded completion rate. A new process, broken sample chain or counter reset establishes a new baseline.
+
+「硬件与诊断」中的详细趋势用短柱显示 Prefill 输入速度，用折线显示 Decode 生成速度，孤立样本显示为点。两图纵轴独立，与请求活动带共用时间轴；并行处理和生成可以同时出现。大屏优先展示实例健康检查和当前生成吞吐，下方只保留 Decode 趋势及活动带。大屏折线取 15 秒窗口内连续活跃样本的均值，不跨越空闲、缺数或部分上报区间；顶部读数仍是最新观测。
 
 近期速度来自连续任务日志或 `/slots` 计数采样，目标窗口约 3 秒，页面注明实际观察窗口和来源；缓存复用 Token 不计入 Prefill。日志的阶段平均只显示在“阶段平均”或请求统计中，`/metrics` 平均值不补成实时曲线。短请求可能没有连续实时样本，完成后仍可查看 Prefill 平均速度和耗时。
 
@@ -616,7 +624,7 @@ AMD signals prefer ADLX and NVIDIA uses NVML; the app falls back to system metri
 
 无需新增模型参数。保留引擎 INFO 进度日志，或启用 slots API，即可提供观测来源。后台运行时持续采集；重新打开窗口使用后台快照，进程/会话重建则重新建立计数基线，历史日志重放不会产生实时速度。槽位查询有超时限制、不会重叠：活跃时约每秒一次，空闲时约每 5 秒一次；GPU 指标和 SQLite 采样保持原有周期。
 
-Performance plots Prefill as bars and Decode as line segments; isolated readings remain visible. Both share a time axis with a request activity strip that distinguishes concurrent phases, confirmed idle, and missing observations (hatching). Hollow points are reported subtotals, not complete rates. The wall emphasizes instance health and current Decode speed. Its trend averages consecutive active observations within 15-second windows, without bridging idle, missing or partial readings. Rates use recent log or slot observations; cached tokens and phase averages do not fill these charts.
+Detailed diagnostics plot task Prefill as bars and Decode as line segments; isolated readings remain visible. Both share a time axis with a request activity strip that distinguishes concurrent phases, confirmed idle, and missing observations (hatching). Hollow points are reported subtotals, not complete rates. The wall emphasizes instance health and current Decode speed. Its trend averages consecutive active observations within 15-second windows, without bridging idle, missing or partial readings. Rates use recent log or slot observations; cached tokens and phase averages do not fill these charts.
 
 Sampling, stale, unavailable, partial coverage, and observed zero are distinct states. Missing historical fields remain gaps. Background snapshots survive GUI reconnection; restarted processes establish fresh counter baselines, and replayed logs cannot manufacture live rates. Slot requests are bounded and serialized (about one second while active, five seconds while idle); GPU and SQLite sampling retain their existing cadence. No additional model parameter is required; INFO progress logs or the slots API provide observations.
 

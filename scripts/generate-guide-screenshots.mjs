@@ -306,6 +306,11 @@ try {
     }
     await page.waitForFunction(id => document.querySelector(`[data-nav-id="${id}"]`)?.getAttribute('aria-current') === 'page', shot.id)
     await page.locator(shot.target).waitFor({ state: 'visible' })
+    if (shot.id === 'perf') {
+      await page.locator('[data-reading="speed"]').click()
+      await page.getByRole('button', { name: '预填充速度', exact: true }).click()
+      await page.locator('[data-prefill-summary]').waitFor({ state: 'visible' })
+    }
     await waitForStableLayout(page)
     await assertCaptureState(page, shot.id)
     await page.screenshot({ path: path.join(outputDir, shot.file), animations: 'disabled' })

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, Component, ReactNode } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Activity, BarChart3, BookOpen, Cpu, Database, Download, HardDrive, Monitor, Network, Route, Server, Settings, Terminal } from 'lucide-react'
 import { version } from '../package.json'
 import { invokeApp as invoke } from './lib/ipc'
@@ -142,15 +143,22 @@ function AppInner() {
 
   const upCount = useMemo(() => instances.filter(i => i.status === 'running').length, [instances])
   const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
-  const activeDownloadCount = useAppStore(state => Object.values(state.downloadTasks)
-    .filter(task => task.status === 'active' || task.status === 'paused' || task.status === 'pausing').length)
+  const [transferringCount, downloadTaskCount] = useAppStore(useShallow(state => {
+    let transferring = 0
+    let paused = 0
+    for (const task of Object.values(state.downloadTasks)) {
+      if (task.status === 'active') transferring++
+      else if (task.status === 'paused' || task.status === 'pausing') paused++
+    }
+    return [transferring, transferring + paused] as const
+  }))
 
   const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard, icon: BarChart3 },
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
-    { id: 'downloads', name: t.nav.downloads, icon: Download },
+    { id: 'downloads', name: t.nav.downloads, icon: Download, badge: { value: transferringCount, label: t.downloadPage.active } },
     { id: 'engine', name: t.nav.engine, icon: Cpu },
-    { id: 'instances', name: t.nav.instances, icon: Server },
+    { id: 'instances', name: t.nav.instances, icon: Server, badge: { value: upCount, label: t.instance.running } },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'proxy', name: t.nav.proxy, icon: Route },
@@ -159,7 +167,7 @@ function AppInner() {
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'storage', name: t.nav.storage, icon: HardDrive },
     { id: 'guide', name: t.nav.guide, icon: BookOpen, separator: true },
-  ], [t])
+  ], [t, transferringCount, upCount])
 
   const { productIssues, commandActions } = useCommandCenterModel()
 
@@ -325,7 +333,7 @@ function AppInner() {
   const statusChips: ShellStatusChip[] = [
     { label: t.nav.up, value: upCount },
     { label: t.nav.down, value: downCount },
-    { label: t.appShell.downloadTasks, value: activeDownloadCount },
+    { label: t.appShell.downloadTasks, value: downloadTaskCount },
   ]
   const pageContext: Record<string, string> = {
     dashboard: shellCopy.pageDescriptions.dashboard,

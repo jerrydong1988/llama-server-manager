@@ -393,6 +393,7 @@ export interface TelemetrySampleSummary {
   gpu_name: string | null
   tokens_per_sec: number | null
   prompt_tokens_per_sec: number | null
+  prompt_seconds_total?: number | null
   prompt_tokens_total: number | null
   generated_tokens_total: number | null
   requests_total: number | null
@@ -539,7 +540,16 @@ export interface InferencePhaseTask {
   decode: InferenceRate
 }
 
+export interface InstancePrefillInterval {
+  ts: number
+  wallMs: number
+  tokens: number | null
+  rate: number | null
+  basis: 'engine_time' | 'wall_time'
+}
+
 export interface InferenceThroughput {
+  instancePrefill?: InstancePrefillInterval[]
   prefill: InferenceRate
   decode: InferenceRate
   tasks: InferencePhaseTask[]
@@ -614,7 +624,24 @@ export interface DiagnosticFinding {
   recommendation: string[]
 }
 
+export interface CompletedPrefill {
+  ts: number
+  request: string | null
+  tokens: number
+  elapsedMs: number
+  count: number
+  estimated: boolean
+}
+
+export interface RequestPrefillWindow {
+  asOf: number
+  points: CompletedPrefill[]
+  latest: CompletedPrefill | null
+  bucketed: boolean
+}
+
 export interface TelemetrySessionDetail {
+  request_prefill?: RequestPrefillWindow
   samples: TelemetrySampleSummary[]
   requests: InferenceRequestSummary[]
   vector_activity?: RecentVectorActivity[]

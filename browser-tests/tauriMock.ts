@@ -1,3 +1,4 @@
+import { fixtureIntervals, fixturePrefill, replayRequests } from './prefillFixtures'
 import { routerPerformanceMock, routerBudgetsMock } from './routerManagementMock'
 import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
@@ -921,6 +922,7 @@ const systemMetrics: SystemMetrics = {
   gpu_name: IS_DOCS_SCENARIO ? 'NVIDIA GeForce RTX 5080' : 'Browser Test GPU',
 }
 
+const prefillDemo = new URLSearchParams(location.search).get('prefill')
 const monitoringNow = Date.now()
 const monitoringSessionId = 'browser-monitoring-session'
 const stoppedMonitoringSessionId = 'browser-stopped-monitoring-session'
@@ -1046,7 +1048,8 @@ const monitoringSeries = Array.from({ length: 101 }, (_, index) => {
     throughput,
     outputTokensPerSecond: throughput,
     inference: {
-      prefill: phaseRate(800 + (index % 6) * 100, step === 1 || step === 13, 'log'),
+      instancePrefill: fixtureIntervals(ts, prefillDemo, index),
+      prefill: phaseRate(800 + (index % 6) * 100, prefillDemo !== 'replay' && (step === 1 || step === 13), 'log'),
       decode: phaseRate(throughput, step === 1 || (step >= 3 && step <= 9) || (step >= 15 && step <= 22), 'slots'),
       tasks: [],
     },
@@ -1455,7 +1458,11 @@ mockIPC((command, payload) => {
     case 'get_telemetry_session_detail':
       return {
         samples: HAS_MONITORING_DATA ? clone(monitoringSamples.filter(s => s.session_id === args.sessionId)) : [],
-        requests: HAS_MONITORING_DATA && args.sessionId === monitoringSessionId ? Array.from({length: 5}, (_,i) => ({
+        request_prefill: HAS_MONITORING_DATA && !vectorDemo && args.sessionId === monitoringSessionId
+          ? fixturePrefill(monitoringNow, prefillDemo) : {asOf:monitoringNow,points:[],latest:null,bucketed:false},
+        requests: prefillDemo === 'replay' && args.sessionId === monitoringSessionId
+          ? replayRequests(monitoringNow,monitoringSessionId)
+          : HAS_MONITORING_DATA && args.sessionId === monitoringSessionId ? Array.from({length: 5}, (_,i) => ({
           task_id: 784-i, completed_at: monitoringNow - (i+1)*18000, source:'log', prompt_tokens: 1800+i*64, generated_tokens: 192+i,
           prompt_tps: 510+i*5, generation_tps: 25+i/10, total_time_ms: 8200+i*150, http_status: 200,
         })) : [],

@@ -184,7 +184,7 @@ export function TrendChart({
   partialLabel,
 }: {
   values?: Array<number | null>
-  points?: Array<{ ts: number; value: number | null; state?: string; covered?: number; expected?: number }>
+  points?: Array<{ ts: number; value: number | null; state?: string; covered?: number; expected?: number; label?: string }>
   rangeStart?: number
   rangeEnd?: number
   emptyText: string
@@ -192,7 +192,7 @@ export function TrendChart({
   className?: string
   unit?: string
   valueFormatter?: (value: number) => string
-  kind?: 'bars' | 'line'
+  kind?: 'bars' | 'line' | 'points'
   sharedTimeAxis?: boolean
   partialLabel?: string
 }) {
@@ -220,7 +220,7 @@ export function TrendChart({
     )
   }
 
-  const height = sharedTimeAxis ? 132 : 260
+  const height = sharedTimeAxis ? 132 : kind === 'points' ? 176 : 260
   const chartPaddingTop = 18
   const chartPaddingBottom = points && !sharedTimeAxis ? 30 : 12
   const axis = buildChartAxis(safeValues)
@@ -229,6 +229,7 @@ export function TrendChart({
   const domainEnd = Math.max(rangeEnd ?? chartPoints[chartPoints.length - 1]?.ts ?? domainStart + 1, domainStart + 1)
   const segments: string[][] = []
   const bars = new Map<number, { x: number; y: number }>()
+  const dots: { x: number; y: number; label?: string }[] = []
   const partials: { x: number; y: number; detail: string }[] = []
   const yAt = (value: number) => height - chartPaddingBottom - (value / axis.max) * chartHeight
   let segment: string[] = []
@@ -241,6 +242,7 @@ export function TrendChart({
     const x = Math.max(0, Math.min(width, ((point.ts - domainStart) / (domainEnd - domainStart)) * width))
     const y = yAt(point.value)
     if (point.state === 'partial') partials.push({ x, y, detail: `${formatTimeLabel(point.ts)} · ${partialLabel ?? ''} ${point.covered}/${point.expected} · ${point.value} tok/s` })
+    else if (kind === 'points') dots.push({ x, y, label: point.label })
     else if (kind === 'bars') {
       const column = Math.floor(x / 4)
       if (y < (bars.get(column)?.y ?? Infinity)) bars.set(column, { x, y })
@@ -261,6 +263,11 @@ export function TrendChart({
             const y = yAt(tick)
             return <line key={tick} x1="0" y1={y} x2={width} y2={y} stroke="currentColor" className="text-ui-body" strokeWidth="1" strokeDasharray="5 7" />
           })}
+          {dots.map((point, index) => (
+            <circle key={index} cx={point.x} cy={point.y} r={4} fill="currentColor">
+              <title>{point.label}</title>
+            </circle>
+          ))}
           {[...bars].map(([column, point]) => <rect key={column} x={Math.min(width - 3.5, Math.max(0, point.x - 1.75))} y={point.y} width="3.5" height={Math.max(1, yAt(0) - point.y)} fill="currentColor" />)}
           {segments.map((line, index) => line.length > 1
             ? <polyline key={index} points={line.join(' ')} fill="none" stroke="currentColor" vectorEffect="non-scaling-stroke" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

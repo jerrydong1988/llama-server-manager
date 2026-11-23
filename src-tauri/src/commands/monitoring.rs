@@ -171,6 +171,7 @@ fn deduplicated_vector_rate_events<'a>(
 
 struct InstanceMonitoringState {
     inference: InferenceTracker,
+    prefill_counters: super::prefill::PrefillCounters,
     instance_id: String,
     session_id: Option<String>,
     workload: ModelWorkload,
@@ -188,6 +189,7 @@ impl InstanceMonitoringState {
     fn new(instance_id: &str, session_id: Option<&str>, workload: ModelWorkload, now: i64) -> Self {
         Self {
             inference: InferenceTracker::default(),
+            prefill_counters: Default::default(),
             instance_id: instance_id.to_string(),
             session_id: session_id.map(ToString::to_string),
             workload,
@@ -218,6 +220,7 @@ impl InstanceMonitoringState {
         self.registered_at = now.max(self.registered_at.saturating_add(1));
         self.system = None;
         self.inference = InferenceTracker::default();
+        self.prefill_counters = Default::default();
         self.llama = None;
         self.tasks = None;
         self.slots = None;
@@ -225,9 +228,19 @@ impl InstanceMonitoringState {
         self.timeline.clear();
     }
 
-    fn push_frame(&mut self, frame: MonitoringFrame) {
+    fn push_frame(&mut self, mut frame: MonitoringFrame) {
         if self.timeline.back().map(|item| item.ts) == Some(frame.ts) {
-            self.timeline.pop_back();
+            // A later observation in the same canonical second can already have
+            // aged a pulse out of its short bridge buffer. Preserve that prefix.
+            let old = self.timeline.pop_back().and_then(|f| f.inference);
+            if let (Some(mut old), Some(new)) = (old, frame.inference.as_mut()) {
+                if let Some(first) = new.instance_prefill.first() {
+                    old.instance_prefill
+                        .retain(|p| p.ts < first.ts && p.basis == first.basis);
+                    old.instance_prefill.append(&mut new.instance_prefill);
+                    new.instance_prefill = old.instance_prefill;
+                }
+            }
         }
         // Keep current task details for hydration, but not thousands of copies.
         if let Some(inference) = self
@@ -236,6 +249,17 @@ impl InstanceMonitoringState {
             .and_then(|frame| frame.inference.as_mut())
         {
             inference.tasks.clear();
+            // Consecutive bridge frames overlap so the slower GUI never skips
+            // a one-second Gufo pulse. Keep each interval once in retained history.
+            if let Some(next) = frame
+                .inference
+                .as_ref()
+                .and_then(|i| i.instance_prefill.first())
+            {
+                inference
+                    .instance_prefill
+                    .retain(|point| point.ts < next.ts);
+            }
         }
         self.timeline.push_back(frame);
         while self.timeline.len() > FRAME_RETENTION {
@@ -393,13 +417,15 @@ impl InstanceMonitoringState {
 
         MonitoringFrame {
             inference: (self.workload == ModelWorkload::Inference).then(|| {
-                self.inference.snapshot(
+                let mut inference = self.inference.snapshot(
                     now,
                     slots_fresh
                         .map(|item| item.value.busy)
                         .or_else(|| task_fresh.map(|item| item.value.active))
                         .or_else(|| llama_fresh.map(|item| item.value.requests_processing)),
-                )
+                );
+                inference.instance_prefill = self.prefill_counters.recent(now);
+                inference
             }),
             instance_id: self.instance_id.clone(),
             session_id: self.session_id.clone(),
@@ -530,6 +556,23 @@ fn with_inference_state(
     // Delayed observations may not reset a replacement process's session.
     if state.session_id.as_deref() == session_id && state.workload == ModelWorkload::Inference {
         update(&mut state);
+    }
+}
+
+pub(crate) fn observe_prefill_counters(
+    instance_id: &str,
+    session_id: Option<&str>,
+    kind: crate::gufo::EngineKind,
+    clock: std::time::Instant,
+    ts: i64,
+    counters: Option<super::prefill::CounterTotals>,
+) {
+    let Some(shared) = MONITORING.lock().unwrap().get(instance_id).cloned() else {
+        return;
+    };
+    let mut state = shared.lock().unwrap();
+    if state.session_id.as_deref() == session_id && state.workload == ModelWorkload::Inference {
+        state.prefill_counters.observe(kind, clock, ts, counters);
     }
 }
 
@@ -787,6 +830,7 @@ mod tests {
             decode_calls_total: Some(0),
             max_tokens_observed: 0,
             prompt_tokens_per_sec: input_tps,
+            prompt_seconds_total: None,
             requests_processing: processing,
             requests_deferred: 0,
             busy_slots_per_decode: Some(0.0),

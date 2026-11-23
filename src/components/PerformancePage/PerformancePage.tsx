@@ -87,6 +87,7 @@ export default function PerformancePage() {
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
   const [loadedSamples, setSamples] = useState<TelemetrySampleSummary[]>([])
   const [loadedRequests, setRequests] = useState<InferenceRequestSummary[]>([])
+  const [prefillWindow, setPrefillWindow] = useState<TelemetrySessionDetail['request_prefill']>()
   const [vectorRecords, setVectorRecords] = useState<TelemetrySessionDetail['vector_activity']>([])
   const [slotUsage, setSlotUsage] = useState<TelemetrySessionDetail['context_usage']>(null)
   const [loadedAnalysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
@@ -170,6 +171,7 @@ export default function PerformancePage() {
       if (selectedSessionIdRef.current !== sessionId) return
       setSamples(detail.samples)
       setRequests(detail.requests)
+      setPrefillWindow(detail.request_prefill)
       setVectorRecords(detail.vector_activity ?? [])
       setSlotUsage(detail.context_usage)
       setAnalysis(detail.analysis)
@@ -206,6 +208,7 @@ export default function PerformancePage() {
     setDetailSessionId('')
     setSamples([])
     setRequests([])
+    setPrefillWindow(undefined)
     setVectorRecords([])
     setSlotUsage(null)
     setAnalysis(null)
@@ -399,7 +402,7 @@ export default function PerformancePage() {
 
       {tab === 'live' && <LiveOverview key={selectedInstanceId} lang={lang} instance={selectedInstance} workload={performanceMode.workload}
         frame={liveTargetId ? currentFrame : null} frames={liveFrames} samples={samples} system={sysMetrics} history={systemMetricsHistory}
-        requests={requests} batches={detailReady ? vectorRecords ?? [] : []} context={detailReady ? slotUsage : null}/>}
+        requests={requests} prefillWindow={detailReady ? prefillWindow : undefined} batches={detailReady ? vectorRecords ?? [] : []} context={detailReady ? slotUsage : null}/>}
       {tab === 'history' && <SessionRecords copy={copy} sessions={sessions.filter(s => s.instance_id === selectedInstanceId)}
         selected={selectedSession} analysis={analysis} choose={s => { selectedSessionIdRef.current = s.id; setSelectedSessionId(s.id) }}>
         {selectedSession && <div className="console-surface monitor-detail"><h3>{formatTime(selectedSession.started_at)} · {selectedSession.model_name || selectedSession.instance_name}</h3>

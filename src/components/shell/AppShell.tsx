@@ -10,6 +10,7 @@ export type ShellNavigationItem = {
   id: string
   name: string
   icon: NavIcon
+  badge?: { value: number; label: string }
   separator?: boolean
 }
 
@@ -104,18 +105,24 @@ export function AppShell({
         <label className="shell-page-picker" title={navigationLabel}>
           <Menu size={17} aria-hidden="true" />
           <select aria-label={navigationLabel} value={activeId} onChange={event => onNavigate(event.target.value)}>
-            {navigation.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            {navigation.map(item => <option key={item.id} value={item.id}>
+              {item.name}{item.badge && item.badge.value > 0 ? ` · ${item.badge.label} ${item.badge.value}` : ''}
+            </option>)}
           </select>
         </label>
         <nav className="shell-navigation" aria-label={navigationLabel}>
           {navigation.map(item => {
             const Icon = item.icon
             const active = item.id === activeId
+            const badge = item.badge && item.badge.value > 0 ? item.badge : null
+            const description = badge ? `${badge.label} ${badge.value}` : undefined
             return <div key={item.id}>
               {item.separator && <div className="shell-divider" aria-hidden="true" />}
               <button ref={active ? activeNavRef : undefined} type="button" className="shell-nav-item" data-nav-id={item.id}
-                aria-current={active ? 'page' : undefined} aria-label={item.name} title={item.name} onClick={() => onNavigate(item.id)}>
+                aria-current={active ? 'page' : undefined} aria-label={item.name} aria-description={description}
+                title={description ? `${item.name} · ${description}` : item.name} onClick={() => onNavigate(item.id)}>
                 <Icon aria-hidden="true" /><span className="shell-nav-name">{item.name}</span>
+                {badge && <span className="shell-nav-count" aria-hidden="true" data-compact={badge.value > 99 ? '99+' : badge.value}>{badge.value}</span>}
               </button>
             </div>
           })}

@@ -90,6 +90,7 @@ pub struct TelemetrySampleSummary {
     pub gpu_name: Option<String>,
     pub tokens_per_sec: Option<f64>,
     pub prompt_tokens_per_sec: Option<f64>,
+    pub prompt_seconds_total: Option<f64>,
     pub prompt_tokens_total: Option<i64>,
     pub generated_tokens_total: Option<i64>,
     pub requests_total: Option<i64>,
@@ -220,6 +221,7 @@ pub struct TelemetrySessionDetail {
     pub samples: Vec<TelemetrySampleSummary>,
     pub requests: Vec<InferenceRequestSummary>,
     pub vector_activity: Vec<RecentVectorActivity>,
+    pub request_prefill: super::prefill::RequestPrefillWindow,
     pub context_usage: Option<SlotContextUsage>,
     pub analysis: TelemetrySessionAnalysis,
     pub diagnostics: Vec<DiagnosticFinding>,
@@ -288,6 +290,7 @@ pub struct LlamaMetricSample {
     pub decode_calls_total: Option<u64>,
     pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
+    pub prompt_seconds_total: Option<f64>,
     pub requests_processing: u64,
     pub requests_deferred: u64,
     pub busy_slots_per_decode: Option<f64>,
@@ -307,6 +310,7 @@ enum TelemetryWrite {
         completed_at: i64,
         record: InferenceRequestRecord,
     },
+    GufoPrefill { session_id: String, timestamp: i64, record: super::prefill::GufoCompletion },
     Proxy {
         session_id: String,
         completed_at: i64,
@@ -715,12 +719,14 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
         }
     }
 
+    super::prefill::init_schema(conn).map_err(|e| e.to_string())?;
     let sample_columns = table_columns(conn, "metric_samples")?;
     for (name, definition) in [
         ("decode_calls_total", "INTEGER"),
         ("max_tokens_observed", "INTEGER"),
         ("gpu_name", "TEXT"),
         ("inference_throughput", "TEXT"),
+        ("prompt_seconds_total", "REAL"),
     ] {
         if !sample_columns.iter().any(|column| column == name) {
             conn.execute(
@@ -1086,6 +1092,7 @@ fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<()
                 params![inference]).map_err(|e| format!("failed to save inference throughput: {e}"))?;
             Ok(())
         }
+        TelemetryWrite::GufoPrefill { session_id, timestamp, record } => super::prefill::insert_gufo(conn, session_id, *timestamp, record).map_err(|e| e.to_string()),
         TelemetryWrite::Inference {
             session_id,
             completed_at,
@@ -1168,9 +1175,9 @@ fn insert_metric_sample(
              system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
              prompt_tokens_total, generated_tokens_total, requests_total, decode_calls_total,
              max_tokens_observed, prompt_tokens_per_sec, requests_processing, requests_deferred,
-             busy_slots_per_decode)
+             busy_slots_per_decode, prompt_seconds_total)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         params![
             session_id,
             instance_id,
@@ -1195,10 +1202,22 @@ fn insert_metric_sample(
             llama.map(|m| m.requests_processing as i64),
             llama.map(|m| m.requests_deferred as i64),
             llama.and_then(|m| m.busy_slots_per_decode),
+            llama.and_then(|m| m.prompt_seconds_total),
         ],
     )
     .map_err(|e| format!("无法写入遥测采样: {}", e))?;
     Ok(())
+}
+
+pub(super) fn record_gufo_prefill(
+    session_id: &str,
+    record: super::prefill::GufoCompletion,
+) -> Result<(), String> {
+    enqueue_telemetry(TelemetryWrite::GufoPrefill {
+        session_id: session_id.into(),
+        timestamp: now_ms(),
+        record,
+    })
 }
 
 pub fn record_inference_request(
@@ -1613,12 +1632,16 @@ pub async fn get_telemetry_session_detail(
         } else {
             Vec::new()
         };
+        let request_prefill = if analysis.vector_analysis.is_none() {
+            super::prefill::request_window(&conn, &session_id, now_ms()).map_err(|e| e.to_string())?
+        } else { Default::default() };
         let context_usage = latest_slot_context(&conn, &session_id).map_err(|e| e.to_string())?;
         let diagnostics = query_session_diagnostics_with_analysis(&conn, &session_id, &analysis)?;
         Ok(TelemetrySessionDetail {
             samples,
             requests,
             vector_activity,
+            request_prefill,
             context_usage,
             analysis,
             diagnostics,
@@ -1744,6 +1767,7 @@ fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
         ("metric_samples", "ts"),
         ("slot_snapshots", "ts"),
         ("inference_requests", "completed_at"),
+        ("gufo_prefill_requests", "completed_at"),
         ("vector_activity_events", "completed_at"),
     ] {
         affected += tx
@@ -3138,7 +3162,7 @@ fn latest_samples(conn: &Connection, limit: u32) -> Result<Vec<TelemetrySampleSu
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
-                    busy_slots_per_decode, inference_throughput
+                    busy_slots_per_decode, inference_throughput, prompt_seconds_total
              FROM metric_samples
              ORDER BY ts DESC
              LIMIT ?1",
@@ -3165,7 +3189,7 @@ fn samples_for_session(
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
-                    busy_slots_per_decode, inference_throughput
+                    busy_slots_per_decode, inference_throughput, prompt_seconds_total
              FROM metric_samples
              WHERE session_id = ?1
              ORDER BY ts DESC
@@ -3203,6 +3227,7 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
         gpu_name: row.get(12)?,
         tokens_per_sec: row.get(13)?,
         prompt_tokens_per_sec: row.get(14)?,
+        prompt_seconds_total: row.get(24)?,
         prompt_tokens_total: row.get(15)?,
         generated_tokens_total: row.get(16)?,
         requests_total: row.get(17)?,
@@ -3537,6 +3562,7 @@ mod tests {
             decode_calls_total: Some(17),
             max_tokens_observed: 4096,
             prompt_tokens_per_sec: 7.0,
+            prompt_seconds_total: Some(1.25),
             requests_processing: 1,
             requests_deferred: 0,
             busy_slots_per_decode: Some(1.0),
@@ -3562,6 +3588,8 @@ mod tests {
             .unwrap();
         assert_eq!(values, (None, 17, 4096));
         let sample = samples_for_session(&conn, "session-metrics", 1).unwrap();
+        assert_eq!(sample[0].prompt_seconds_total, Some(1.25));
+        assert_eq!(latest_samples(&conn, 1).unwrap()[0].prompt_seconds_total, Some(1.25));
         assert!(
             sample[0].inference.is_none(),
             "legacy gauge samples are not live phase samples"
@@ -3634,6 +3662,7 @@ mod tests {
             decode_calls_total: Some(17),
             max_tokens_observed: 4096,
             prompt_tokens_per_sec: 140.0,
+            prompt_seconds_total: None,
             requests_processing: 0,
             requests_deferred: 0,
             busy_slots_per_decode: Some(0.0),
@@ -3662,6 +3691,7 @@ mod tests {
         let active_llama = LlamaMetricSample {
             tokens_per_sec: 45.0,
             prompt_tokens_per_sec: 90.0,
+            prompt_seconds_total: None,
             requests_processing: 1,
             busy_slots_per_decode: Some(1.0),
             ..llama

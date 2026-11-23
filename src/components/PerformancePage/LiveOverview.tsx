@@ -23,6 +23,7 @@ import {
   ReadingTile,
   type Reading,
 } from '../monitoring/MonitorReadings'
+import { completedPrefillRate, PrefillTrends } from './PrefillTrends'
 import { RequestRecords } from '../monitoring/MonitorRecords'
 import { formatTime } from '../monitoring/monitoringFormat'
 
@@ -36,6 +37,7 @@ export function LiveOverview({
   system,
   history,
   requests,
+  prefillWindow,
   batches,
   context,
 }: {
@@ -47,6 +49,7 @@ export function LiveOverview({
   samples: TelemetrySampleSummary[]
   system: SystemMetrics | null
   history: SystemMetricsSample[]
+  prefillWindow?: TelemetrySessionDetail['request_prefill']
   requests: InferenceRequestSummary[]
   batches: RecentVectorActivity[]
   context?: TelemetrySessionDetail['context_usage']
@@ -75,9 +78,10 @@ export function LiveOverview({
                 : copy.generating
           : copy.idle
   const decode = currentInferenceRate(recent ?? undefined, 'decode', now)
-  const prefill = currentInferenceRate(recent ?? undefined, 'prefill', now)
   const hardware = hostReadings(system, history, now, copy)
   const latest = requests[0]
+  const lastTimed = requests.find((r) => r.source === 'log' && (r.prompt_tps ?? 0) > 0)
+  const lastPrefill = completedPrefillRate(prefillWindow?.latest) ?? lastTimed?.prompt_tps
   const speed: Reading = {
     id: 'speed',
     label: vector ? (workload === 'reranker' ? copy.documents : copy.vector) : copy.speed,
@@ -88,22 +92,15 @@ export function LiveOverview({
       : inferenceTrend(frames, samples, 'decode', now - FIVE_MINUTES),
     detail: vector
       ? title
-      : available?.state === 'idle' && latest?.generation_tps != null
-        ? copy.lastRequest + ' ' + numberText(latest.generation_tps) + ' tok/s'
-        : latest?.prompt_tps != null
-          ? copy.prefill + ' ' + numberText(latest.prompt_tps) + ' tok/s'
+      : lastPrefill != null
+        ? copy.lastPrefill + ' ' + numberText(lastPrefill) + ' tok/s'
+        : available?.state === 'idle' && latest?.generation_tps != null
+          ? copy.lastRequest + ' ' + numberText(latest.generation_tps) + ' tok/s'
           : inferenceRateDetail(decode, lang),
   }
   const readings = [speed, hardware.memory, hardware.temperature, hardware.power]
-  const selected =
-    detail === 'speed' && !vector && phase === 'prefill'
-      ? {
-          ...speed,
-          label: copy.prefill,
-          points: inferenceTrend(frames, samples, 'prefill', now - FIVE_MINUTES),
-          detail: inferenceRateDetail(prefill, lang),
-        }
-      : readings.find((m) => m.id === detail)
+  const showPrefill = detail === 'speed' && !vector && phase === 'prefill'
+  const selected = readings.find((m) => m.id === detail)
   const usage = recent && context && now - context.ts <= 15_000 && context.capacity > 0 ? context : null
   const capacity =
     !instance?.config.ctx_size_auto && instance?.config.ctx_size ? instance.config.ctx_size : null
@@ -167,7 +164,7 @@ export function LiveOverview({
         <section className="console-surface monitor-detail">
           <header>
             <h3>
-              {selected.label} · {copy.trend}
+              {showPrefill ? copy.prefill : selected.label} · {copy.trend}
             </h3>
             <div className="monitor-actions">
               {detail === 'speed' &&
@@ -193,8 +190,22 @@ export function LiveOverview({
               </button>
             </div>
           </header>
-          <p className="monitor-note">{selected.detail}</p>
-          <MonitorTrace reading={selected} end={now} empty={copy.noData} />
+          {showPrefill ? (
+            <PrefillTrends
+              lang={lang}
+              now={now}
+              frame={recent}
+              frames={frames}
+              samples={samples}
+              window={prefillWindow}
+              gufo={instance?.config.engine_kind === 'gufo'}
+            />
+          ) : (
+            <>
+              <p className="monitor-note">{selected.detail}</p>
+              <MonitorTrace reading={selected} end={now} empty={copy.noData} />
+            </>
+          )}
         </section>
       )}
       <RequestRecords copy={copy} requests={requests} batches={batches} workload={workload} />

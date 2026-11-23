@@ -3268,6 +3268,7 @@ async fn start_server_impl(
     let app_tail = app.clone();
     let id_tail = instance_id.clone();
     let log_path_tail = log_path.clone();
+    let tail_engine = config.engine_kind;
     let telemetry_session_tail = telemetry_session_id.clone();
     let tail_process = Arc::clone(&launched_process);
     let monitor_process = Arc::clone(&launched_process);
@@ -3277,7 +3278,7 @@ async fn start_server_impl(
             &id_tail,
             tail_process,
             telemetry_session_tail,
-            workload,
+            PerfParser::new(workload, tail_engine),
             Some(log_writer),
             app_tail,
         );
@@ -3439,6 +3440,9 @@ struct MonitorLoopConfig {
 }
 
 pub(crate) struct InstanceMonitorSample {
+    pub prefill_counters: Option<super::prefill::CounterTotals>,
+    pub metrics_clock: std::time::Instant,
+    pub metrics_ts: i64,
     pub system: SystemMetrics,
     pub llama: Option<crate::commands::telemetry::LlamaMetricSample>,
     pub slots: Option<Vec<crate::commands::telemetry::SlotSnapshotRecord>>,
@@ -3466,6 +3470,48 @@ pub(crate) fn probe_instance_readiness(
         || probe_status_is_success(&probe("/v1/models").map_err(|error| error.to_string()))
 }
 
+fn fetch_engine_metrics(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    api_key: &str,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    let request = client.get(format!("{endpoint}/metrics")).timeout(timeout);
+    let request = if api_key.is_empty() {
+        request
+    } else {
+        request.bearer_auth(api_key)
+    };
+    request.send().ok()?.error_for_status().ok()?.text().ok()
+}
+
+fn metric_value(body: &str, key: &str) -> Option<f64> {
+    let line = body
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some(key))?;
+    line.split_whitespace()
+        .nth(1)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn prefill_counters(body: &str) -> Option<super::prefill::CounterTotals> {
+    // Older Gufo builds lack queue counters and include cached input in totals.
+    // Only the modern live API supplies the comparable per-poll token deltas.
+    let counter = |key| {
+        let n = metric_value(body, key)?;
+        (n.fract() == 0.0 && n < (1u64 << 53) as f64).then_some(n as u64)
+    };
+    counter("llamacpp:requests_processing")?;
+    counter("llamacpp:requests_deferred")?;
+    Some(super::prefill::CounterTotals {
+        prompt: counter("llamacpp:prompt_tokens_total")?,
+        generated: counter("llamacpp:tokens_predicted_total")?,
+        seconds: metric_value(body, "llamacpp:prompt_seconds_total"),
+    })
+}
+
 /// Keep inference phase sampling independent from the five-second GPU/SQLite
 /// cycle. One bounded request at a time; never publish for a replaced process.
 #[allow(clippy::too_many_arguments)]
@@ -3476,6 +3522,7 @@ pub(crate) fn wait_with_inference_sampling(
     instance_id: &str,
     session_id: Option<&str>,
     workload: ModelWorkload,
+    engine_kind: crate::gufo::EngineKind,
     iteration_started: std::time::Instant,
     owns_process: impl Fn() -> bool,
 ) {
@@ -3484,10 +3531,43 @@ pub(crate) fn wait_with_inference_sampling(
         std::thread::sleep(interval.saturating_sub(iteration_started.elapsed()));
         return;
     }
+    let gufo = engine_kind == crate::gufo::EngineKind::Gufo;
+    let mut first = true;
     loop {
+        let poll_start = std::time::Instant::now();
         if !owns_process() {
             return;
         }
+        let mut poll_slots = true;
+        // The enclosing five-second system poll already supplied the first reading.
+        if gufo && !first {
+            let body = fetch_engine_metrics(
+                client,
+                endpoint_base,
+                api_key,
+                std::time::Duration::from_millis(750),
+            );
+            let clock = std::time::Instant::now();
+            let ts = crate::commands::telemetry::current_time_ms();
+            if !owns_process() {
+                return;
+            }
+            // Idle Gufo still reports cumulative work, while expensive slot
+            // payloads are only needed during activity or the normal slow poll.
+            poll_slots = body
+                .as_deref()
+                .and_then(|b| metric_value(b, "llamacpp:requests_processing"))
+                .is_none_or(|n| n > 0.0);
+            crate::commands::monitoring::observe_prefill_counters(
+                instance_id,
+                session_id,
+                engine_kind,
+                clock,
+                ts,
+                body.as_deref().and_then(prefill_counters),
+            );
+        }
+        first = false;
         let sampled_at = crate::commands::telemetry::current_time_ms();
         let request = client
             .get(format!("{endpoint_base}/slots"))
@@ -3497,9 +3577,12 @@ pub(crate) fn wait_with_inference_sampling(
         } else {
             request.bearer_auth(api_key)
         };
-        let slots = request
-            .send()
-            .ok()
+        let response = if poll_slots {
+            request.send().ok()
+        } else {
+            None
+        };
+        let slots = response
             .filter(|response| response.status().is_success())
             .and_then(|response| response.json::<Vec<serde_json::Value>>().ok());
         let mut active = false;
@@ -3540,8 +3623,8 @@ pub(crate) fn wait_with_inference_sampling(
         if remaining.is_zero() {
             break;
         }
-        std::thread::sleep(if active {
-            remaining.min(std::time::Duration::from_secs(1))
+        std::thread::sleep(if active || gufo {
+            remaining.min(std::time::Duration::from_secs(1).saturating_sub(poll_start.elapsed()))
         } else {
             remaining
         });
@@ -3593,12 +3676,11 @@ pub(crate) fn collect_instance_monitor_sample(
         gpu_name: gpu_system.gpu_name,
     };
 
-    let llama = authenticated_get(&format!("{endpoint_base}/metrics"))
-        .send()
-        .ok()
-        .filter(|response| response.status().is_success())
-        .and_then(|response| response.text().ok())
-        .and_then(|body| parse_llama_metric_sample(&body).ok());
+    let body = fetch_engine_metrics(client, endpoint_base, api_key, std::time::Duration::from_secs(2));
+    let metrics_clock = std::time::Instant::now();
+    let metrics_ts = crate::commands::telemetry::current_time_ms();
+    let counters = body.as_deref().and_then(prefill_counters);
+    let llama = body.as_deref().and_then(|body| parse_llama_metric_sample(body).ok());
     let slots = authenticated_get(&format!("{endpoint_base}/slots"))
         .send()
         .ok()
@@ -3639,6 +3721,7 @@ pub(crate) fn collect_instance_monitor_sample(
         });
 
     InstanceMonitorSample {
+        prefill_counters: counters, metrics_clock, metrics_ts,
         system,
         llama,
         slots,
@@ -3813,18 +3896,22 @@ fn monitor_loop(
             }
         }
 
+        crate::commands::monitoring::update_metrics(
+            instance_id,
+            telemetry_session_id.as_deref(),
+            workload,
+            sample.system.clone(),
+            sample.llama.clone(),
+        );
+        crate::commands::monitoring::observe_prefill_counters(
+            instance_id, telemetry_session_id.as_deref(), launch_config.engine_kind,
+            sample.metrics_clock, sample.metrics_ts, sample.prefill_counters,
+        );
         let _ = crate::commands::telemetry::record_metric_sample(
             telemetry_session_id.as_deref(),
             instance_id,
             &sample.system,
             sample.llama.as_ref(),
-        );
-        crate::commands::monitoring::update_metrics(
-            instance_id,
-            telemetry_session_id.as_deref(),
-            workload,
-            sample.system,
-            sample.llama,
         );
 
         if let Some(slots) = sample.slots {
@@ -3849,6 +3936,7 @@ fn monitor_loop(
             instance_id,
             telemetry_session_id.as_deref(),
             workload,
+            launch_config.engine_kind,
             iteration_started,
             is_my_instance,
         );
@@ -4942,13 +5030,8 @@ pub async fn get_metrics(
 fn parse_llama_metric_sample(
     body: &str,
 ) -> Result<crate::commands::telemetry::LlamaMetricSample, String> {
-    let extract = |key: &str| -> Result<f64, String> {
-        body.lines()
-            .find(|line| line.split_whitespace().next() == Some(key))
-            .and_then(|line| line.split_whitespace().last()?.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .ok_or_else(|| format!("Missing or invalid llama metric: {key}"))
-    };
+    let extract = |key: &str| metric_value(body, key)
+        .ok_or_else(|| format!("Missing or invalid llama metric: {key}"));
     Ok(crate::commands::telemetry::LlamaMetricSample {
         tokens_per_sec: extract("llamacpp:predicted_tokens_seconds")?,
         prompt_tokens: extract("llamacpp:prompt_tokens_total")? as u64,
@@ -4956,6 +5039,7 @@ fn parse_llama_metric_sample(
         decode_calls_total: extract("llamacpp:n_decode_total").ok().map(|n| n as u64),
         max_tokens_observed: extract("llamacpp:n_tokens_max")? as u64,
         prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds")?,
+        prompt_seconds_total: metric_value(body, "llamacpp:prompt_seconds_total"),
         requests_processing: extract("llamacpp:requests_processing")? as u64,
         requests_deferred: extract("llamacpp:requests_deferred")? as u64,
         busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode").ok(),
@@ -5001,7 +5085,7 @@ pub fn reconnect_running_instance(
     config_dir: &std::path::Path,
     app: tauri::AppHandle,
 ) {
-    reconnect_instance_logs(instance_id, RestoredLogOwner::Desktop(Arc::clone(&process)), config_dir, app.clone());
+    reconnect_instance_logs(instance_id, RestoredLogOwner::Desktop(Arc::clone(&process), config.engine_kind), config_dir, app.clone());
 
     // Metrics recovery: restart monitor_loop and keep recording with the new session.
     {
@@ -5056,7 +5140,7 @@ pub fn reconnect_runtime_instance_logs(
 }
 
 enum RestoredLogOwner {
-    Desktop(Arc<InstanceProcess>),
+    Desktop(Arc<InstanceProcess>, crate::gufo::EngineKind),
     Runtime(Arc<InstanceProcess>),
 }
 
@@ -5072,12 +5156,12 @@ fn reconnect_instance_logs(
     }
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
     let id_log = instance_id.to_string();
-    let process = match owner {
+    let (process, engine) = match owner {
         RestoredLogOwner::Runtime(process) => {
             std::thread::spawn(move || tail_log_file_read_only(&log_path, &id_log, process, app));
             return;
         }
-        RestoredLogOwner::Desktop(process) => process,
+        RestoredLogOwner::Desktop(process, engine) => (process, engine),
     };
     let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
         .ok()
@@ -5085,7 +5169,7 @@ fn reconnect_instance_logs(
     let workload = crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
         .unwrap_or(ModelWorkload::Inference);
     std::thread::spawn(move || {
-        tail_log_file(&log_path, &id_log, process, telemetry_session_id, workload, None, app);
+        tail_log_file(&log_path, &id_log, process, telemetry_session_id, PerfParser::new(workload, engine), None, app);
     });
 }
 
@@ -5136,6 +5220,7 @@ struct VectorTaskEvent {
 
 /// Precompiled regex collection to avoid recompiling for every line.
 struct PerfParser {
+    engine: crate::gufo::EngineKind,
     workload: ModelWorkload,
     re_ids: regex_lite::Regex,
     re_launch: regex_lite::Regex,
@@ -5152,9 +5237,9 @@ struct PerfParser {
 }
 
 impl PerfParser {
-    fn new(workload: ModelWorkload) -> Self {
+    fn new(workload: ModelWorkload, engine: crate::gufo::EngineKind) -> Self {
         PerfParser {
-            workload,
+            engine, workload,
             re_ids: regex_lite::Regex::new(r"id\s+(\d+)\s*\|\s*task\s+(\d+)").unwrap(),
             re_launch: regex_lite::Regex::new(r"launch_slot_.*processing\s+task").unwrap(),
             re_release: regex_lite::Regex::new(r"slot\s+release.*id\s+\d+\s*\|\s*task\s+\d+\s*\|\s*stop").unwrap(),
@@ -5430,6 +5515,14 @@ fn observe_inference_line(
     if parser.workload != ModelWorkload::Inference {
         return;
     }
+    if parser.engine == crate::gufo::EngineKind::Gufo {
+        if let (Some(session), Some(record)) = (session_id, crate::commands::prefill::GufoCompletion::parse(line)) {
+            if let Err(error) = crate::commands::telemetry::record_gufo_prefill(session, record) {
+                eprintln!("Failed to record Gufo Prefill: {error}");
+            }
+        }
+        return;
+    }
     let Some((slot, task)) = parser.extract_ids(line) else {
         return;
     };
@@ -5487,12 +5580,13 @@ impl RuntimePerfTracker {
         instance_id: String,
         telemetry_session_id: Option<String>,
         workload: ModelWorkload,
+        engine: crate::gufo::EngineKind,
     ) -> Self {
         Self {
             instance_id,
             telemetry_session_id,
             workload,
-            parser: PerfParser::new(workload),
+            parser: PerfParser::new(workload, engine),
             tasks: HashMap::new(),
             last_completed: None,
             last_recorded_task_id: None,
@@ -5756,12 +5850,12 @@ fn tail_log_file(
     instance_id: &str,
     process: Arc<InstanceProcess>,
     telemetry_session_id: Option<String>,
-    workload: ModelWorkload,
+    parser: PerfParser,
     log_writer: Option<Arc<CappedLogWriter>>,
     app: tauri::AppHandle,
 ) {
     let expected_pid = process.pid;
-    let parser = PerfParser::new(workload);
+    let workload = parser.workload;
     let mut tasks: HashMap<u32, TaskPerfState> = HashMap::new();
     let mut last_completed: Option<TaskPerfState> = None;
     let mut last_recorded_task_id: Option<u32> = None;
@@ -5953,6 +6047,7 @@ fn tail_log_file(
                 let text = String::from_utf8_lossy(&pending).trim().to_string();
                 if !text.is_empty() {
                     emit_log_batches(&app, instance_id, &[format!("{text}\n")]);
+                    observe_inference_line(&parser, &text, instance_id, telemetry_session_id.as_deref());
                     if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
                         record_completed(&last_completed, &mut last_recorded_task_id);
                         tasks.retain(|_, task| !task.completed);
@@ -5996,7 +6091,7 @@ mod perf_parser_tests {
     }
 
     fn collect_vector_events(workload: ModelWorkload, lines: &[&str]) -> Vec<VectorTaskEvent> {
-        let parser = PerfParser::new(workload);
+        let parser = PerfParser::new(workload, crate::gufo::EngineKind::LlamaCpp);
         let mut tasks = HashMap::new();
         let mut last_completed = None;
         let mut last_event_id = None;
@@ -7280,6 +7375,91 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn gufo_prefill_poll_observes_inflight_chunks_before_completion() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{Duration, Instant};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let count = Arc::new(AtomicU64::new(0));
+        let observed = Arc::clone(&count);
+        let accepted = std::thread::spawn(move || {
+            let start = Instant::now();
+            while observed.load(Ordering::SeqCst) < 3 && start.elapsed() < Duration::from_secs(8) {
+                let Ok((mut socket, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(3));
+                    continue;
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut bytes = [0u8; 4096];
+                let n = socket.read(&mut bytes).unwrap();
+                let header = String::from_utf8_lossy(&bytes[..n]);
+                let body = if header.starts_with("GET /metrics ") {
+                    let poll = observed.fetch_add(1, Ordering::SeqCst) + 1;
+                    format!("llamacpp:requests_processing 1\nllamacpp:requests_deferred 0\nllamacpp:prompt_tokens_total {}\nllamacpp:tokens_predicted_total 0\nllamacpp:prompt_seconds_total 0\n",poll*1024)
+                } else {
+                    "[]".to_string()
+                };
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let id = "gufo-live-prefill-test";
+        let session = Some("gufo-live-prefill-session");
+        let start = Instant::now();
+        let ts = crate::commands::telemetry::current_time_ms();
+        crate::commands::monitoring::update_tasks(id, session, ModelWorkload::Inference, 0, 0.0);
+        crate::commands::monitoring::observe_prefill_counters(
+            id,
+            session,
+            crate::gufo::EngineKind::Gufo,
+            start,
+            ts,
+            Some(crate::commands::prefill::CounterTotals {
+                prompt: 0,
+                generated: 0,
+                seconds: Some(0.0),
+            }),
+        );
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap();
+        wait_with_inference_sampling(
+            &client,
+            &url,
+            "",
+            id,
+            session,
+            ModelWorkload::Inference,
+            crate::gufo::EngineKind::Gufo,
+            start,
+            || count.load(Ordering::SeqCst) < 3,
+        );
+        accepted.join().unwrap();
+        let frame = crate::commands::monitoring::capture_frame(id).unwrap();
+        crate::commands::monitoring::remove_instance(id);
+        let intervals = frame.inference.unwrap().instance_prefill;
+        let live: Vec<_> = intervals.iter().filter(|p| p.rate.is_some()).collect();
+        assert_eq!(live.len(), 2);
+        assert!(live
+            .iter()
+            .all(|p| p.tokens == Some(1024)
+                && p.basis == crate::commands::prefill::CounterBasis::WallTime));
+        assert_eq!(
+            prefill_counters("llamacpp:prompt_tokens_total 1024\nllamacpp:prompt_seconds_total 2"),
+            None
+        );
+    }
+
+    #[test]
     fn start_slot_rejects_duplicate_reservations_and_recovers_after_release() {
         let running = HashMap::new();
         let mut starting = std::collections::HashSet::new();
@@ -7372,7 +7552,7 @@ mod perf_parser_tests {
 
     #[test]
     fn parses_llama_cpp_print_timing_token_stats() {
-        let parser = PerfParser::new(ModelWorkload::Inference);
+        let parser = PerfParser::new(ModelWorkload::Inference, crate::gufo::EngineKind::LlamaCpp);
         let mut tasks = HashMap::new();
         let mut last_completed = None;
 
@@ -7433,7 +7613,7 @@ mod perf_parser_tests {
 
     #[test]
     fn older_timing_lines_without_rolling_rate_remain_supported() {
-        let parser = PerfParser::new(ModelWorkload::Inference);
+        let parser = PerfParser::new(ModelWorkload::Inference, crate::gufo::EngineKind::LlamaCpp);
         let mut tasks = HashMap::new();
         let mut last_completed = None;
         assert!(parse_perf_line(
@@ -7458,7 +7638,7 @@ mod perf_parser_tests {
     fn current_generation_progress_reaches_live_monitoring() {
         let instance_id = "perf-parser-current-generation".to_string();
         let mut tracker =
-            RuntimePerfTracker::new(instance_id.clone(), None, ModelWorkload::Inference);
+            RuntimePerfTracker::new(instance_id.clone(), None, ModelWorkload::Inference, crate::gufo::EngineKind::LlamaCpp);
 
         tracker.process_line(
             "31.26.617.728 I slot launch_slot_: id  1 | task 4418 | processing task, is_child = 0",
@@ -7505,7 +7685,7 @@ mod perf_parser_tests {
     fn restored_prompt_logs_observe_deltas_without_an_old_launch_line() {
         let id = "restored-inference-prompt-parser";
         let mut tracker =
-            RuntimePerfTracker::new(id.into(), Some("restored".into()), ModelWorkload::Inference);
+            RuntimePerfTracker::new(id.into(), Some("restored".into()), ModelWorkload::Inference, crate::gufo::EngineKind::LlamaCpp);
         tracker.process_line("4 I slot print_timing: id  0 | task 22 | prompt processing, n_tokens =   2048, progress = 0.50, t =   4.00 s / 512.00 tokens per second");
         let first = crate::commands::monitoring::capture_frame(id)
             .unwrap()
@@ -7527,7 +7707,7 @@ mod perf_parser_tests {
     fn current_prompt_progress_reaches_vector_monitoring() {
         let instance_id = "perf-parser-current-prompt".to_string();
         let mut tracker =
-            RuntimePerfTracker::new(instance_id.clone(), None, ModelWorkload::Embedding);
+            RuntimePerfTracker::new(instance_id.clone(), None, ModelWorkload::Embedding, crate::gufo::EngineKind::LlamaCpp);
 
         tracker
             .process_line("0 I slot launch_slot_: id  0 | task 22 | processing task, is_child = 1");
@@ -7558,7 +7738,7 @@ mod perf_parser_tests {
     #[test]
     fn finished_tracker_cannot_overwrite_replacement_monitoring() {
         let id = "finished-tracker-replacement";
-        let mut old = RuntimePerfTracker::new(id.into(), None, ModelWorkload::Inference);
+        let mut old = RuntimePerfTracker::new(id.into(), None, ModelWorkload::Inference, crate::gufo::EngineKind::LlamaCpp);
         old.finish();
         crate::commands::monitoring::update_tasks(
             id,
@@ -7638,7 +7818,7 @@ mod perf_parser_tests {
 
     #[test]
     fn malformed_logs_cannot_grow_pending_task_state_without_bound() {
-        let parser = PerfParser::new(ModelWorkload::Embedding);
+        let parser = PerfParser::new(ModelWorkload::Embedding, crate::gufo::EngineKind::LlamaCpp);
         let mut tasks = HashMap::new();
         let mut last_completed = None;
 
