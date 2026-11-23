@@ -121,11 +121,13 @@ html.dark {
 .model-tree-viewport {
   --tree-step: 16px;
   --tree-line: color-mix(in srgb, var(--ui-control) 70%, var(--ui-line));
+  container: model-tree / inline-size;
   max-height: clamp(18rem, 60vh, 42rem);
   overflow: auto;
   border-top: 1px solid var(--ui-line);
 }
 .model-tree-row { display: flex; width: 100%; min-height: 39px; align-items: center; gap: 8px; padding-inline: 16px 20px; text-align: start; }
+.model-tree-row[aria-disabled=true] { background: var(--ui-surface); }
 .model-tree-prefix { display: flex; align-self: stretch; min-width: var(--tree-step); max-width: 30%; flex: none; }
 .model-tree-branches { display: flex; min-width: 0; overflow: hidden; justify-content: flex-end; }
 .model-tree-branches > span, .model-tree-disclosure { position: relative; width: var(--tree-step); flex: none; }
@@ -139,6 +141,15 @@ html.dark {
 .model-tree-disclosure { display: grid; place-items: center; color: var(--ui-muted); }
 .model-tree-disclosure:empty::after { inset-inline: 0 2px; }
 .model-tree-size { flex: none; width: 5.5rem; text-align: end; font-variant-numeric: tabular-nums; }
+.model-tree-quant, .model-tree-kind { display: none; flex: none; }
+.model-tree-quant { width: 9ch; }
+.model-tree-kind { width: 4.75rem; }
+@container model-tree (min-width: 26rem) { .model-tree-kind { display: flex; } }
+@container model-tree (min-width: 34rem) { .model-tree-quant { display: block; } }
+.model-picker-dialog { width: min(52rem, calc(100% - 2rem)); height: min(75vh, 44rem); max-height: 85vh; margin: auto; padding: 0; overflow: hidden; }
+.model-picker-dialog[open] { display: flex; flex-direction: column; }
+.model-picker-dialog::backdrop { background: var(--ui-scrim); }
+.model-picker-dialog .model-tree-viewport { flex: 1; min-height: 0; max-height: none; }
 .console-review-link[data-tone=red] { color: var(--ui-danger); background: var(--ui-danger-bg); }
 .console-review-link[data-tone=sky] { color: var(--ui-info); background: var(--ui-info-bg); }
 .config-workspace-tools { display: grid; grid-template-columns: minmax(0,1fr) minmax(155px,205px); gap: 10px; align-items: center; }

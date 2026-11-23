@@ -1,134 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, ChevronRight, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Database, File, FolderOpen, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { confirm, message } from '@tauri-apps/plugin-dialog'
-import { useVirtualizer } from '@tanstack/react-virtual'
-import { useAppStore, type ModelDeletionPreview, type ModelInfo } from '../store'
+import { useAppStore, type ModelDeletionPreview } from '../store'
+import { buildModelTrees } from '../modelRepositoryTree'
+import { ModelRepositoryTree } from './ModelRepositoryTree'
 import { invokeApp as invoke } from '../lib/ipc'
 import { formatMessage, useI18n } from '../i18n'
-import { dedupePaths, formatPathForDisplay, isPathWithinRoot, normalizePath, pathJoin, pathsEqual } from '../utils/path'
+import { dedupePaths, pathsEqual } from '../utils/path'
 import { formatSize } from '../utils/format'
 import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
-
-interface TreeStats {
-  models: number
-  mmproj: number
-  imatrix: number
-  size: number
-}
-
-interface TreeNode {
-  name: string
-  path: string
-  isDir: boolean
-  children?: Map<string, TreeNode>
-  orderedChildren?: TreeNode[]
-  model?: ModelInfo
-  stats: TreeStats
-}
-
-const emptyTreeStats = (): TreeStats => ({ models: 0, mmproj: 0, imatrix: 0, size: 0 })
-
-const modelStats = (model: ModelInfo): TreeStats => ({
-  models: model.file_type === 'model' && !model.is_shard ? 1 : 0,
-  mmproj: model.file_type === 'mmproj' ? 1 : 0,
-  imatrix: model.file_type === 'imatrix' ? 1 : 0,
-  size: model.size,
-})
-
-const finalizeTree = (node: TreeNode): TreeStats => {
-  if (!node.isDir) return node.stats
-  const orderedChildren = [...(node.children?.values() || [])].sort((left, right) => {
-    if (left.isDir !== right.isDir) return left.isDir ? -1 : 1
-    return left.name.localeCompare(right.name)
-  })
-  node.orderedChildren = orderedChildren
-  const stats = emptyTreeStats()
-  for (const child of orderedChildren) {
-    const childStats = finalizeTree(child)
-    stats.models += childStats.models
-    stats.mmproj += childStats.mmproj
-    stats.imatrix += childStats.imatrix
-    stats.size += childStats.size
-  }
-  node.stats = stats
-  return stats
-}
-
-const buildTree = (rootDir: string, models: ModelInfo[]): TreeNode => {
-  const normalizedRoot = normalizePath(rootDir)
-  const root: TreeNode = { name: rootDir, path: normalizedRoot, isDir: true, children: new Map(), stats: emptyTreeStats() }
-
-  for (const model of models) {
-    const normalizedPath = normalizePath(model.path)
-    if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
-      continue
-    }
-
-    const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, '')
-    if (!relative) {
-      continue
-    }
-
-    const parts = relative.split('/')
-    let cursor = root
-
-    for (let index = 0; index < parts.length; index += 1) {
-      const part = parts[index]
-      if (index === parts.length - 1) {
-        cursor.children!.set(part, { name: part, path: model.path, isDir: false, model, stats: modelStats(model) })
-      } else {
-        if (!cursor.children!.has(part)) {
-          cursor.children!.set(part, {
-            name: part,
-            path: pathJoin(cursor.path, part),
-            isDir: true,
-            children: new Map(),
-            stats: emptyTreeStats(),
-          })
-        }
-        cursor = cursor.children!.get(part)!
-      }
-    }
-  }
-
-  finalizeTree(root)
-  return root
-}
-
-const matchNode = (node: TreeNode, query: string): boolean => {
-  if (!query) {
-    return true
-  }
-
-  const normalizedQuery = query.toLowerCase()
-  return (
-    formatPathForDisplay(node.name).toLowerCase().includes(normalizedQuery) ||
-    !!node.model?.quant_type?.toLowerCase().includes(normalizedQuery) ||
-    !!node.model?.architecture?.toLowerCase().includes(normalizedQuery) ||
-    !!node.model?.file_type?.toLowerCase().includes(normalizedQuery)
-  )
-}
-
-const highlightText = (text: string, query: string): ReactNode => {
-  if (!query) {
-    return text
-  }
-
-  const index = text.toLowerCase().indexOf(query.toLowerCase())
-  if (index < 0) {
-    return text
-  }
-
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark className="rounded bg-ui-warn-bg px-0.5 text-ui-warn">
-        {text.slice(index, index + query.length)}
-      </mark>
-      {text.slice(index + query.length)}
-    </>
-  )
-}
 
 const ModelRepo = () => {
   const models = useAppStore(state => state.models)
@@ -146,22 +26,10 @@ const ModelRepo = () => {
   const [scanError, setScanError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
-  const savedCollapsed = useRef<Set<string>>(new Set())
-  const treeScrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     loadInitialData()
   }, [loadInitialData])
-
-  useEffect(() => {
-    if (searchQuery && savedCollapsed.current.size === 0 && collapsed.size > 0) {
-      savedCollapsed.current = collapsed
-      setCollapsed(new Set())
-    } else if (!searchQuery && savedCollapsed.current.size > 0) {
-      setCollapsed(savedCollapsed.current)
-      savedCollapsed.current = new Set()
-    }
-  }, [searchQuery, collapsed])
 
   useEffect(() => {
     if (!selectedPath && models.length > 0) {
@@ -173,47 +41,11 @@ const ModelRepo = () => {
     }
   }, [models, selectedPath])
 
-  const trees = useMemo(() => modelDirs.map(dir => buildTree(dir, models)), [modelDirs, models])
+  const trees = useMemo(() => buildModelTrees(modelDirs, models), [modelDirs, models])
   const selectedModel = useMemo(
     () => models.find(model => selectedPath && pathsEqual(model.path, selectedPath)) ?? null,
     [models, selectedPath],
   )
-  const matchingPaths = useMemo(() => {
-    const paths = new Set<string>()
-    if (!searchQuery) return paths
-    const visit = (node: TreeNode): boolean => {
-      const selfMatches = matchNode(node, searchQuery)
-      let childMatches = false
-      for (const child of node.orderedChildren || []) {
-        childMatches = visit(child) || childMatches
-      }
-      if (selfMatches || childMatches) paths.add(node.path)
-      return selfMatches || childMatches
-    }
-    trees.forEach(visit)
-    return paths
-  }, [searchQuery, trees])
-  const flatNodes = useMemo(() => {
-    // Each level records whether its branch continues to another visible sibling.
-    const rows: { node: TreeNode; branches: boolean[] }[] = []
-    const visible = (node: TreeNode) => !searchQuery || matchingPaths.has(node.path)
-    const visit = (node: TreeNode, branches: boolean[]) => {
-      rows.push({ node, branches })
-      if (!node.orderedChildren || (collapsed.has(node.path) && !searchQuery)) return
-      const children = searchQuery ? node.orderedChildren.filter(visible) : node.orderedChildren
-      children.forEach((child, index) => visit(child, [...branches, index < children.length - 1]))
-    }
-    trees.filter(visible).forEach(tree => visit(tree, []))
-    return rows
-  }, [collapsed, matchingPaths, searchQuery, trees])
-  const treeVirtualizer = useVirtualizer({
-    count: flatNodes.length,
-    getScrollElement: () => treeScrollRef.current,
-    estimateSize: () => 41,
-    overscan: 14,
-    getItemKey: index => flatNodes[index]?.node.path || index,
-  })
-
   const stats = useMemo(() => {
     const primaryModels = models.filter(model => model.file_type !== 'mmproj' && model.file_type !== 'imatrix' && !model.is_shard)
     const projectorModels = models.filter(model => model.file_type === 'mmproj')
@@ -285,77 +117,6 @@ const ModelRepo = () => {
     } catch (error) {
       setScanError(String(error))
     }
-  }
-
-  const renderNode = (node: TreeNode, branches: boolean[]): ReactNode => {
-    const { model, stats } = node
-    const expanded = Boolean(searchQuery) || !collapsed.has(node.path)
-    const isSelected = model ? Boolean(selectedPath && pathsEqual(selectedPath, model.path)) : undefined
-    const mutedLabel = model?.is_shard || (node.isDir && searchQuery && !matchNode(node, searchQuery))
-    const kindLabel = model?.file_type === 'mmproj'
-      ? t.modelRepo.typeMmprojShort
-      : model?.file_type === 'imatrix'
-        ? t.modelRepo.typeImatrix
-        : t.modelRepo.typeModelShort
-
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          if (model) {
-            setSelectedPath(model.path)
-            return
-          }
-          setCollapsed(previous => {
-            const next = new Set(previous)
-            if (next.has(node.path)) next.delete(node.path)
-            else next.add(node.path)
-            return next
-          })
-        }}
-        aria-expanded={node.isDir ? expanded : undefined}
-        data-selected={isSelected}
-        aria-pressed={isSelected}
-        className="console-list-row model-tree-row"
-      >
-        <span className="model-tree-prefix" aria-hidden="true">
-          <span className="model-tree-branches">
-            {branches.map((continues, level) => <span key={level} data-continues={continues} />)}
-          </span>
-          <span className="model-tree-disclosure">
-            {node.isDir && <ChevronRight size={14} className={expanded ? 'rotate-90' : undefined} />}
-          </span>
-        </span>
-        {node.isDir ? (
-          <FolderTree className="h-4 w-4 shrink-0 text-ui-warn" />
-        ) : model?.file_type === 'mmproj' ? (
-          <Image className="h-4 w-4 shrink-0 text-fuchsia-700 dark:text-fuchsia-300" />
-        ) : (
-          <File className="h-4 w-4 shrink-0 text-ui-info" />
-        )}
-        <span
-          className={`min-w-0 flex-1 truncate text-sm ${mutedLabel ? 'text-ui-muted' : 'text-ui-ink'}`}
-          title={formatPathForDisplay(node.path)}
-        >
-          {highlightText(model?.name ?? formatPathForDisplay(node.name), searchQuery)}
-        </span>
-        {model ? <>
-          <span className="hidden w-[9ch] shrink-0 truncate text-right text-xs text-ui-muted lg:block" title={model.quant_type ?? undefined}>{model.quant_type}</span>
-          <span className="hidden w-[4.75rem] shrink-0 justify-end md:flex">
-            <span className="truncate rounded-full border border-ui-line px-2 py-0.5 text-[11px] text-ui-body">{kindLabel}</span>
-          </span>
-          <span className="model-tree-size text-xs text-ui-muted">{formatSize(model.size)}</span>
-        </> : (
-          <span className="shrink-0 text-xs text-ui-muted">
-            {[
-              stats.models > 0 && `${stats.models} ${t.modelRepo.typeModelShort}`,
-              stats.mmproj > 0 && `${stats.mmproj} ${t.modelRepo.mmprojCount}`,
-              stats.imatrix > 0 && `${stats.imatrix} ${t.modelRepo.typeImatrix}`,
-            ].filter(Boolean).join(' · ')}
-          </span>
-        )}
-      </button>
-    )
   }
 
   return (
@@ -487,30 +248,8 @@ const ModelRepo = () => {
               </p>
             </div>
           ) : (
-            <div
-              ref={treeScrollRef}
-              role="region"
-              aria-label={copy.explorer}
-              className="model-tree-viewport"
-            >
-              {flatNodes.length === 0 && <p className="px-5 py-8 text-center text-sm text-ui-muted">{copy.noSearchResults}</p>}
-              <div className="relative w-full" style={{ height: `${treeVirtualizer.getTotalSize()}px` }}>
-                {treeVirtualizer.getVirtualItems().map(virtualRow => {
-                  const row = flatNodes[virtualRow.index]
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      ref={treeVirtualizer.measureElement}
-                      data-index={virtualRow.index}
-                      className="absolute left-0 top-0 w-full"
-                      style={{ transform: `translateY(${virtualRow.start}px)` }}
-                    >
-                      {renderNode(row.node, row.branches)}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
+            <ModelRepositoryTree roots={trees} query={searchQuery} collapsed={collapsed}
+              onCollapsedChange={setCollapsed} selectedPath={selectedPath} onSelect={model => setSelectedPath(model.path)} />
           )}
         </Surface>
 

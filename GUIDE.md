@@ -160,6 +160,10 @@ Model Repository recursively scans local folders for GGUF models, shards, `mmpro
 4. Filter by file name, architecture, or quantization.
 5. Expand the tree to inspect models, projectors, and shards.
 
+创建实例和配置参数时，“从模型仓库选择”使用同一棵目录树。搜索可以展开匹配文件所在的目录，清除搜索会恢复原来的折叠状态。点击可选文件即可填入当前字段。
+
+The file picker in Instance Management and Configuration uses the same repository tree. Searching expands matching branches. Clearing the search restores the previous folder layout. Choose a file to fill the current field.
+
 ### 管理操作 / Management
 
 - “在资源管理器中打开”定位文件。

@@ -6,10 +6,7 @@ const root = path.resolve(__dirname, '..')
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8')
 
 const modelRepo = read('src/components/ModelRepo.tsx')
-const deleteHandler = modelRepo.slice(
-  modelRepo.indexOf('const handleDeleteFile'),
-  modelRepo.indexOf('const renderNode'),
-)
+const deleteHandler = modelRepo.match(/const handleDeleteFile\b[\s\S]*?\n  \}/)?.[0] ?? ''
 assert.ok(deleteHandler.includes("invoke<ModelDeletionPreview>('preview_model_deletion'"), 'model deletion must preview its physical artifact set')
 assert.ok(deleteHandler.indexOf('preview_model_deletion') < deleteHandler.indexOf('confirm('), 'artifact preview must precede user confirmation')
 assert.ok(deleteHandler.indexOf('confirm(') < deleteHandler.indexOf('deleteModelFile(path)'), 'deletion must follow explicit confirmation')

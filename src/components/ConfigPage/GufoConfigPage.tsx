@@ -10,7 +10,7 @@ import { useI18n } from '../../i18n'
 import { gufoCopy } from '../../i18n/gufoCopy'
 import { resolveEffectiveEngine } from '../../store/engineResolution'
 import { Button, SelectInput, Surface, TextInput } from '../ui'
-import { ModelAssetPicker } from './ModelAssetPicker'
+import { ModelAssetPicker } from '../ModelAssetPicker'
 import { BackToInstancesButton } from './BackToInstancesButton'
 
 type GufoPathField = 'model_path' | 'mmproj_path' | 'mtp_model' | 'dflash_model'
@@ -60,8 +60,9 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
     if (key === 'model_path' || key === 'mmproj_path') set(key, value)
     else gufo(key, value)
   }
+  const getPath = (key: GufoPathField) => key === 'model_path' || key === 'mmproj_path' ? local[key] : local.gufo[key]
   const pathField = (key: GufoPathField) => {
-    const value = key === 'model_path' || key === 'mmproj_path' ? local[key] : local.gufo[key]
+    const value = getPath(key)
     const label = pathLabels[key]
     const chooseLabel = `${copy.chooseFile}: ${label}`
     return <div className="min-w-0 space-y-2 text-sm">
@@ -243,19 +244,15 @@ export function GufoConfigPage({ instance }: { instance: Instance }) {
     {pickerTarget && <ModelAssetPicker
       target={pickerTarget === 'model_path' ? 'model' : pickerTarget === 'mmproj_path' ? 'mmproj' : 'draft'}
       models={models.filter(model => !model.is_shard && /\.gguf$/i.test(model.path))}
-      modelDirs={modelDirs} collapsed={pickerCollapsed} description={pathLabels[pickerTarget]} emptyLabel={copy.noFiles}
-      onToggle={path => setPickerCollapsed(current => {
-        const next = new Set(current)
-        if (next.has(path)) next.delete(path)
-        else next.add(path)
-        return next
-      })}
-      onPick={path => {
+      modelDirs={modelDirs} collapsed={pickerCollapsed} onCollapsedChange={setPickerCollapsed}
+      selectedPath={getPath(pickerTarget)}
+      description={pathLabels[pickerTarget]} emptyLabel={copy.noFiles}
+      onPick={model => {
         setPickerTarget(null)
         const current = useAppStore.getState().instances.find(item => item.id === instance.id)
         if (saving.current) return
         if (current?.status === 'running' || !current) { setError(copy.running); return }
-        setPath(pickerTarget, path)
+        setPath(pickerTarget, model.path)
       }}
       onClose={() => setPickerTarget(null)}
     />}

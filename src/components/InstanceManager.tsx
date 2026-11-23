@@ -9,7 +9,8 @@ import { formatHostPort } from '../utils/network'
 import { normalizeInstanceConfig } from '../modelPolicy'
 import type { Instance, InstanceLifecyclePhase } from '../store/types'
 import { Button, EmptyState, PathText, SelectInput, Surface, TextInput } from './ui'
-import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
+import { ModelAssetPicker } from './ModelAssetPicker'
+import { findMatchingProjector } from '../modelProjector'
 import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/CommandFeedbackModal'
 import { configForEngine } from '../gufo'
 import { gufoCopy } from '../i18n/gufoCopy'
@@ -712,17 +713,16 @@ const InstanceManager = () => {
       )}
 
       {showCreatePicker && (
-        <InstanceModelPicker
+        <ModelAssetPicker
+          target="model"
           models={models}
           modelDirs={modelDirs}
+          selectedPath={newInst.modelPath}
+          includeEmptyRoots
           collapsed={pickerCollapsed}
-          onToggle={(path) => setPickerCollapsed(current => {
-            const next = new Set(current)
-            if (next.has(path)) next.delete(path)
-            else next.add(path)
-            return next
-          })}
-          onPick={(model, mmprojPath) => {
+          onCollapsedChange={setPickerCollapsed}
+          onPick={model => {
+            const mmprojPath = findMatchingProjector(model, models)?.path ?? ''
             setNewInst(current => ({ ...current, modelId: model.id, modelPath: model.path, mmprojPath }))
             setShowCreatePicker(false)
           }}

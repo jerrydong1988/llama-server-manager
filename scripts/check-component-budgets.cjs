@@ -6,7 +6,7 @@ const budgets = [
   { file: 'src/App.tsx', maxLines: 500, boundary: 'useCommandCenterModel' },
   { file: 'src/components/DownloadManager.tsx', maxLines: 1250, boundary: 'DownloadPrimitives' },
   { file: 'src/components/ConfigPage.tsx', maxLines: 1000, boundary: 'configWorkspace' },
-  { file: 'src/components/InstanceManager.tsx', maxLines: 900, boundary: 'InstanceModelPicker' },
+  { file: 'src/components/InstanceManager.tsx', maxLines: 900, boundary: 'ModelAssetPicker' },
 ]
 
 const failures = []

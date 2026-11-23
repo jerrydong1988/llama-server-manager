@@ -24,7 +24,7 @@ import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 import { ParameterSearch } from './ConfigPage/ParameterSearch'
 import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
 import { ConfigFloatingActions } from './ConfigPage/ConfigFloatingActions'
-import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/ModelAssetPicker'
+import { ModelAssetPicker, type ModelAssetPickerTarget } from './ModelAssetPicker'
 import { FieldRuntimeProvider } from './ConfigPage/shared'
 import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey } from './ConfigPage/configPreflight'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
@@ -900,16 +900,12 @@ const LlamaConfigPage = () => {
           target={pickerTarget}
           models={models}
           modelDirs={modelDirs}
+          selectedPath={pickerTarget === 'model' ? primaryModelPath : pickerTarget === 'draft' ? draftModelPath : local.mmproj_path}
           collapsed={pickerCollapsed}
           description={`${labels.pickDesc}${labels.pickSeparator}${pickerTarget === 'model' ? labels.pickPrimary : pickerTarget === 'draft' ? labels.pickDraft : labels.pickMmproj}${labels.pickSuffix}`}
           emptyLabel={pickerTarget === 'mmproj' ? labels.noProjectors : t.modelRepo.noModels}
-          onToggle={path => {
-            const next = new Set(pickerCollapsed)
-            if (next.has(path)) next.delete(path)
-            else next.add(path)
-            setPickerCollapsed(next)
-          }}
-          onPick={pickModel}
+          onCollapsedChange={setPickerCollapsed}
+          onPick={model => pickModel(model.path)}
           onClose={() => setShowPicker(false)}
         />
       )}
