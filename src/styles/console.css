@@ -105,6 +105,12 @@ html.dark {
   outline: 2px solid var(--ui-focus); outline-offset: -2px;
 }
 .instance-list-row { cursor: pointer; }
+.instance-process-status { flex: none; min-height: 20px; line-height: 1rem; }
+.instance-process-status[data-state=running] {
+  gap: 4px; padding-inline: 7px; border-radius: 5px; background: var(--ui-positive); color: var(--ui-surface); font-weight: 650;
+}
+.instance-process-status[data-state=running]::before { display: none; }
+.instance-process-status:is([data-state=starting], [data-state=stopping]) { color: var(--ui-info); }
 .console-menu-item { display: flex; width: 100%; align-items: center; gap: 8px; padding: 8px 12px; color: var(--ui-body); text-align: left; }
 .console-menu-item:hover:not(:disabled) { background: var(--ui-hover); }
 .console-menu-item:disabled { opacity: .55; cursor: not-allowed; }

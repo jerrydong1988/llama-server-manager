@@ -96,7 +96,18 @@ for (const dark of [false, true]) {
     await expect(instance).toHaveCSS('background-color', selected)
     await page.mouse.move(0, 0)
     await expect(instance).toHaveCSS('background-color', selected)
+    const running = page.locator('.instance-list-row').filter({ hasText: 'Qwen3 8B Chat' })
+    const badge = running.locator('.instance-process-status')
+    const positive = dark ? 'rgb(118, 222, 172)' : 'rgb(8, 115, 80)'
+    await expect(badge).toHaveText('运行中')
+    await expect(badge).toHaveCSS('background-color', positive)
+    await expect(running).toHaveCSS('background-color', surface)
+    await expect(instance.locator('.instance-process-status')).toHaveText('已停止')
     await page.locator('.instance-list-container').screenshot({ path: testInfo.outputPath('instance-rows.png') })
+    await running.getByText('Qwen3 8B Chat', { exact: true }).click()
+    await expect(running).toHaveCSS('background-color', selected)
+    await expect(badge).toHaveCSS('background-color', positive)
+    await expect(page.locator('.instance-inspector .instance-process-status')).toHaveCSS('background-color', positive)
 
     await page.locator('[data-nav-id=engine]').click()
     const engines = page.locator('.console-list-row')

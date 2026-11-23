@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Play, Square, Plus, Trash2, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal, LoaderCircle } from 'lucide-react'
+import { Activity, Play, Square, Plus, Trash2, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal, LoaderCircle } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { exportShellCommand } from '../store/commandFormatting'
 import { AppInvokeError, invokeApp as invoke } from '../lib/ipc'
@@ -7,7 +7,7 @@ import { confirm } from '@tauri-apps/plugin-dialog'
 import { formatMessage, useI18n } from '../i18n'
 import { formatHostPort } from '../utils/network'
 import { normalizeInstanceConfig } from '../modelPolicy'
-import type { Instance } from '../store/types'
+import type { Instance, InstanceLifecyclePhase } from '../store/types'
 import { Button, EmptyState, PathText, SelectInput, Surface, TextInput } from './ui'
 import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
 import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/CommandFeedbackModal'
@@ -86,12 +86,12 @@ const InstanceManager = () => {
   const engineNameFor = useCallback((inst: Instance) => resolveEffectiveEngine(inst.config, engines, defaultEngineId)?.name
     || (engineMissingFor(inst) ? labels.configuredEngineMissing : t.instance.sysPath), [defaultEngineId, engineMissingFor, engines, labels.configuredEngineMissing, t.instance.sysPath])
 
-  const statusText = (inst: Instance) => {
-    const phase = instanceLifecycle[inst.id]
-    if (phase === 'starting') return t.instance.starting
-    if (phase === 'stopping') return t.instance.stopping
-    return inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
-  }
+  const renderProcessStatus = (state: Instance['status'] | InstanceLifecyclePhase) => (
+    <span className="console-status instance-process-status" data-state={state}>
+      {state === 'running' && <Activity size={14} strokeWidth={2.4} aria-hidden="true" />}
+      {t.instance[state]}
+    </span>
+  )
 
   const healthText = (inst: Instance) => {
     if (inst.status === 'stopped') return labels.offline
@@ -343,6 +343,7 @@ const InstanceManager = () => {
                 const selected = selectedInstance?.id === inst.id
                 const isRunning = inst.status === 'running'
                 const lifecyclePhase = instanceLifecycle[inst.id]
+                const processState = lifecyclePhase ?? inst.status
                 const isLifecycleBusy = Boolean(lifecyclePhase)
                 return (
                   <div
@@ -389,7 +390,7 @@ const InstanceManager = () => {
                             />
                           ) : (
                             <>
-                              <div className="min-w-0 truncate font-medium text-ui-ink" title={inst.name}>{inst.name}</div>
+                              <div className={`min-w-0 truncate text-ui-ink ${processState === 'running' ? 'font-semibold' : 'font-medium'}`} title={inst.name}>{inst.name}</div>
                               <Button
                                 onClick={e => { e.stopPropagation(); editingCanceledRef.current = false; setEditingId(inst.id); setEditName(inst.name) }}
                                 variant="subtle"
@@ -402,14 +403,18 @@ const InstanceManager = () => {
                             </>
                           )}
                         </div>
-                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ui-muted">
-                          <span className="max-w-[320px] truncate" title={inst.model}>{inst.model}</span>
+                        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ui-muted">
+                          <div className="flex min-w-0 max-w-full items-center gap-2">
+                            {renderProcessStatus(processState)}
+                            {isRunning && <span className={`shrink-0 ${inst.healthCheck === 'fail' ? 'text-ui-danger' : inst.healthCheck === 'ok' ? 'text-ui-muted' : 'text-ui-warn'}`}>{healthText(inst)}</span>}
+                            <span className="min-w-0 max-w-[320px] truncate" title={inst.model}>{inst.model}</span>
+                          </div>
                           {renderTestResult(inst.id)}
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <div className="flex min-w-0">
                       <Button
                         onClick={e => { e.stopPropagation(); setEnginePickerForId(inst.id) }}
                         variant={engineMissingFor(inst) ? 'danger' : 'secondary'}
@@ -419,8 +424,6 @@ const InstanceManager = () => {
                       >
                         <span className="min-w-0 truncate">{engineNameFor(inst)}</span>
                       </Button>
-                      <span className="console-status" data-state={isLifecycleBusy ? 'busy' : inst.status}>{statusText(inst)}</span>
-                      {isRunning && <span className={`text-xs ${inst.healthCheck === 'fail' ? 'text-ui-danger' : inst.healthCheck === 'ok' ? 'text-ui-muted' : 'text-ui-warn'}`}>{healthText(inst)}</span>}
                     </div>
 
                     <div className="min-w-0 text-xs text-ui-muted">
@@ -544,9 +547,7 @@ const InstanceManager = () => {
                   <p className="mb-1 text-xs text-ui-muted">{labels.operationTarget}</p>
                   <h3 className="truncate text-lg font-semibold text-ui-ink" title={selectedInstance.name}>{selectedInstance.name}</h3>
                 </div>
-                <span className="console-status" data-state={instanceLifecycle[selectedInstance.id] ? 'busy' : selectedInstance.status}>
-                  {statusText(selectedInstance)}
-                </span>
+                {renderProcessStatus(instanceLifecycle[selectedInstance.id] ?? selectedInstance.status)}
               </div>
 
               <div className="grid grid-cols-2 gap-2" data-guide="instance-runtime">

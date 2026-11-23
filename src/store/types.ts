@@ -666,7 +666,7 @@ export interface AppState {
   engines: EngineInfo[]
   instances: Instance[]
   instancesHydrated: boolean
-  instanceLifecycle: Record<string, InstanceLifecyclePhase>
+  instanceLifecycle: Partial<Record<string, InstanceLifecyclePhase>>
   checkpointStatuses: Record<string, CheckpointStatus>
   logs: Record<string, LogEntry[]>
   recentLogs: LogEntry[]
