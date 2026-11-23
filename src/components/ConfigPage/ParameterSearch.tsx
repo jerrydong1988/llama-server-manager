@@ -1,7 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
 import type { getConfigPageLabels } from '../../i18n/configPageCopy'
-import { Button, Surface, TextInput } from '../ui'
+import { Button, TextInput } from '../ui'
 
 type Labels = ReturnType<typeof getConfigPageLabels>
 
@@ -74,15 +74,7 @@ export function ParameterSearch({ query, onQueryChange, labels }: { query: strin
   }
 
   return (
-    <Surface className="p-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.parameterSearch}</p>
-          <p className="mt-1 text-sm text-slate-500">{labels.parameterSearchDesc}</p>
-        </div>
-        <p className="text-xs text-slate-500">{labels.parameterSearchKeys}</p>
-      </div>
-      <div className="mt-4 flex items-center gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-2" title={labels.parameterSearchKeys}>
         <TextInput
           type="text"
           value={query}
@@ -95,7 +87,7 @@ export function ParameterSearch({ query, onQueryChange, labels }: { query: strin
         />
         {query && (
           <>
-            <span className={`min-w-[76px] text-center text-xs ${matchCount > 0 ? 'text-slate-500' : 'text-amber-500'}`}>
+            <span className={`min-w-[76px] text-center text-xs ${matchCount > 0 ? 'text-ui-muted' : 'text-ui-warn'}`}>
               {matchCount > 0
                 ? `${activeIndex >= 0 ? activeIndex + 1 : 0} / ${matchCount}`
                 : labels.parameterSearchNoResults}
@@ -111,7 +103,6 @@ export function ParameterSearch({ query, onQueryChange, labels }: { query: strin
             </Button>
           </>
         )}
-      </div>
-    </Surface>
+    </div>
   )
 }

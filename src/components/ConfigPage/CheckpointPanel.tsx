@@ -102,7 +102,7 @@ export function CheckpointPanel({
     <Surface as="section" id="config-checkpoint" className="p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3 text-violet-400">
+          <div className="rounded-lg border border-ui-line bg-ui-muted p-3 text-ui-body">
             <DatabaseZap className="h-5 w-5" />
           </div>
           <SectionHeader title={labels.configTitle} description={labels.configDescription} />
@@ -111,15 +111,15 @@ export function CheckpointPanel({
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
-        <InsetSurface className="p-3 text-xs leading-5 text-amber-700 dark:text-amber-200">
+        <InsetSurface className="p-3 text-xs leading-5 text-ui-warn">
           <AlertTriangle className="mb-2 h-4 w-4" />
           {labels.experimental}
         </InsetSurface>
-        <InsetSurface className="p-3 text-xs leading-5 text-slate-600 dark:text-slate-300">
-          <ShieldCheck className="mb-2 h-4 w-4 text-emerald-400" />
+        <InsetSurface className="p-3 text-xs leading-5 text-ui-muted">
+          <ShieldCheck className="mb-2 h-4 w-4 text-ui-positive" />
           {labels.sensitive}
         </InsetSurface>
-        <InsetSurface className="p-3 text-xs leading-5 text-blue-700 dark:text-blue-200">
+        <InsetSurface className="p-3 text-xs leading-5 text-ui-info">
           <DatabaseZap className="mb-2 h-4 w-4" />
           {labels.proxyRequirement}
         </InsetSurface>
@@ -130,7 +130,7 @@ export function CheckpointPanel({
         <Toggle label={labels.autoSave} value={policy.auto_save} onChange={value => update('auto_save', value)} title={labels.autoSaveTip} disabled={!policy.enabled} />
         <Toggle label={labels.autoRestore} value={policy.auto_restore} onChange={value => update('auto_restore', value)} title={labels.autoRestoreTip} disabled={!policy.enabled} />
         <label className={!policy.enabled ? 'opacity-50' : ''} title={labels.storageLimitTip}>
-          <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.storageLimit}</span>
+          <span className="mb-1 block text-xs font-medium text-ui-muted">{labels.storageLimit}</span>
           <TextInput
             type="number"
             min={1}
@@ -143,7 +143,7 @@ export function CheckpointPanel({
           />
         </label>
         <label className={!policy.enabled ? 'opacity-50' : ''} title={labels.minimumTokensTip}>
-          <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.minimumTokens}</span>
+          <span className="mb-1 block text-xs font-medium text-ui-muted">{labels.minimumTokens}</span>
           <TextInput
             type="number"
             min={1}
@@ -159,12 +159,12 @@ export function CheckpointPanel({
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <label className={!policy.enabled || !policy.auto_save ? 'opacity-50' : ''} title={labels.idleSaveTip}>
-          <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.idleSave}</span>
+          <span className="mb-1 block text-xs font-medium text-ui-muted">{labels.idleSave}</span>
           <TextInput type="number" min={0} max={86_400} step={1}
             value={policy.idle_save_seconds ?? 0} disabled={!policy.enabled || !policy.auto_save}
             onChange={event => update('idle_save_seconds', boundedInteger(event.target.value, 0, 86_400))}
             className="h-10 w-full" />
-          <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{labels.idleSaveTip}</span>
+          <span className="mt-1 block text-xs text-ui-muted">{labels.idleSaveTip}</span>
         </label>
         <Toggle label={labels.preserveLonger} value={policy.preserve_longer ?? false}
           onChange={value => update('preserve_longer', value)} title={labels.preserveLongerTip}
@@ -179,19 +179,19 @@ export function CheckpointPanel({
         <InsetSurface className="mt-5 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{labels.eligibility}</p>
-              <p className={`mt-1 text-sm font-medium ${eligibility?.eligible ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-200'}`}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-ui-muted">{labels.eligibility}</p>
+              <p className={`mt-1 text-sm font-medium ${eligibility?.eligible ? 'text-ui-positive' : 'text-ui-warn'}`}>
                 {loading ? labels.checking : eligibility?.eligible ? labels.eligible : labels.ineligible}
               </p>
               {!loading && reasons.length > 0 && (
-                <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
+                <ul className="mt-2 space-y-1 text-xs text-ui-muted">
                   {reasons.map(reason => (
                     <li key={reason}>
                       • {labels.reasons[reason as keyof typeof labels.reasons] || reason}
                       {reason === 'custom_arguments_unsupported' && (eligibility?.custom_argument_blockers?.length ?? 0) > 0 && (
                         <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
                           {eligibility?.custom_argument_blockers?.map(blocker => (
-                            <code key={blocker} className="rounded bg-slate-200/70 px-1 py-0.5 text-[11px] dark:bg-slate-800">{blocker}</code>
+                            <code key={blocker} className="rounded bg-ui-inset px-1 py-0.5 text-[11px]">{blocker}</code>
                           ))}
                         </span>
                       )}
@@ -199,7 +199,7 @@ export function CheckpointPanel({
                   ))}
                 </ul>
               )}
-              <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">{labels.requiredSettings}</p>
+              <p className="mt-3 text-xs text-ui-muted">{labels.requiredSettings}</p>
             </div>
             {canRepair && (
               <Button type="button" onClick={() => void applyRequirements()} variant="secondary" size="sm" className="shrink-0">

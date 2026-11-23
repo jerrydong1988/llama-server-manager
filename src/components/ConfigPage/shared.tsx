@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, createContext, useContext, useId } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, CircleHelp, RotateCcw } from 'lucide-react'
 import type { EngineCapabilities, InstanceConfig } from '../../store'
@@ -10,7 +10,7 @@ import {
   type ParameterSource,
 } from '../../parameterCatalog'
 import { reviewFieldKeys } from './configWorkspace'
-import { SelectInput, TextInput, surfaceClassName } from '../ui'
+import { SelectInput, TextInput } from '../ui'
 import {
   FALLBACK_SPECULATIVE_TYPES,
   normalizeSpeculativeTypes,
@@ -114,14 +114,6 @@ const useFieldState = (label: string, fieldKey?: FieldKey) => {
   }
 }
 
-const sourceTone: Record<ParameterSource, string> = {
-  inherited: 'border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  explicit: 'border-blue-300/60 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300',
-  managed: 'border-violet-300/60 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300',
-  inactive: 'border-amber-300/60 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
-  unsupported: 'border-red-300/60 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300',
-}
-
 const sourceText = (source: ParameterSource, labels?: FieldRuntimeLabels) => labels?.[source] ?? source
 
 const FieldStatusMarker = ({ source, changed, labels }: { source: ParameterSource; changed: boolean; labels?: FieldRuntimeLabels }) => (
@@ -129,12 +121,12 @@ const FieldStatusMarker = ({ source, changed, labels }: { source: ParameterSourc
     {changed && (
       <span
         data-config-status="changed"
-        className="h-1.5 w-1.5 rounded-full bg-slate-400"
+        className="h-1.5 w-1.5 rounded-full bg-ui-warn"
         title={labels?.unsaved}
         aria-label={labels?.unsaved}
       />
     )}
-    <span data-config-status="source" data-config-source={source} className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${sourceTone[source]}`}>
+    <span data-config-status="source" data-config-source={source} className="config-source-label">
       {sourceText(source, labels)}
     </span>
   </span>
@@ -163,9 +155,32 @@ const ParameterHelp = ({
 }) => {
   const id = useId()
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [open, setOpen] = useState(false)
-  const [position, setPosition] = useState({ top: 0, left: 0 })
+  useLayoutEffect(() => {
+    const panel = panelRef.current
+    const trigger = buttonRef.current
+    if (!open || !panel || !trigger) return
+    const place = () => {
+      const anchor = trigger.getBoundingClientRect()
+      const box = panel.getBoundingClientRect()
+      const below = anchor.bottom + 8
+      const top = below + box.height <= window.innerHeight - 12 ? below : anchor.top - box.height - 8
+      panel.style.top = `${Math.max(12, Math.min(top, window.innerHeight - box.height - 12))}px`
+      panel.style.left = `${Math.max(12, Math.min(anchor.left, window.innerWidth - box.width - 12))}px`
+    }
+    place()
+    const observer = new ResizeObserver(place)
+    observer.observe(panel)
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open])
 
   const cancelClose = () => {
     if (closeTimer.current !== null) clearTimeout(closeTimer.current)
@@ -173,19 +188,13 @@ const ParameterHelp = ({
   }
   const show = () => {
     cancelClose()
-    const rect = buttonRef.current?.getBoundingClientRect()
-    if (rect) {
-      const width = Math.min(360, Math.max(280, window.innerWidth - 24))
-      setPosition({
-        top: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 240)),
-        left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
-      })
-    }
     setOpen(true)
   }
   const scheduleClose = () => {
     cancelClose()
-    closeTimer.current = setTimeout(() => setOpen(false), 140)
+    closeTimer.current = setTimeout(() => {
+      if (!panelRef.current?.contains(document.activeElement)) setOpen(false)
+    }, 140)
   }
 
   useEffect(() => () => {
@@ -205,42 +214,55 @@ const ParameterHelp = ({
         onBlur={scheduleClose}
         onClick={show}
         onKeyDown={event => {
+          if (event.key === 'Tab' && !event.shiftKey && open && canRestore && panelRef.current?.querySelector('button')) {
+            event.preventDefault()
+            panelRef.current.querySelector('button')?.focus()
+          }
           if (event.key === 'Escape') {
             cancelClose()
             setOpen(false)
             buttonRef.current?.focus()
           }
         }}
-        className="mt-0.5 shrink-0 rounded text-slate-500 transition hover:text-blue-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        className="mt-0.5 shrink-0 rounded text-ui-muted transition hover:text-ui-action-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-ui-focus"
       >
         <CircleHelp className="h-3.5 w-3.5" />
       </button>
       {open && createPortal(
         <div
           id={id}
+          ref={panelRef}
           role="tooltip"
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
-          className="fixed z-[100] max-h-[calc(100vh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-          style={position}
+          onFocus={cancelClose}
+          onBlur={scheduleClose}
+          onKeyDown={event => {
+            if (event.key === 'Escape' || (event.key === 'Tab' && event.shiftKey)) {
+              event.preventDefault()
+              buttonRef.current?.focus()
+              setOpen(false)
+            }
+          }}
+          className="console-overlay fixed z-[100] max-h-[calc(100vh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-xl border border-ui-line bg-ui-surface p-3 text-left shadow-2xl"
         >
-          <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">{label}</p>
-          <p className="mt-2 whitespace-pre-line text-xs leading-5 text-slate-600 dark:text-slate-300">{title}</p>
-          <dl className="mt-3 space-y-1.5 border-t border-slate-200 pt-2 text-[11px] dark:border-slate-700">
+          <p className="text-xs font-semibold text-ui-ink">{label}</p>
+          <p className="mt-2 whitespace-pre-line text-xs leading-5 text-ui-muted">{title}</p>
+          <dl className="mt-3 space-y-1.5 border-t border-ui-line pt-2 text-[11px]">
             <div className="flex gap-2">
-              <dt className="shrink-0 text-slate-500">{labels?.currentState}</dt>
-              <dd className="text-slate-800 dark:text-slate-200">{sourceText(source, labels)}</dd>
+              <dt className="shrink-0 text-ui-muted">{labels?.currentState}</dt>
+              <dd className="text-ui-ink">{sourceText(source, labels)}</dd>
             </div>
             {engineDefault && (
               <div className="flex gap-2">
-                <dt className="shrink-0 text-slate-500">{labels?.engineDefault}</dt>
-                <dd className="text-slate-800 dark:text-slate-200">{engineDefault}</dd>
+                <dt className="shrink-0 text-ui-muted">{labels?.engineDefault}</dt>
+                <dd className="text-ui-ink">{engineDefault}</dd>
               </div>
             )}
             {flags.length > 0 && (
               <div className="flex gap-2">
-                <dt className="shrink-0 text-slate-500">{labels?.commandFlags}</dt>
-                <dd className="break-all font-mono text-blue-700 dark:text-blue-300">{flags.join(' / ')}</dd>
+                <dt className="shrink-0 text-ui-muted">{labels?.commandFlags}</dt>
+                <dd className="break-all font-mono text-ui-info">{flags.join(' / ')}</dd>
               </div>
             )}
           </dl>
@@ -248,7 +270,7 @@ const ParameterHelp = ({
             <button
               type="button"
               onClick={() => { onInherit(reviewFieldKeys(fieldKey)); setOpen(false) }}
-              className="mt-3 inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-600 transition hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:text-slate-300"
+              className="mt-3 inline-flex items-center gap-1 rounded-md border border-ui-line px-2 py-1 text-[11px] text-ui-muted transition hover:border-ui-control hover:text-ui-action-ink"
             >
               <RotateCcw className="h-3 w-3" />
               {labels?.restoreInheritance}
@@ -305,7 +327,7 @@ const FieldFrame = ({
     : undefined
   return (
     <div
-      className={`flex h-full min-w-0 flex-col justify-between ${disabled ? 'opacity-50' : ''} ${match ? 'flash-match rounded-lg ring-2 ring-amber-400/70' : ''} ${className}`}
+      className={`flex h-full min-w-0 flex-col justify-between ${disabled ? 'opacity-50' : ''} ${match ? 'flash-match rounded-lg ring-2 ring-ui-warn' : ''} ${className}`}
       data-config-field={fieldKey}
       data-config-search-match={match ? 'true' : undefined}
       data-config-emitted={emitted ? 'true' : undefined}
@@ -314,7 +336,7 @@ const FieldFrame = ({
       {showLabel && (
         <div className="mb-1 flex min-h-8 min-w-0 items-start justify-between gap-2">
           <span className="flex min-w-0 items-start gap-1">
-            <label className={`min-w-0 break-words text-xs font-medium leading-4 ${match ? 'text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
+            <label className={`config-parameter-label min-w-0 break-words font-medium leading-5 ${match ? 'text-ui-warn' : 'text-ui-body'}`}>
               {label}
             </label>
             {title && <ParameterHelp label={label} title={title} fieldKey={fieldKey} source={source} engineDefault={engineDefault} flags={flags} labels={runtime.labels} onInherit={runtime.onInherit} canRestore={explicit} />}
@@ -371,15 +393,15 @@ export const Section = ({
   // Search active: always expand to reveal matching fields
   const isOpen = hasSearch || (!userToggled.current && shouldOpen) || open
   return (
-    <section id={id} className={`${surfaceClassName} scroll-mt-6 overflow-hidden p-0`}>
-      <button onClick={handleToggle} className="flex w-full items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-4 py-3 text-left text-slate-100 transition hover:bg-slate-900">
-        {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
+    <section id={id} className="console-surface scroll-mt-4 overflow-hidden">
+      <button type="button" aria-expanded={isOpen} onClick={handleToggle} className="flex w-full items-center gap-2 border-b border-ui-line bg-ui-inset px-4 py-3 text-left text-ui-ink transition hover:bg-ui-hover">
+        {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-ui-muted" /> : <ChevronRight className="h-4 w-4 shrink-0 text-ui-muted" />}
         <span className="text-sm font-medium">{title}</span>
-        {disabled && <span className="ml-1 text-xs text-slate-500">{'\uD83D\uDED1'}</span>}
-        {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
+        {disabled && <span className="ml-1 text-xs text-ui-muted">{'\uD83D\uDED1'}</span>}
+        {summary && <span className="ml-auto text-xs text-ui-muted">{summary}</span>}
         {onToggle !== undefined && (
           <label className={`${summary ? 'ml-2' : 'ml-auto'} flex items-center gap-1 cursor-pointer shrink-0`} onClick={e => e.stopPropagation()}>
-            <span className="text-xs text-slate-500">{toggled ? 'On' : 'Off'}</span>
+            <span className="text-xs text-ui-muted">{toggled ? 'On' : 'Off'}</span>
             <input type="checkbox" checked={toggled} onChange={e => { e.stopPropagation(); onToggle(e.target.checked) }} className="w-3.5 h-3.5 rounded" />
           </label>
         )}
@@ -402,11 +424,12 @@ export const Section = ({
 export const Input = ({ label, value, onChange, placeholder, type, title, disabled, fieldKey }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className="h-10 w-full" />
+      <TextInput aria-label={label} type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className="h-10 w-full" />
     </FieldFrame>
 )}
 
 type NumericInputProps = {
+  label?: string
   value: number
   onChange: (value: number) => void
   min?: number
@@ -416,7 +439,7 @@ type NumericInputProps = {
   className?: string
 }
 
-const NumericInput = ({ value, onChange, min, max, step, disabled, className }: NumericInputProps) => {
+const NumericInput = ({ label, value, onChange, min, max, step, disabled, className }: NumericInputProps) => {
   // Preserve intermediate edits (empty, minus sign, decimal point/exponent).
   // Only finite numbers of the field's type update configuration; blur restores
   // the last valid value. External changes such as inheritance/undo take precedence.
@@ -424,7 +447,7 @@ const NumericInput = ({ value, onChange, min, max, step, disabled, className }: 
   const text = edit && Object.is(edit.value, value) ? edit.text : String(value)
   return (
     <TextInput
-      type="number" value={text} min={min} max={max} step={step ?? 1}
+      aria-label={label} type="number" value={text} min={min} max={max} step={step ?? 1}
       onChange={event => {
         const next = event.target.valueAsNumber
         const complete = Number.isFinite(next) && (step === 'any' || Number.isInteger(next))
@@ -439,7 +462,7 @@ const NumericInput = ({ value, onChange, min, max, step, disabled, className }: 
 
 export const Num = ({ label, title, fieldKey, ...input }: NumericInputProps & { label: string; title?: string; fieldKey?: FieldKey }) => (
   <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={input.disabled}>
-    <NumericInput {...input} className="h-10 w-full" />
+    <NumericInput {...input} label={label} className="h-10 w-full" />
   </FieldFrame>
 )
 
@@ -500,13 +523,14 @@ export const IntentNum = ({
         {inherited ? (
           <div
             data-config-inherited-value="true"
-            className="flex h-10 min-w-0 items-center truncate rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400"
+            className="flex h-10 min-w-0 items-center truncate rounded-lg border border-dashed border-ui-line bg-ui-inset px-3 text-xs text-ui-muted"
             title={engineDefault ?? inheritedLabel}
           >
             {engineDefault ?? inheritedLabel}
           </div>
         ) : (
           <NumericInput
+            label={label}
             value={value}
             min={min}
             max={max}
@@ -538,19 +562,15 @@ export const Switch = ({ label, value, onChange, title, disabled, fieldKey }: { 
         aria-checked={value}
         onClick={() => onChange(!value)}
         disabled={disabled}
-        className="flex h-11 w-full items-center rounded-lg border border-slate-300 bg-white px-3 transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
-      >
-        <span className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${value ? 'bg-blue-600' : 'bg-slate-400 dark:bg-slate-700'}`}>
-          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
-        </span>
-      </button>
+        className="console-switch my-2 disabled:cursor-not-allowed"
+      />
     </FieldFrame>
 )}
 
 export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, fieldKey }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; fieldKey?: FieldKey }) => {
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-10 w-full">
+      <SelectInput aria-label={label} value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-10 w-full">
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
       </SelectInput>
     </FieldFrame>
@@ -681,12 +701,12 @@ export const SpecTypeMultiSelect = ({
             setOpen(current => !current)
           }}
           disabled={disabled}
-          className="flex h-10 w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
+          className="flex h-10 w-full items-center gap-2 rounded-lg border border-ui-control bg-ui-surface px-3 text-left text-sm transition hover:border-ui-control focus:outline-none focus-visible:ring-2 focus-visible:ring-ui-focus disabled:cursor-not-allowed"
         >
           <span className="min-w-0 flex-1 truncate font-mono text-xs">
             {normalized || defaultLabel}
           </span>
-          <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition ${open ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`h-4 w-4 shrink-0 text-ui-muted transition ${open ? 'rotate-180' : ''}`} />
         </button>
         {open && createPortal(
           <div
@@ -696,7 +716,7 @@ export const SpecTypeMultiSelect = ({
             aria-label={label}
             aria-multiselectable="true"
             data-spec-type-popup="true"
-            className="fixed z-[110] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            className="console-overlay fixed z-[110] overflow-y-auto rounded-lg border border-ui-line bg-ui-surface p-2 shadow-2xl"
             style={popupPosition}
           >
             <div className="mb-2 grid grid-cols-2 gap-2">
@@ -704,7 +724,7 @@ export const SpecTypeMultiSelect = ({
                 type="button"
                 onClick={() => onChange('')}
                 disabled={disabled}
-                className={`rounded-md border px-2 py-1 text-xs ${normalized === '' ? 'border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-300 text-slate-500 dark:border-slate-700 dark:text-slate-400'}`}
+                className={`rounded-md border px-2 py-1 text-xs ${normalized === '' ? 'border-ui-action-line bg-ui-selected text-ui-action-ink' : 'border-ui-line text-ui-muted'}`}
               >
                 {defaultLabel}
               </button>
@@ -712,7 +732,7 @@ export const SpecTypeMultiSelect = ({
                 type="button"
                 onClick={() => onChange('none')}
                 disabled={disabled}
-                className={`rounded-md border px-2 py-1 font-mono text-xs ${normalized === 'none' ? 'border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-300 text-slate-500 dark:border-slate-700 dark:text-slate-400'}`}
+                className={`rounded-md border px-2 py-1 font-mono text-xs ${normalized === 'none' ? 'border-ui-action-line bg-ui-selected text-ui-action-ink' : 'border-ui-line text-ui-muted'}`}
               >
                 none
               </button>
@@ -726,7 +746,7 @@ export const SpecTypeMultiSelect = ({
                     key={option}
                     role="option"
                     aria-selected={checked}
-                    className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-800 ${engineUnreported ? 'text-amber-500 dark:text-amber-400' : 'text-slate-700 dark:text-slate-300'}`}
+                    className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-ui-hover ${engineUnreported ? 'text-ui-warn' : 'text-ui-body'}`}
                   >
                     <input
                       type="checkbox"
@@ -742,7 +762,7 @@ export const SpecTypeMultiSelect = ({
                 )
               })}
             </div>
-            <p className="mt-2 border-t border-slate-200 pt-2 text-[11px] leading-4 text-slate-500 dark:border-slate-700">{priorityLabel}</p>
+            <p className="mt-2 border-t border-ui-line pt-2 text-[11px] leading-4 text-ui-muted">{priorityLabel}</p>
           </div>,
           document.body,
         )}
@@ -767,7 +787,7 @@ export const ResetButton = ({ onClick, title }: { onClick: () => void; title?: s
     type="button"
     onClick={e => { e.stopPropagation(); onClick() }}
     title={title || 'Reset to defaults'}
-    className="ml-auto shrink-0 rounded-lg p-1 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
+    className="ml-auto shrink-0 rounded-lg p-1 text-ui-muted transition hover:bg-ui-danger-bg hover:text-ui-danger"
   >
     <RotateCcw className="w-3.5 h-3.5" />
   </button>
@@ -798,12 +818,12 @@ export const CollapsibleGroup = ({
   const [open, setOpen] = useState(defaultOpen || false)
   const hasSearch = !!q
   return (
-    <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/50" data-config-field={fieldKey} data-config-search-match={fieldState.match ? 'true' : undefined} data-config-emitted={fieldState.emitted ? 'true' : undefined}>
-      <div className="flex items-center border-b border-slate-800 bg-slate-950/80 text-slate-200 transition hover:bg-slate-900">
-        <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left">
-          {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
-          <span className={`text-xs font-medium ${fieldState.match ? 'text-amber-300' : ''}`}>{title}</span>
-          {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
+    <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-ui-line bg-ui-inset" data-config-field={fieldKey} data-config-search-match={fieldState.match ? 'true' : undefined} data-config-emitted={fieldState.emitted ? 'true' : undefined}>
+      <div className="flex items-center border-b border-ui-line bg-ui-inset text-ui-body transition hover:bg-ui-hover">
+        <button type="button" aria-expanded={hasSearch || open} onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left">
+          {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ui-muted" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ui-muted" />}
+          <span className={`text-xs font-medium ${fieldState.match ? 'text-ui-warn' : 'text-ui-body'}`}>{title}</span>
+          {summary && <span className="ml-auto text-xs text-ui-muted">{summary}</span>}
         </button>
         {onReset && <ResetButton onClick={onReset} />}
       </div>

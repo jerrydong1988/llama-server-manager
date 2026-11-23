@@ -369,7 +369,7 @@ export default function ClusterPage() {
       case 'Testing':
         return 'bg-amber-400'
       default:
-        return 'bg-slate-500'
+        return 'bg-ui-control'
     }
   }
 
@@ -399,23 +399,23 @@ export default function ClusterPage() {
       <div className="flex flex-col gap-5 2xl:flex-row 2xl:items-end 2xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-cyan-300">
+            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-cyan-700 dark:text-cyan-300">
               <Network className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.clusterPage.title}</h1>
+                <h1 className="text-2xl font-semibold tracking-tight text-ui-ink">{t.clusterPage.title}</h1>
                 <Badge tone="slate">
                   {workers.length} {labels.workers}
                 </Badge>
               </div>
-              <p className="mt-1 max-w-3xl text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl text-sm text-ui-muted">{labels.subtitle}</p>
             </div>
           </div>
         </div>
 
         <div className="flex w-full flex-wrap items-center gap-2 2xl:w-auto 2xl:justify-end">
-          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
+          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-ui-line bg-ui-inset p-1.5">
             {clusterScanning ? (
               <Button
                 onClick={handleCancelScan}
@@ -446,7 +446,7 @@ export default function ClusterPage() {
             </Button>
           </div>
 
-          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
+          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-ui-line bg-ui-inset p-1.5">
             <Button
               onClick={() => { setShowLocalLaunch(true); setLaunchError('') }}
               variant="cyan"
@@ -466,7 +466,7 @@ export default function ClusterPage() {
             </Button>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
+          <div className="grid grid-cols-2 gap-2 rounded-lg border border-ui-line bg-ui-inset p-1.5">
             <Button
               onClick={handleCopyCmd}
               size="icon"
@@ -492,10 +492,10 @@ export default function ClusterPage() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: t.clusterPage.online, value: onlineWorkers, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
-          { label: t.clusterPage.localWorker, value: localWorkers, tone: 'text-cyan-300 bg-cyan-500/10 border-cyan-500/20' },
-          { label: t.clusterPage.deviceType, value: totalDevices, tone: 'text-violet-300 bg-violet-500/10 border-violet-500/20' },
-          { label: t.clusterPage.totalVRAM, value: `${(totalVRAM / 1024).toFixed(1)} GB`, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
+          { label: t.clusterPage.online, value: onlineWorkers, tone: 'text-ui-positive bg-emerald-500/10 border-emerald-500/20' },
+          { label: t.clusterPage.localWorker, value: localWorkers, tone: 'text-cyan-700 dark:text-cyan-300 bg-cyan-500/10 border-cyan-500/20' },
+          { label: t.clusterPage.deviceType, value: totalDevices, tone: 'text-violet-700 dark:text-violet-300 bg-violet-500/10 border-violet-500/20' },
+          { label: t.clusterPage.totalVRAM, value: `${(totalVRAM / 1024).toFixed(1)} GB`, tone: 'text-ui-warn bg-amber-500/10 border-amber-500/20' },
         ].map(card => (
           <MetricCard key={card.label} label={card.label} value={card.value} tone={card.tone} />
         ))}
@@ -503,26 +503,26 @@ export default function ClusterPage() {
 
       <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <Surface as="section" className="min-w-0 overflow-hidden">
-          <div className="border-b border-slate-800 bg-slate-950/90 px-5 py-4">
+          <div className="border-b border-ui-line bg-ui-inset px-5 py-4">
             <SectionHeader title={t.clusterPage.workerList} description={labels.workerListDesc} />
           </div>
 
           {workers.length === 0 && !clusterScanning ? (
             <div className="flex min-h-[420px] flex-col items-center justify-center p-10 text-center">
-              <Server className="mb-4 h-12 w-12 text-slate-700" />
-              <p className="text-base text-slate-300">{t.clusterPage.noWorkers}</p>
+              <Server className="mb-4 h-12 w-12 text-ui-body" />
+              <p className="text-base text-ui-body">{t.clusterPage.noWorkers}</p>
             </div>
           ) : (
-            <div className="divide-y divide-slate-800 bg-slate-950/30">
+            <div className="divide-y divide-ui-line bg-ui-inset">
               {workersSorted.map(worker => (
                 <Fragment key={worker.id}>
-                  <div className="px-5 py-4 transition hover:bg-slate-900/70">
+                  <div className="console-list-row px-5 py-4" data-selected={expanded.has(worker.id)}>
                     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusTone(worker.status)}`} title={statusText(worker.status)} />
-                          <p className="min-w-0 max-w-full truncate text-sm font-medium text-slate-100" title={worker.name}>{worker.name}</p>
-                          <span className="min-w-0 break-all text-xs text-slate-500">{worker.host}:{worker.port}</span>
+                          <p className="min-w-0 max-w-full truncate text-sm font-medium text-ui-ink" title={worker.name}>{worker.name}</p>
+                          <span className="min-w-0 break-all text-xs text-ui-muted">{worker.host}:{worker.port}</span>
                           {worker.auto_discovered && (
                             <Badge tone="slate" className="px-2 py-0.5 text-[11px]">{labels.auto}</Badge>
                           )}
@@ -532,7 +532,7 @@ export default function ClusterPage() {
                             </Badge>
                           )}
                         </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+                        <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-ui-muted">
                           <span>{statusText(worker.status)}</span>
                           <span>{worker.devices.length} {labels.devices}</span>
                           <span>{(worker.devices.reduce((sum, device) => sum + device.vram_mb, 0) / 1024).toFixed(1)} GB VRAM</span>
@@ -560,6 +560,8 @@ export default function ClusterPage() {
                         </Button>
                         <Button
                           onClick={() => toggleExpand(worker.id)}
+                          aria-expanded={expanded.has(worker.id)}
+                          aria-controls={expanded.has(worker.id) ? `worker-devices-${worker.id}` : undefined}
                           size="sm"
                           className="w-[108px] shrink-0 whitespace-nowrap"
                         >
@@ -596,25 +598,25 @@ export default function ClusterPage() {
                   </div>
 
                   {expanded.has(worker.id) && (
-                    <div className="bg-slate-950/70 px-5 py-4">
+                    <div id={`worker-devices-${worker.id}`} className="bg-ui-inset px-5 py-4">
                       {worker.devices.length === 0 ? (
-                        <span className="text-sm text-slate-500">{t.clusterPage.noDevices}</span>
+                        <span className="text-sm text-ui-muted">{t.clusterPage.noDevices}</span>
                       ) : (
                         <div className="space-y-3">
                           {worker.devices.map((device, index) => {
                             const usedPct = device.vram_mb > 0 ? ((device.vram_mb - device.free_mb) / device.vram_mb) * 100 : 0
                             return (
-                              <div key={index} className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+                              <div key={index} className="rounded-lg border border-ui-line bg-ui-surface p-4">
                                 <div className="mb-2 flex items-center justify-between gap-4">
                                   <div>
-                                    <p className="text-sm font-medium text-slate-100">{device.name}</p>
-                                    <p className="mt-1 text-xs text-slate-500">{device.device_type}</p>
+                                    <p className="text-sm font-medium text-ui-ink">{device.name}</p>
+                                    <p className="mt-1 text-xs text-ui-muted">{device.device_type}</p>
                                   </div>
-                                  <div className="text-right text-xs text-slate-500">
+                                  <div className="text-right text-xs text-ui-muted">
                                     {((device.vram_mb - device.free_mb) / 1024).toFixed(1)} / {(device.vram_mb / 1024).toFixed(1)} GB
                                   </div>
                                 </div>
-                                <div className="h-2 rounded-full bg-slate-800">
+                                <div className="h-2 rounded-full bg-ui-inset">
                                   <div className="h-2 rounded-full bg-blue-500" style={{ width: `${usedPct.toFixed(0)}%` }} />
                                 </div>
                               </div>
@@ -638,27 +640,27 @@ export default function ClusterPage() {
           <div className="space-y-4">
             <InsetSurface className="p-4">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-slate-500">{t.clusterPage.discoverMode}</span>
+                <span className="text-sm text-ui-muted">{t.clusterPage.discoverMode}</span>
                 <Badge tone={mdnsActive ? 'blue' : 'slate'}>
                   {mdnsActive ? t.clusterPage.online : t.clusterPage.offline}
                 </Badge>
               </div>
-              {mdnsError ? <p className="mt-2 text-xs text-red-400">{mdnsError}</p> : null}
+              {mdnsError ? <p className="mt-2 text-xs text-ui-danger">{mdnsError}</p> : null}
             </InsetSurface>
 
             <InsetSurface className="p-4">
-              <p className="text-sm font-medium text-slate-100">{t.clusterPage.clusterThroughput}</p>
+              <p className="text-sm font-medium text-ui-ink">{t.clusterPage.clusterThroughput}</p>
               <div className="mt-3 space-y-3">
                 {workers.length === 0 ? (
-                  <div className="text-sm text-slate-500">{t.clusterPage.noWorkers}</div>
+                  <div className="text-sm text-ui-muted">{t.clusterPage.noWorkers}</div>
                 ) : (
                   workersSorted.slice(0, 5).map(worker => (
                     <div key={worker.id} className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm text-slate-200">{worker.name}</p>
-                        <p className="mt-1 truncate text-xs text-slate-500">{worker.host}:{worker.port}</p>
+                        <p className="truncate text-sm text-ui-body">{worker.name}</p>
+                        <p className="mt-1 truncate text-xs text-ui-muted">{worker.host}:{worker.port}</p>
                       </div>
-                      <span className={`rounded-full px-2 py-1 text-[11px] ${worker.status === 'Online' ? 'bg-emerald-500/10 text-emerald-300' : worker.status === 'Testing' ? 'bg-amber-500/10 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
+                      <span className={`rounded-full px-2 py-1 text-[11px] ${worker.status === 'Online' ? 'bg-emerald-500/10 text-ui-positive' : worker.status === 'Testing' ? 'bg-amber-500/10 text-ui-warn' : 'bg-ui-inset text-ui-muted'}`}>
                         {statusText(worker.status)}
                       </span>
                     </div>
@@ -676,29 +678,29 @@ export default function ClusterPage() {
 
       {showAddDialog && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ui-scrim p-4"
           onMouseDown={event => { if (event.target === event.currentTarget) setShowAddDialog(false) }}
         >
-          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="add-worker-dialog-title" tabIndex={-1} className="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <h3 id="add-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.addWorker}</h3>
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="add-worker-dialog-title" tabIndex={-1} className="w-full max-w-md rounded-lg border border-ui-line bg-ui-surface shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-ui-line px-6 py-4">
+              <h3 id="add-worker-dialog-title" className="font-semibold text-ui-ink">{t.clusterPage.addWorker}</h3>
               <Button onClick={() => setShowAddDialog(false)} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
             </div>
             <div className="space-y-3 p-6">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">{labels.host}</label>
+                <label className="mb-1 block text-xs font-medium text-ui-muted">{labels.host}</label>
                 <TextInput type="text" value={formData.host} onChange={event => setFormData({ ...formData, host: event.target.value })} placeholder="192.168.x.x" className="h-10" />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">{labels.port}</label>
+                <label className="mb-1 block text-xs font-medium text-ui-muted">{labels.port}</label>
                 <TextInput type="number" value={formData.port} onChange={event => setFormData({ ...formData, port: parseInt(event.target.value, 10) || 50052 })} className="h-10" />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.editWorker}</label>
+                <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.editWorker}</label>
                 <TextInput type="text" value={formData.name} onChange={event => setFormData({ ...formData, name: event.target.value })} placeholder={formData.host || 'Worker'} className="h-10" />
               </div>
             </div>
-            <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">
+            <div className="flex justify-end gap-2 border-t border-ui-line px-6 py-4">
               <Button onClick={() => setShowAddDialog(false)} variant="subtle">{t.common.cancel}</Button>
               <Button onClick={() => void handleAdd()} variant="primary">{t.common.save}</Button>
             </div>
@@ -708,12 +710,12 @@ export default function ClusterPage() {
 
       {showLaunchWizard && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ui-scrim p-4"
           onMouseDown={event => { if (event.target === event.currentTarget) { setShowLaunchWizard(false); setLaunchStep(0) } }}
         >
-          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="launch-worker-dialog-title" tabIndex={-1} className="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <h3 id="launch-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.launchWizard}</h3>
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="launch-worker-dialog-title" tabIndex={-1} className="w-full max-w-lg rounded-lg border border-ui-line bg-ui-surface shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-ui-line px-6 py-4">
+              <h3 id="launch-worker-dialog-title" className="font-semibold text-ui-ink">{t.clusterPage.launchWizard}</h3>
               <Button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
             </div>
             <div className="space-y-4 p-6">
@@ -721,19 +723,19 @@ export default function ClusterPage() {
                 <>
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">{t.clusterPage.sshWarning}</div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{labels.workerHost}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{labels.workerHost}</label>
                     <TextInput type="text" value={launchForm.host} onChange={event => setLaunchForm({ ...launchForm, host: event.target.value })} placeholder="192.168.x.x" className="h-10" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.rpcPort}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.rpcPort}</label>
                     <TextInput type="number" value={launchForm.port} onChange={event => setLaunchForm({ ...launchForm, port: parseInt(event.target.value, 10) || 50052 })} className="h-10" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshPort}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.sshPort}</label>
                     <TextInput type="number" value={launchForm.sshPort} onChange={event => setLaunchForm({ ...launchForm, sshPort: parseInt(event.target.value, 10) || 22 })} className="h-10" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.remoteOS}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.remoteOS}</label>
                     <SelectInput value={launchForm.remoteOs} onChange={event => setLaunchForm({ ...launchForm, remoteOs: event.target.value })} className="h-10 w-full">
                       <option value="auto">{t.clusterPage.autoDetect}</option>
                       <option value="linux">Linux</option>
@@ -742,7 +744,7 @@ export default function ClusterPage() {
                     </SelectInput>
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.remoteRpcPath}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.remoteRpcPath}</label>
                     <TextInput type="text" value={formatPathForDisplay(launchForm.rpcPath)} onChange={event => setLaunchForm({ ...launchForm, rpcPath: event.target.value })} placeholder={t.clusterPage.rpcPathPlaceholder} className="h-10" />
                   </div>
                 </>
@@ -751,14 +753,14 @@ export default function ClusterPage() {
               {launchStep === 1 && (
                 <>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshUser}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.sshUser}</label>
                     <TextInput type="text" value={launchForm.user} onChange={event => setLaunchForm({ ...launchForm, user: event.target.value })} placeholder="root" className="h-10" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshKeyPath}</label>
+                    <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.sshKeyPath}</label>
                     <TextInput type="text" value={formatPathForDisplay(launchForm.keyPath)} onChange={event => setLaunchForm({ ...launchForm, keyPath: event.target.value })} placeholder="~/.ssh/id_rsa" className="h-10" />
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-ui-muted">
                     {labels.sshKeyNotice}
                   </div>
                 </>
@@ -766,20 +768,20 @@ export default function ClusterPage() {
 
               {launchStep === 2 && (
                 <div className="space-y-3 text-sm">
-                  <div className="flex justify-between gap-3"><span className="shrink-0 text-slate-500">Worker</span><span className="min-w-0 break-all text-right text-slate-200">{launchForm.host}:{launchForm.port}</span></div>
-                  <div className="flex justify-between gap-3"><span className="shrink-0 text-slate-500">SSH</span><span className="min-w-0 break-all text-right text-slate-200">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
+                  <div className="flex justify-between gap-3"><span className="shrink-0 text-ui-muted">Worker</span><span className="min-w-0 break-all text-right text-ui-body">{launchForm.host}:{launchForm.port}</span></div>
+                  <div className="flex justify-between gap-3"><span className="shrink-0 text-ui-muted">SSH</span><span className="min-w-0 break-all text-right text-ui-body">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
                   <div className="break-all rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
                     {t.clusterPage.cmdPreview}: {(launchForm.rpcPath || 'rpc-server')} --host 127.0.0.1 --port {launchForm.port}
                   </div>
                   {launchError && (
-                    <div className="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">
+                    <div className="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-ui-danger">
                       {launchError}
                     </div>
                   )}
                 </div>
               )}
             </div>
-            <div className="flex justify-between border-t border-slate-800 px-6 py-4">
+            <div className="flex justify-between border-t border-ui-line px-6 py-4">
               <div>
                 {launchStep > 0 && (
                   <Button onClick={() => setLaunchStep(step => step - 1)} variant="subtle">{t.clusterPage.prevStep}</Button>
@@ -802,27 +804,27 @@ export default function ClusterPage() {
 
       {showLocalLaunch && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ui-scrim p-4"
           onMouseDown={event => { if (event.target === event.currentTarget) setShowLocalLaunch(false) }}
         >
-          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="local-worker-dialog-title" tabIndex={-1} className="w-full max-w-sm rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <h3 id="local-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.localLaunchTitle}</h3>
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="local-worker-dialog-title" tabIndex={-1} className="w-full max-w-sm rounded-lg border border-ui-line bg-ui-surface shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-ui-line px-6 py-4">
+              <h3 id="local-worker-dialog-title" className="font-semibold text-ui-ink">{t.clusterPage.localLaunchTitle}</h3>
               <Button onClick={() => setShowLocalLaunch(false)} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
             </div>
             <div className="space-y-3 p-6">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.rpcPort}</label>
+                <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.rpcPort}</label>
                 <TextInput type="number" value={localPort} onChange={event => setLocalPort(parseInt(event.target.value, 10) || 50052)} className="h-10" />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.engineDir}</label>
+                <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.engineDir}</label>
                 <div className="mb-2 flex items-center gap-3">
-                  <label className={`flex items-center gap-2 text-xs ${localMode === 'engine' ? 'text-blue-300' : 'text-slate-500'}`}>
+                  <label className={`flex items-center gap-2 text-xs ${localMode === 'engine' ? 'text-ui-info' : 'text-ui-muted'}`}>
                     <input type="radio" name="localMode" checked={localMode === 'engine'} onChange={() => setLocalMode('engine')} className="h-3 w-3" />
                     {t.clusterPage.engineMode}
                   </label>
-                  <label className={`flex items-center gap-2 text-xs ${localMode === 'custom' ? 'text-blue-300' : 'text-slate-500'}`}>
+                  <label className={`flex items-center gap-2 text-xs ${localMode === 'custom' ? 'text-ui-info' : 'text-ui-muted'}`}>
                     <input type="radio" name="localMode" checked={localMode === 'custom'} onChange={() => setLocalMode('custom')} className="h-3 w-3" />
                     {t.clusterPage.customMode}
                   </label>
@@ -859,10 +861,10 @@ export default function ClusterPage() {
                 )}
               </div>
               {launchError && (
-                <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{launchError}</div>
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-ui-danger">{launchError}</div>
               )}
             </div>
-            <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">
+            <div className="flex justify-end gap-2 border-t border-ui-line px-6 py-4">
               <Button onClick={() => setShowLocalLaunch(false)} variant="subtle">{t.common.cancel}</Button>
               <Button onClick={() => void handleLocalLaunch()} disabled={launching} variant="cyan">
                 {launching ? t.clusterPage.launching : t.instance.start}

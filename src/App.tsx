@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense, Component, ReactNode } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Activity, BarChart3, BookOpen, Cpu, Database, Download, HardDrive, Monitor, Network, Route, Server, Settings, Terminal } from 'lucide-react'
 import { version } from '../package.json'
 import { invokeApp as invoke } from './lib/ipc'
@@ -45,18 +46,18 @@ class ErrorBoundaryCore extends Component<{ children: ReactNode; copy: ErrorBoun
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex h-screen items-center justify-center bg-slate-100 px-6 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex h-screen items-center justify-center bg-ui-inset px-6 text-ui-ink">
+          <div className="w-full max-w-md rounded-lg border border-ui-line bg-ui-surface p-6 shadow-sm">
             <div className="mb-4 flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300">
                 <Terminal className="h-5 w-5" />
               </div>
               <div>
                 <h2 className="text-lg font-semibold">{this.props.copy.title}</h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400">{this.props.copy.description}</p>
+                <p className="text-sm text-ui-muted">{this.props.copy.description}</p>
               </div>
             </div>
-            <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+            <div className="mb-5 rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-sm text-ui-body">
               {this.state.error?.message || this.props.copy.unknown}
             </div>
             <Button
@@ -97,13 +98,13 @@ const TAB_CONTENT: Record<string, () => React.ReactElement> = {
 
 const renderTabContent = (tabId: string) => {
   const Renderer = TAB_CONTENT[tabId]
-  return Renderer ? <Renderer /> : <div className="p-6 text-center text-slate-500">...</div>
+  return Renderer ? <Renderer /> : <div className="p-6 text-center text-ui-muted">...</div>
 }
 
 function PageFallback({ label }: { label: string }) {
   return (
     <div className="flex min-h-[280px] items-center justify-center">
-      <div className="inline-flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+      <div className="inline-flex items-center gap-3 rounded-lg border border-ui-line bg-ui-surface px-4 py-3 text-sm text-ui-muted shadow-sm">
         <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         <span>{label}</span>
       </div>
@@ -142,15 +143,22 @@ function AppInner() {
 
   const upCount = useMemo(() => instances.filter(i => i.status === 'running').length, [instances])
   const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
-  const activeDownloadCount = useAppStore(state => Object.values(state.downloadTasks)
-    .filter(task => task.status === 'active' || task.status === 'paused' || task.status === 'pausing').length)
+  const [transferringCount, downloadTaskCount] = useAppStore(useShallow(state => {
+    let transferring = 0
+    let paused = 0
+    for (const task of Object.values(state.downloadTasks)) {
+      if (task.status === 'active') transferring++
+      else if (task.status === 'paused' || task.status === 'pausing') paused++
+    }
+    return [transferring, transferring + paused] as const
+  }))
 
   const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard, icon: BarChart3 },
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
-    { id: 'downloads', name: t.nav.downloads, icon: Download, badge: activeDownloadCount },
+    { id: 'downloads', name: t.nav.downloads, icon: Download, badge: { value: transferringCount, label: t.downloadPage.active } },
     { id: 'engine', name: t.nav.engine, icon: Cpu },
-    { id: 'instances', name: t.nav.instances, icon: Server, badge: upCount },
+    { id: 'instances', name: t.nav.instances, icon: Server, badge: { value: upCount, label: t.instance.running } },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'proxy', name: t.nav.proxy, icon: Route },
@@ -159,7 +167,7 @@ function AppInner() {
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'storage', name: t.nav.storage, icon: HardDrive },
     { id: 'guide', name: t.nav.guide, icon: BookOpen, separator: true },
-  ], [t, upCount, activeDownloadCount])
+  ], [t, transferringCount, upCount])
 
   const { productIssues, commandActions } = useCommandCenterModel()
 
@@ -323,9 +331,9 @@ function AppInner() {
   const immersiveContent = activeTab === 'bigscreen'
   const layoutWide = activeTab === 'logs' || activeTab === 'guide' || activeTab === 'storage' || immersiveContent || activeTab === 'proxy'
   const statusChips: ShellStatusChip[] = [
-    { label: t.nav.up || 'up', value: upCount, tone: 'emerald' },
-    { label: t.nav.down || 'down', value: downCount, tone: 'slate' },
-    { label: t.nav.downloads || 'Downloads', value: activeDownloadCount, tone: 'blue' },
+    { label: t.nav.up, value: upCount },
+    { label: t.nav.down, value: downCount },
+    { label: t.appShell.downloadTasks, value: downloadTaskCount },
   ]
   const pageContext: Record<string, string> = {
     dashboard: shellCopy.pageDescriptions.dashboard,
@@ -384,6 +392,7 @@ function AppInner() {
       appTitle={t.common.appTitle}
       version={version}
       navigation={navigation}
+      navigationLabel={shellCopy.navigation}
       activeId={activeTab}
       onNavigate={tab => {
         const { instanceListView, setActiveConfigInstanceId } = useAppStore.getState()

@@ -1,4 +1,4 @@
-import { SectionHeader, Surface } from '../ui'
+import { SelectInput } from '../ui'
 
 export type ConfigDirectoryGroup = {
   id: string
@@ -7,39 +7,26 @@ export type ConfigDirectoryGroup = {
 }
 
 export function ConfigDirectory({ title, groups }: { title: string; groups: ConfigDirectoryGroup[] }) {
-  const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  function jump(id: string) {
+    if (!id) return
+    const parent = groups.find(group => group.children?.some(child => child.id === id))
+    const expand = (sectionId: string) => {
+      const section = document.getElementById(sectionId)
+      section?.querySelector<HTMLButtonElement>(':scope > button[aria-expanded="false"], :scope > div > button[aria-expanded="false"]')?.click()
+      return section
+    }
+    if (parent) expand(parent.id)
+    requestAnimationFrame(() => {
+      const section = expand(id)
+      section?.scrollIntoView({ block: 'start' })
+      section?.querySelector<HTMLElement>('button, input, select')?.focus({ preventScroll: true })
+    })
   }
-  return (
-    <Surface as="aside" className="h-fit p-4 xl:sticky xl:top-4">
-      <SectionHeader title={title} />
-      <nav className="mt-4 space-y-1">
-        {groups.map(group => (
-          <div key={group.id}>
-            <button
-              type="button"
-              onClick={() => scrollToSection(group.id)}
-              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              <span>{group.title}</span>
-            </button>
-            {group.children && (
-              <div className="mt-1 space-y-1 border-l border-slate-200 pl-3 dark:border-slate-800">
-                {group.children.map(child => (
-                  <button
-                    key={child.id}
-                    type="button"
-                    onClick={() => scrollToSection(child.id)}
-                    className="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                  >
-                    <span>{child.title}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </nav>
-    </Surface>
-  )
+  return <SelectInput aria-label={title} value="" onChange={event => jump(event.target.value)} className="config-jump">
+    <option value="">{title}</option>
+    {groups.map(group => group.children ? <optgroup key={group.id} label={group.title}>
+      <option value={group.id}>{group.title}</option>
+      {group.children.map(child => <option key={child.id} value={child.id}>{child.title}</option>)}
+    </optgroup> : <option key={group.id} value={group.id}>{group.title}</option>)}
+  </SelectInput>
 }

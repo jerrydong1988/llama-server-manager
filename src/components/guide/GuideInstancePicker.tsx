@@ -15,14 +15,14 @@ export function GuideInstancePicker({ alwaysExpanded }: { alwaysExpanded: boolea
   if (!alwaysExpanded && instance && !switching) {
     return (
       <div className="flex min-w-0 items-center gap-2 text-xs" data-guide-instance>
-        <span className="min-w-0 truncate text-slate-600 dark:text-slate-300" title={instance.name}>{copy.selectInstance}: {instance.name}</span>
+        <span className="min-w-0 truncate text-ui-body" title={instance.name}>{copy.selectInstance}: {instance.name}</span>
         <Button size="sm" variant="subtle" disabled={configPending} onClick={() => setSwitching(true)}>{copy.switchInstance}</Button>
       </div>
     )
   }
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <label className="min-w-0 flex-1 text-xs text-slate-500 dark:text-slate-400">
+      <label className="min-w-0 flex-1 text-xs text-ui-muted">
         <span className="sr-only">{copy.selectInstance}</span>
         <SelectInput autoFocus={switching} className="w-full min-w-0" disabled={configPending} value={instance?.id ?? ''} onChange={event => { selectInstance(event.target.value); setSwitching(false) }}>
           <option value="" disabled>{copy.chooseInstance}</option>

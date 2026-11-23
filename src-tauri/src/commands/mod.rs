@@ -13,6 +13,7 @@ pub(crate) mod inference_metrics;
 pub mod model_inventory;
 pub mod monitoring;
 pub mod nvml;
+pub(crate) mod prefill;
 pub mod proxy;
 pub(crate) mod proxy_admission;
 pub(crate) mod proxy_listener;

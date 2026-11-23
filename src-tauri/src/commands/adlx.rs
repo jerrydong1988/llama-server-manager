@@ -51,6 +51,9 @@ pub struct AdlxMetrics {
     pub vram_used_mb: Option<f64>,
     pub vram_total_mb: Option<f64>,
     pub gpu_name: Option<String>,
+    pub gpu_temperature_c: Option<f64>,
+    pub gpu_power_w: Option<f64>,
+    pub gpu_board_power_w: Option<f64>,
 }
 
 /// Read function pointer from vtable at given index, cast to target type
@@ -74,6 +77,26 @@ unsafe fn copy_c_string(value: *const c_char) -> Option<String> {
     }
     let value = CStr::from_ptr(value).to_string_lossy().trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+// Slots in the base IADLXGPUMetricsSupport and IADLXGPUMetrics interfaces
+// from SDK/Include/IPerformanceMonitoring.h. A successful zero is a reading.
+unsafe fn supported_reading(
+    support: *mut c_void,
+    support_slot: usize,
+    metrics: *mut c_void,
+    reading_slot: usize,
+) -> Option<f64> {
+    type Check = unsafe extern "system" fn(*mut c_void, *mut u8) -> AdlxResult;
+    type Read = unsafe extern "system" fn(*mut c_void, *mut f64) -> AdlxResult;
+    let mut supported = 0;
+    let check = vtbl::<Check>(*(support as *const *const c_void), support_slot);
+    if check(support, &mut supported) != ADLX_OK || supported == 0 {
+        return None;
+    }
+    let mut value = f64::NAN;
+    let read = vtbl::<Read>(*(metrics as *const *const c_void), reading_slot);
+    (read(metrics, &mut value) == ADLX_OK && value.is_finite()).then_some(value)
 }
 
 pub fn collect_metrics() -> Option<AdlxMetrics> {
@@ -126,6 +149,9 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         vram_used_mb: None,
         vram_total_mb: None,
         gpu_name: None,
+        gpu_temperature_c: None,
+        gpu_power_w: None,
+        gpu_board_power_w: None,
     };
 
     // GetGPUs (index 1)
@@ -212,6 +238,15 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
                 && gpu_pct >= 0.0
             {
                 m.gpu_percent = Some(gpu_pct.clamp(0.0, 100.0) as f32);
+            }
+
+            let mut support = std::ptr::null_mut();
+            // PerformanceMonitoringServices::GetSupportedGPUMetrics.
+            if vtbl::<GetGM>(vt_pm, 21)(pm, gpu, &mut support) == ADLX_OK && !support.is_null() {
+                m.gpu_temperature_c = supported_reading(support, 6, gm, 7);
+                m.gpu_power_w = supported_reading(support, 8, gm, 9).filter(|v| *v >= 0.0);
+                m.gpu_board_power_w = supported_reading(support, 9, gm, 10).filter(|v| *v >= 0.0);
+                release(support);
             }
 
             // GM::GPUVRAM (index 12)

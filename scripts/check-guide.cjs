@@ -48,6 +48,8 @@ const REQUIRED_IMAGES = [
   '12-gufo-configuration.png',
   '13-background-tasks.png',
   '14-storage-maintenance.png',
+  '15-routing-api-keys.png',
+  '16-model-picker.png',
   'flow-01-first-run.png',
   'flow-02-start-and-diagnose.png',
   'flow-03-route-requests.png',

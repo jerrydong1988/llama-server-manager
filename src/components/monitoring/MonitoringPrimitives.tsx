@@ -12,7 +12,7 @@ const toneText: Record<SignalTone, string> = {
   red: 'text-red-600 dark:text-red-300',
   violet: 'text-violet-600 dark:text-violet-300',
   cyan: 'text-cyan-600 dark:text-cyan-300',
-  slate: 'text-slate-600 dark:text-slate-300',
+  slate: 'text-ui-body',
 }
 
 const toneBorder: Record<SignalTone, string> = {
@@ -22,7 +22,7 @@ const toneBorder: Record<SignalTone, string> = {
   red: 'border-red-300/40 bg-red-500/10',
   violet: 'border-violet-300/40 bg-violet-500/10',
   cyan: 'border-cyan-300/40 bg-cyan-500/10',
-  slate: 'border-slate-300 bg-slate-100 dark:border-slate-700 dark:bg-slate-800/70',
+  slate: 'border-ui-line bg-ui-inset',
 }
 
 const toneBar: Record<SignalTone, string> = {
@@ -32,7 +32,7 @@ const toneBar: Record<SignalTone, string> = {
   red: 'bg-red-500',
   violet: 'bg-violet-500',
   cyan: 'bg-cyan-500',
-  slate: 'bg-slate-500',
+  slate: 'bg-ui-control',
 }
 
 export function MonitorPanel({
@@ -51,8 +51,8 @@ export function MonitorPanel({
   bodyClassName?: string
 }) {
   return (
-    <section className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-100', className)}>
-      <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-800">
+    <section className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-ui-line bg-ui-surface text-ui-ink shadow-sm', className)}>
+      <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-ui-line px-4">
         <div className="flex min-w-0 items-center gap-2">
           {icon ? <span className="shrink-0 text-blue-500 dark:text-blue-300">{icon}</span> : null}
           <h3 className="truncate text-base font-semibold">{title}</h3>
@@ -82,13 +82,13 @@ export function StatusTile({
   return (
     <div className={joinClassNames('min-w-0 rounded-lg border px-4 py-3', toneBorder[tone], className)}>
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="truncate text-sm font-medium text-slate-600 dark:text-slate-400">{label}</div>
+        <div className="truncate text-sm font-medium text-ui-muted">{label}</div>
         <div className={joinClassNames('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border', toneBorder[tone], toneText[tone])}>
           {icon}
         </div>
       </div>
-      <div className="mt-3 truncate text-3xl font-semibold text-slate-950 dark:text-white" title={String(value)}>{value}</div>
-      <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={typeof detail === 'string' ? detail : undefined}>{detail}</div>
+      <div className="mt-3 truncate text-3xl font-semibold text-ui-ink" title={String(value)}>{value}</div>
+      <div className="mt-1 truncate text-xs text-ui-muted" title={typeof detail === 'string' ? detail : undefined}>{detail}</div>
     </div>
   )
 }
@@ -150,17 +150,17 @@ export function SignalMeter({
   const available = value != null && Number.isFinite(value)
   const safeValue = clampPercent(available ? value : 0)
   return (
-    <div className={joinClassNames('min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60', compact ? 'space-y-2' : 'space-y-3')}>
+    <div className={joinClassNames('min-w-0 rounded-lg border border-ui-line bg-ui-inset p-3', compact ? 'space-y-2' : 'space-y-3')}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {icon ? <div className={joinClassNames('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border', toneBorder[tone], toneText[tone])}>{icon}</div> : null}
-          <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{label}</div>
+          <div className="truncate text-sm font-semibold text-ui-ink">{label}</div>
         </div>
-        <div className="shrink-0 text-2xl font-semibold text-slate-950 dark:text-white">{available ? `${Math.round(safeValue)}%` : '--'}</div>
+        <div className="shrink-0 text-2xl font-semibold text-ui-ink">{available ? `${Math.round(safeValue)}%` : '--'}</div>
       </div>
-      <div className="min-h-8 break-words text-xs leading-4 text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>
+      <div className="min-h-8 break-words text-xs leading-4 text-ui-muted" title={detail}>{detail}</div>
       <div className="grid min-w-0 grid-cols-[minmax(32px,1fr)_minmax(80px,120px)] items-center gap-3">
-        <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+        <div className="h-2 overflow-hidden rounded-full bg-ui-line">
           <div className={joinClassNames('h-full rounded-full transition-[width]', toneBar[tone])} style={{ width: `${safeValue}%` }} />
         </div>
         <MiniSparkline values={sparkline} tone={tone} />
@@ -184,7 +184,7 @@ export function TrendChart({
   partialLabel,
 }: {
   values?: Array<number | null>
-  points?: Array<{ ts: number; value: number | null; state?: string; covered?: number; expected?: number }>
+  points?: Array<{ ts: number; value: number | null; state?: string; covered?: number; expected?: number; label?: string }>
   rangeStart?: number
   rangeEnd?: number
   emptyText: string
@@ -192,7 +192,7 @@ export function TrendChart({
   className?: string
   unit?: string
   valueFormatter?: (value: number) => string
-  kind?: 'bars' | 'line'
+  kind?: 'bars' | 'line' | 'points'
   sharedTimeAxis?: boolean
   partialLabel?: string
 }) {
@@ -213,14 +213,14 @@ export function TrendChart({
   }, [empty])
   if (empty) {
     return (
-      <div className={joinClassNames('flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400', className)}>
+      <div className={joinClassNames('flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-ui-line text-sm text-ui-muted', className)}>
         <Activity className="mr-2 h-4 w-4" />
         {emptyText}
       </div>
     )
   }
 
-  const height = sharedTimeAxis ? 132 : 260
+  const height = sharedTimeAxis ? 132 : kind === 'points' ? 176 : 260
   const chartPaddingTop = 18
   const chartPaddingBottom = points && !sharedTimeAxis ? 30 : 12
   const axis = buildChartAxis(safeValues)
@@ -229,6 +229,7 @@ export function TrendChart({
   const domainEnd = Math.max(rangeEnd ?? chartPoints[chartPoints.length - 1]?.ts ?? domainStart + 1, domainStart + 1)
   const segments: string[][] = []
   const bars = new Map<number, { x: number; y: number }>()
+  const dots: { x: number; y: number; label?: string }[] = []
   const partials: { x: number; y: number; detail: string }[] = []
   const yAt = (value: number) => height - chartPaddingBottom - (value / axis.max) * chartHeight
   let segment: string[] = []
@@ -241,6 +242,7 @@ export function TrendChart({
     const x = Math.max(0, Math.min(width, ((point.ts - domainStart) / (domainEnd - domainStart)) * width))
     const y = yAt(point.value)
     if (point.state === 'partial') partials.push({ x, y, detail: `${formatTimeLabel(point.ts)} · ${partialLabel ?? ''} ${point.covered}/${point.expected} · ${point.value} tok/s` })
+    else if (kind === 'points') dots.push({ x, y, label: point.label })
     else if (kind === 'bars') {
       const column = Math.floor(x / 4)
       if (y < (bars.get(column)?.y ?? Infinity)) bars.set(column, { x, y })
@@ -250,26 +252,31 @@ export function TrendChart({
   const descendingTicks = [...axis.ticks].reverse()
 
   return (
-    <div data-chart-kind={kind} className={joinClassNames('grid grid-cols-[3rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40', className)}>
-      <div className="relative text-right font-mono text-[11px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
+    <div data-chart-kind={kind} className={joinClassNames('grid grid-cols-[3rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-ui-line bg-ui-inset', className)}>
+      <div className="relative text-right font-mono text-[11px] tabular-nums text-ui-muted" aria-hidden="true">
         {descendingTicks.map(tick => <span key={tick} data-tick={tick} className="absolute right-2" style={{ top: yAt(tick), transform: 'translateY(-50%)' }}>{valueFormatter(tick)}</span>)}
       </div>
-      <div ref={plot} className="relative min-w-0 border-l border-slate-200 dark:border-slate-800">
-        {unit ? <span className="absolute right-3 top-2 z-10 rounded bg-slate-50/90 px-1 text-[11px] text-slate-500 dark:bg-slate-950/80 dark:text-slate-400">{unit}</span> : null}
+      <div ref={plot} className="relative min-w-0 border-l border-ui-line">
+        {unit ? <span className="absolute right-3 top-2 z-10 rounded bg-ui-inset px-1 text-[11px] text-ui-muted">{unit}</span> : null}
         <svg viewBox={`0 0 ${width} ${height}`} style={{ height }} className={joinClassNames('w-full', toneText[tone])} preserveAspectRatio="none" aria-hidden="true">
           {axis.ticks.map(tick => {
             const y = yAt(tick)
-            return <line key={tick} x1="0" y1={y} x2={width} y2={y} stroke="currentColor" className="text-slate-300 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
+            return <line key={tick} x1="0" y1={y} x2={width} y2={y} stroke="currentColor" className="text-ui-body" strokeWidth="1" strokeDasharray="5 7" />
           })}
+          {dots.map((point, index) => (
+            <circle key={index} cx={point.x} cy={point.y} r={4} fill="currentColor">
+              <title>{point.label}</title>
+            </circle>
+          ))}
           {[...bars].map(([column, point]) => <rect key={column} x={Math.min(width - 3.5, Math.max(0, point.x - 1.75))} y={point.y} width="3.5" height={Math.max(1, yAt(0) - point.y)} fill="currentColor" />)}
           {segments.map((line, index) => line.length > 1
             ? <polyline key={index} points={line.join(' ')} fill="none" stroke="currentColor" vectorEffect="non-scaling-stroke" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             : <circle key={index} cx={line[0].split(',')[0]} cy={line[0].split(',')[1]} r="3.5" fill="currentColor" />)}
           {partials.map((point, index) => <circle key={index} data-partial cx={point.x} cy={point.y} r="3" fill="none" stroke="currentColor" vectorEffect="non-scaling-stroke"><title>{point.detail}</title></circle>)}
         </svg>
-        {!safeValues.length && <span className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400">{emptyText}</span>}
+        {!safeValues.length && <span className="absolute inset-0 flex items-center justify-center text-xs text-ui-muted">{emptyText}</span>}
         {points && !sharedTimeAxis ? (
-          <div className="pointer-events-none absolute inset-x-2 bottom-1 flex justify-between font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
+          <div className="pointer-events-none absolute inset-x-2 bottom-1 flex justify-between font-mono text-[10px] tabular-nums text-ui-muted" aria-hidden="true">
             <span>{formatTimeLabel(domainStart)}</span>
             <span>{formatTimeLabel(domainEnd)}</span>
           </div>
@@ -300,12 +307,12 @@ function formatAxisValue(value: number) {
 export function ActivityRow({ item }: { item: ActivityFeedItem }) {
   const tone = item.severity === 'critical' ? 'red' : item.severity === 'warning' ? 'amber' : item.severity === 'success' ? 'emerald' : 'blue'
   return (
-    <div className="grid min-w-0 grid-cols-[58px_76px_minmax(0,1fr)] items-center gap-3 border-b border-slate-200 px-2 py-2 last:border-b-0 dark:border-slate-800">
-      <span className="text-xs text-slate-500">{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+    <div className="grid min-w-0 grid-cols-[58px_76px_minmax(0,1fr)] items-center gap-3 border-b border-ui-line px-2 py-2 last:border-b-0">
+      <span className="text-xs text-ui-muted">{new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       <Badge tone={tone}>{item.label}</Badge>
       <div className="min-w-0">
-        <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={item.title}>{item.title}</div>
-        <div className="truncate text-xs text-slate-500" title={item.detail}>{item.detail}</div>
+        <div className="truncate text-sm font-medium text-ui-ink" title={item.title}>{item.title}</div>
+        <div className="truncate text-xs text-ui-muted" title={item.detail}>{item.detail}</div>
       </div>
     </div>
   )
@@ -325,25 +332,25 @@ export function ActiveRequestRow({
   const elapsed = formatDuration((Date.now() - task.started_at_ms) / 1000)
   if (workload !== 'inference') {
     return (
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_100px_82px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/60">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_100px_82px] items-center gap-3 rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-sm">
         <div className="min-w-0">
-          <div className="truncate font-medium text-slate-900 dark:text-slate-100" title={instanceName}>#{task.task_id} {instanceName ? `· ${instanceName}` : ''}</div>
-          <div className="text-xs text-slate-500">slot {task.slot_id}</div>
+          <div className="truncate font-medium text-ui-ink" title={instanceName}>#{task.task_id} {instanceName ? `· ${instanceName}` : ''}</div>
+          <div className="text-xs text-ui-muted">slot {task.slot_id}</div>
         </div>
         <Badge tone={workload === 'reranker' ? 'blue' : 'violet'}>{workloadText}</Badge>
-        <div className="truncate text-right text-slate-500">{elapsed}</div>
+        <div className="truncate text-right text-ui-muted">{elapsed}</div>
       </div>
     )
   }
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_80px_92px_82px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/60">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_80px_92px_82px] items-center gap-3 rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-sm">
       <div className="min-w-0">
-        <div className="truncate font-medium text-slate-900 dark:text-slate-100" title={instanceName}>#{task.task_id} {instanceName ? `· ${instanceName}` : ''}</div>
-        <div className="text-xs text-slate-500">slot {task.slot_id}</div>
+        <div className="truncate font-medium text-ui-ink" title={instanceName}>#{task.task_id} {instanceName ? `· ${instanceName}` : ''}</div>
+        <div className="text-xs text-ui-muted">slot {task.slot_id}</div>
       </div>
-      <div className="truncate text-slate-600 dark:text-slate-300">{formatCompactNumber(task.n_decoded)}</div>
+      <div className="truncate text-ui-body">{formatCompactNumber(task.n_decoded)}</div>
       <div className="truncate text-emerald-600 dark:text-emerald-300">{formatRate(task.tg_3s ?? task.tg)}</div>
-      <div className="truncate text-slate-500">{elapsed}</div>
+      <div className="truncate text-ui-muted">{elapsed}</div>
     </div>
   )
 }
@@ -373,24 +380,21 @@ export function SessionCard({
     <button
       type="button"
       onClick={onClick}
-      className={joinClassNames(
-        'block w-full rounded-lg border p-3 text-left transition',
-        selected
-          ? 'border-blue-400 bg-blue-50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.22)] dark:border-blue-500/50 dark:bg-blue-500/20'
-          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700',
-      )}
+      aria-pressed={selected}
+      data-selected={selected}
+      className="console-list-row block w-full rounded-lg border border-ui-line p-3 text-left"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100" title={title}>{title}</div>
-          <div className="mt-1 truncate text-xs text-slate-500" title={subtitle}>{subtitle}</div>
+          <div className="truncate text-sm font-semibold text-ui-ink" title={title}>{title}</div>
+          <div className="mt-1 truncate text-xs text-ui-muted" title={subtitle}>{subtitle}</div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <Badge tone={running ? 'emerald' : 'slate'}>{statusLabel}</Badge>
           {workload ? <Badge tone={workloadTone}>{workload}</Badge> : null}
         </div>
       </div>
-      <div className="mt-3 truncate text-xs text-slate-500" title={meta}>{meta}</div>
+      <div className="mt-3 truncate text-xs text-ui-muted" title={meta}>{meta}</div>
     </button>
   )
 }
@@ -402,7 +406,7 @@ export function ComparisonTable({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="flex min-h-[110px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700">
+      <div className="flex min-h-[110px] items-center justify-center rounded-lg border border-dashed border-ui-line text-sm text-ui-muted">
         <CheckCircle2 className="mr-2 h-4 w-4" />
         --
       </div>
@@ -410,14 +414,14 @@ export function ComparisonTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+    <div className="overflow-hidden rounded-lg border border-ui-line">
       <table className="w-full table-fixed text-left text-sm">
-        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+        <tbody className="divide-y divide-ui-line">
           {rows.map(row => (
             <tr key={row.metric}>
-              <td className="px-3 py-2 text-xs text-slate-500">{row.metric}</td>
-              <td className="px-3 py-2 font-medium text-slate-900 dark:text-slate-100">{row.current}</td>
-              <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{row.baseline}</td>
+              <td className="px-3 py-2 text-xs text-ui-muted">{row.metric}</td>
+              <td className="px-3 py-2 font-medium text-ui-ink">{row.current}</td>
+              <td className="px-3 py-2 text-ui-body">{row.baseline}</td>
               <td className={joinClassNames('px-3 py-2 text-right text-xs font-medium', toneText[row.tone || 'slate'])}>{row.delta || '--'}</td>
             </tr>
           ))}

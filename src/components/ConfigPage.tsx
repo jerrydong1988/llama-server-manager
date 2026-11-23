@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, CheckCircle2, Cpu, File, ListChecks, LoaderCircle, RotateCcw, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, ListChecks, LoaderCircle, RotateCcw, Settings, ShieldCheck, Save, Sparkles, X } from 'lucide-react'
 import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { getConfigPageLabels, getConfigTemplates, type ConfigTemplate } from '../i18n/configPageCopy'
@@ -17,14 +17,14 @@ import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotic
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
 import { resolveEffectiveEngine } from '../store/engineResolution'
 import { findMatchingProjector } from '../modelProjector'
-import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface } from './ui'
+import { Badge, Button, EmptyState, InsetSurface, PathText, Surface } from './ui'
 import { applyExplicitOverrides, explicitOverrideKeys, inheritParameters, markExplicitOverride } from '../parameterIntent'
 import { LaunchModePanel } from './ConfigPage/LaunchModePanel'
 import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 import { ParameterSearch } from './ConfigPage/ParameterSearch'
 import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
 import { ConfigFloatingActions } from './ConfigPage/ConfigFloatingActions'
-import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/ModelAssetPicker'
+import { ModelAssetPicker, type ModelAssetPickerTarget } from './ModelAssetPicker'
 import { FieldRuntimeProvider } from './ConfigPage/shared'
 import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey } from './ConfigPage/configPreflight'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
@@ -153,7 +153,7 @@ const LlamaConfigPage = () => {
   }, [guideConfigPending])
 
   saveShortcutRef.current = async () => {}
-  if (!local) return <div className="space-y-5"><BackToInstancesButton /><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
+  if (!local) return <div className="console-page space-y-4"><BackToInstancesButton /><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
 
   const overrideKeys = explicitOverrideKeys(local)
   const reviewOverrideKeys = canonicalConfigFields(overrideKeys)
@@ -395,7 +395,6 @@ const LlamaConfigPage = () => {
     ...(!manualMode && unsupportedEngineFlags.length > 0 ? [{ tone: 'red', text: labels.engineCompatibilityBlocked }] : []),
     ...(!manualMode && currentEngine && engineCompatibilityMode !== 'full' ? [{ tone: 'amber', text: labels.engineCompatibilityLimitedCheck }] : []),
     ...(!manualMode && currentEngine && engineVersionStatus === 'unknown' ? [{ tone: 'amber', text: labels.engineVersionUnknownCheck }] : []),
-    ...(liveWarnings.length > 0 ? [{ tone: warningTone, text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
   ]
   const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
   const selectedTemplateChanges = selectedTemplate ? getTemplateChanges(local, selectedTemplate.changes, t, labels) : []
@@ -454,7 +453,6 @@ const LlamaConfigPage = () => {
     { id: 'config-advanced-custom', title: t.configPage.customArgs },
   ]
   const directoryGroups = [
-    { id: 'config-checkpoint', title: t.checkpoint.configTitle },
     { id: 'config-basic', title: t.configPage.basic },
     ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning }] : []),
     { id: 'config-performance', title: t.configPage.performance },
@@ -463,68 +461,48 @@ const LlamaConfigPage = () => {
       title: t.configPage.advSectionTitle,
       children: advancedDirectoryGroups,
     },
+    { id: 'config-checkpoint', title: t.checkpoint.configTitle },
   ]
   const saveDisabled = !inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))
   const savingLabel = saveStage === 'validating' ? t.configPage.validating : saveStage === 'persisting' ? t.configPage.persisting : t.configPage.saving
 
   return (
-    <div className="space-y-5">
-      <Surface as="section" id="config-page-actions">
-        <div className="flex flex-col gap-4 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-300">
-              <SlidersHorizontal className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="truncate text-xl font-semibold text-slate-950 dark:text-slate-50">{t.configPage.title}</h1>
-                <Badge tone="slate" className="max-w-[220px] truncate">
-                  {inst?.name}
-                </Badge>
-                {isEmbedding && <Badge tone="blue">{labels.embeddingMode}</Badge>}
-              </div>
-              <p className="mt-1 max-w-3xl truncate text-sm text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-end gap-2 xl:shrink-0">
-            {!manualMode && <Badge tone="slate">{labels.unsavedChanges} {configChanges.length}</Badge>}
-            {!manualMode && <Badge tone="blue">{labels.emittedParams} {emittedParams.size}</Badge>}
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <BackToInstancesButton disabled={saving} />
-              <Button
-                onClick={save}
-                disabled={saveDisabled}
-                variant="primary"
-                data-guide="config-save"
-                icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                className="shrink-0"
-              >
-                {saving ? savingLabel : saved ? t.configPage.saved : t.configPage.save}
-              </Button>
-            </div>
+    <div className="console-page space-y-4" data-workspace="config">
+      <header id="config-page-actions" className="console-heading-row">
+        <div className="min-w-0">
+          <h2 className="console-title break-words">{inst?.name || t.configPage.title}</h2>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ui-muted">
+            {currentEngine && <span>{currentEngine.name}</span>}
+            {currentModel && <span className="max-w-full truncate" title={currentModel.path}>{pathBasename(currentModel.path)}</span>}
+            {isEmbedding && <Badge>{labels.embeddingMode}</Badge>}
           </div>
         </div>
-      </Surface>
+        <div className="console-action-row">
+          {configChanges.length > 0 && <span role="status" className="text-xs font-medium text-ui-warn">{labels.unsavedChanges} {configChanges.length}</span>}
+          {liveWarnings.length > 0 && <Button size="toolbar" className="console-review-link" data-tone={warningTone} onClick={() => document.getElementById('config-validation')?.focus()}>
+            <AlertTriangle size={16} />{labels.warnings} {liveWarnings.length}
+          </Button>}
+          <BackToInstancesButton disabled={saving} />
+          {!manualMode && !isEmbedding && <Button size="toolbar" data-guide="config-presets" icon={<Sparkles size={14} />}
+            onClick={() => setShowPresetAssistant(true)} disabled={engineCompatibilityMode !== 'full'}
+            title={engineCompatibilityMode !== 'full' ? labels.templateCompatibilityDisabled : labels.quickTemplatesDesc}>
+            {labels.openPresetAssistant}
+          </Button>}
+          <Button size="toolbar" onClick={save} disabled={saveDisabled} variant="primary" data-guide="config-save"
+            icon={saving ? <LoaderCircle size={15} className="animate-spin" /> : saved ? <CheckCircle2 size={15} /> : <Save size={15} />}>
+            {saving ? savingLabel : saved ? t.configPage.saved : t.configPage.save}
+          </Button>
+        </div>
+      </header>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {[
-          { label: labels.unsavedChanges, value: configChanges.length, icon: SlidersHorizontal, tone: 'text-slate-300 bg-slate-500/10 border-slate-500/20' },
-          { label: labels.emittedParams, value: emittedParams.size, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
-          { label: labels.warnings, value: liveWarnings.length, icon: AlertTriangle, tone: warningTone === 'red' ? 'text-red-300 bg-red-500/10 border-red-500/20' : warningTone === 'amber' ? 'text-amber-300 bg-amber-500/10 border-amber-500/20' : warningTone === 'sky' ? 'text-sky-300 bg-sky-500/10 border-sky-500/20' : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
-          { label: labels.model, value: currentModel ? pathBasename(currentModel.path) : '--', icon: File, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
-          { label: labels.engine, value: currentEngine?.name || '--', icon: Cpu, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
-        ].map(card => (
-          <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} valueClassName="text-xl leading-7" />
-        ))}
-      </div>
-
-      <div className={manualMode ? 'grid gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]'}>
-        {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} />}
-
+      {!manualMode && <div className="config-workspace-tools">
+        <ParameterSearch query={searchQuery} onQueryChange={setSearchQuery} labels={labels} />
+        <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} />
+      </div>}
+      <div className="config-workspace-grid">
         <div className="space-y-4">
           {saved && (
-            <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+            <div className="flex items-start gap-3 rounded-lg border border-ui-line bg-ui-selected px-4 py-3 text-sm text-ui-positive">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 {t.configPage.savedMsg}
@@ -537,7 +515,7 @@ const LlamaConfigPage = () => {
           )}
 
           {!manualMode && isEmbedding && (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
+            <div className="rounded-lg border border-ui-line bg-ui-info-bg px-4 py-3 text-sm text-ui-info">
               {t.configPage.embeddingBanner}
             </div>
           )}
@@ -561,18 +539,15 @@ const LlamaConfigPage = () => {
             />
           )}
 
-          <CheckpointPanel config={local} engineExe={currentEngine?.exe} instanceId={configInstanceId || local.id} labels={t.checkpoint}
-            onCheckpointChange={next => set('kv_checkpoint', next)}
-            onApplyRequirements={reasons => applyCheckpointRequirements(local, reasons, set)} />
           {!manualMode && visibleVectorCleanupGroups.length > 0 && (
-            <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+            <div className="flex items-start gap-3 rounded-lg border border-ui-line bg-ui-selected px-4 py-3 text-sm text-ui-positive">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="min-w-0">
                 <p className="font-medium">{t.configPage.vectorCleanupTitle}</p>
-                <p className="mt-1 text-emerald-700/80 dark:text-emerald-200/80">{t.configPage.vectorCleanupDescription}</p>
+                <p className="mt-1 text-ui-positive">{t.configPage.vectorCleanupDescription}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {visibleVectorCleanupGroups.map(group => (
-                    <span key={group.group} className="rounded-md border border-emerald-200 bg-white/70 px-2 py-1 text-xs dark:border-emerald-500/20 dark:bg-slate-950/30">
+                    <span key={group.group} className="rounded-md border border-ui-line bg-ui-surface px-2 py-1 text-xs">
                       {group.label}: {group.count} {t.configPage.vectorCleanupItems}
                     </span>
                   ))}
@@ -582,7 +557,7 @@ const LlamaConfigPage = () => {
           )}
 
           {!manualMode && !isEmbedding && lastTemplateSnapshot && (
-            <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 rounded-lg border border-ui-line bg-ui-info-bg px-4 py-3 text-sm text-ui-info sm:flex-row sm:items-center sm:justify-between">
               <span className="inline-flex min-w-0 items-center gap-2">
                 <Sparkles className="h-4 w-4 shrink-0" />
                 <span className="min-w-0">
@@ -593,37 +568,6 @@ const LlamaConfigPage = () => {
                 {labels.undoTemplate}
               </Button>
             </div>
-          )}
-
-          {!manualMode && !isEmbedding && (
-          <Surface className="p-5" data-guide="config-presets">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
-              <Button
-                onClick={() => setShowPresetAssistant(true)}
-                disabled={engineCompatibilityMode !== 'full'}
-                title={engineCompatibilityMode !== 'full' ? labels.templateCompatibilityDisabled : undefined}
-                icon={<Sparkles className="h-4 w-4" />}
-                className="shrink-0"
-              >
-                {labels.openPresetAssistant}
-              </Button>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <InsetSurface className="flex items-center gap-3 p-3">
-                <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-400" />
-                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetNoDirectApply}</span>
-              </InsetSurface>
-              <InsetSurface className="flex items-center gap-3 p-3">
-                <ListChecks className="h-5 w-5 shrink-0 text-blue-400" />
-                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetSafeHint}</span>
-              </InsetSurface>
-              <InsetSurface className="flex items-center gap-3 p-3">
-                <Sparkles className="h-5 w-5 shrink-0 text-violet-400" />
-                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetRecommended}: {quickTemplates[0]?.title}</span>
-              </InsetSurface>
-            </div>
-          </Surface>
           )}
 
           {!manualMode && (
@@ -651,34 +595,21 @@ const LlamaConfigPage = () => {
               }}
               onInherit={inherit}
             >
-              <ParameterSearch query={searchQuery} onQueryChange={setSearchQuery} labels={labels} />
               <BasicSection {...sectionProps} />
               {!isEmbedding && <ReasoningSection {...sectionProps} />}
               <PerformanceSection {...sectionProps} />
               <AdvancedSection {...sectionProps} />
             </FieldRuntimeProvider>
           )}
+          <CheckpointPanel config={local} engineExe={currentEngine?.exe} instanceId={configInstanceId || local.id} labels={t.checkpoint}
+            onCheckpointChange={next => set('kv_checkpoint', next)}
+            onApplyRequirements={reasons => applyCheckpointRequirements(local, reasons, set)} />
         </div>
 
-        <Surface as="aside" className="h-fit p-5 xl:col-span-2 2xl:sticky 2xl:top-4 2xl:col-span-1">
-          <div className="mb-5">
-            <SectionHeader title={labels.configContext} description={labels.configContextDesc} />
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-3 2xl:block 2xl:space-y-4">
-            <InsetSurface className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                  <Settings className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={inst?.name}>{inst?.name}</p>
-                  <PathText value={endpoint} maxLength={36} className="mt-1 text-slate-500" />
-                </div>
-              </div>
-            </InsetSurface>
-
-            <InsetSurface className="space-y-3 p-4">
+        <Surface as="aside" id="config-context" className="config-context min-w-0 p-4">
+          <h3 className="mb-3 text-base font-semibold text-ui-ink">{labels.configContext}</h3>
+          <div className="grid min-w-0 gap-4">
+            <div className="space-y-2 text-sm">
               {[
                 { label: labels.primaryModel, value: primaryModelPath || '--', path: !!primaryModelPath },
                 { label: labels.draftModel, value: draftModelPath || '--', path: !!draftModelPath },
@@ -689,45 +620,37 @@ const LlamaConfigPage = () => {
                 { label: labels.modifiedParams, value: String(configChanges.length) },
               ].map(row => (
                 <div key={row.label} className="grid min-w-0 grid-cols-[96px_minmax(0,1fr)] items-start gap-3">
-                  <span className="truncate text-sm text-slate-500" title={row.label}>{row.label}</span>
+                  <span className="truncate text-sm text-ui-muted" title={row.label}>{row.label}</span>
                   {row.path ? (
-                    <PathText value={row.value} maxLength={44} className="text-right text-slate-700 dark:text-slate-200" />
+                    <PathText value={row.value} maxLength={44} className="text-right text-ui-body" />
                   ) : (
-                    <span className="min-w-0 truncate text-right text-sm text-slate-700 dark:text-slate-200" title={row.value}>
+                    <span className="min-w-0 truncate text-right text-sm text-ui-body" title={row.value}>
                       {row.value}
                     </span>
                   )}
                 </div>
               ))}
-            </InsetSurface>
+            </div>
 
-            <InsetSurface className="p-4">
-              <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.validationSummary}</p>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                {[
-                  [labels.high, warningCounts.high, 'text-red-300 border-red-500/20 bg-red-500/10'],
-                  [labels.medium, warningCounts.medium, 'text-amber-300 border-amber-500/20 bg-amber-500/10'],
-                  [labels.low, warningCounts.low, 'text-sky-300 border-sky-500/20 bg-sky-500/10'],
-                ].map(([label, count, tone]) => (
-                  <div key={label} className={`rounded-lg border px-1 py-3 ${tone}`}>
-                    <p className="text-lg font-semibold">{count}</p>
-                    <p className="mt-1 text-[11px]">{label}</p>
-                  </div>
-                ))}
+            <div className="border-t border-ui-line pt-3">
+              <h4 id="config-validation" tabIndex={-1} className="text-sm font-semibold text-ui-ink">{labels.validationSummary}</h4>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ui-muted">
+                {warningCounts.high > 0 && <span className="text-ui-danger">{labels.high} {warningCounts.high}</span>}
+                {warningCounts.medium > 0 && <span className="text-ui-warn">{labels.medium} {warningCounts.medium}</span>}
+                {warningCounts.low > 0 && <span>{labels.low} {warningCounts.low}</span>}
               </div>
-
               <div className="mt-4 space-y-2">
-                {checkMessages.length === 0 ? (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+                {checkMessages.length === 0 && visibleWarnings.length === 0 ? (
+                  <div className="rounded-lg border border-ui-line bg-ui-selected px-3 py-2 text-sm text-ui-positive">
                     {labels.checkPassed}
                   </div>
                 ) : checkMessages.map((message, index) => (
                   <div
                     key={`${message.text}-${index}`}
                     className={`rounded-lg px-3 py-2 text-sm ${
-                      message.tone === 'red' ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
-                        : message.tone === 'amber' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
-                          : 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-200'
+                      message.tone === 'red' ? 'bg-ui-danger-bg text-ui-danger'
+                        : message.tone === 'amber' ? 'bg-ui-warn-bg text-ui-warn'
+                          : 'bg-ui-info-bg text-ui-info'
                     }`}
                   >
                     {message.text}
@@ -742,10 +665,10 @@ const LlamaConfigPage = () => {
                       key={`${warning.key}-${index}`}
                       className={`rounded-lg px-3 py-2 text-sm ${
                         warning.severity === 'high'
-                          ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
+                          ? 'bg-ui-danger-bg text-ui-danger'
                           : warning.severity === 'medium'
-                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
-                            : 'bg-sky-500/10 text-sky-200'
+                            ? 'bg-ui-warn-bg text-ui-warn'
+                            : 'bg-ui-info-bg text-ui-info'
                       }`}
                     >
                       {t.configPage[warning.key] || warning.key}
@@ -753,7 +676,7 @@ const LlamaConfigPage = () => {
                   ))}
                 </div>
               )}
-            </InsetSurface>
+            </div>
 
             {!manualMode && (
               <ConfigChangePanel
@@ -771,12 +694,12 @@ const LlamaConfigPage = () => {
 
             <InsetSurface className="p-4">
               <div className="flex items-start gap-3">
-                <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3 text-sky-300">
+                <div className="rounded-lg border border-ui-line bg-ui-info-bg p-3 text-ui-info">
                   <Activity className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.performanceLink}</p>
-                  <p className="mt-1 text-sm leading-5 text-slate-500">{labels.performanceLinkDesc}</p>
+                  <p className="text-sm font-medium text-ui-ink">{labels.performanceLink}</p>
+                  <p className="mt-1 text-sm leading-5 text-ui-muted">{labels.performanceLinkDesc}</p>
                   <Button onClick={() => setActiveTab('perf')} variant="secondary" className="mt-3 w-full" icon={<Activity className="h-4 w-4" />}>
                     {labels.openPerformance}
                   </Button>
@@ -803,15 +726,15 @@ const LlamaConfigPage = () => {
       />
 
       {showPresetAssistant && !isEmbedding && selectedTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.25)] dark:border-slate-800 dark:bg-slate-900 dark:shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/90">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ui-scrim p-4 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-label={labels.quickTemplates} className="console-surface console-popover flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden">
+            <div className="flex items-start justify-between gap-4 border-b border-ui-line bg-ui-inset px-5 py-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="h-5 w-5 text-blue-500" />
-                  <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.presetAssistant}</h3>
+                  <Sparkles className="h-5 w-5 text-ui-info" />
+                  <h3 className="text-lg font-semibold text-ui-ink">{labels.presetAssistant}</h3>
                 </div>
-                <p className="mt-1 text-sm text-slate-500">{labels.presetAssistantDesc}</p>
+                <p className="mt-1 text-sm text-ui-muted">{labels.presetAssistantDesc}</p>
               </div>
               <Button onClick={() => setShowPresetAssistant(false)} variant="subtle" size="icon" aria-label="Close">
                 <X className="h-5 w-5" />
@@ -819,8 +742,8 @@ const LlamaConfigPage = () => {
             </div>
 
             <div className="grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
-              <aside className="min-h-0 overflow-y-auto border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50 lg:border-b-0 lg:border-r">
-                <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+              <aside className="min-h-0 overflow-y-auto border-b border-ui-line bg-ui-inset p-4 lg:border-b-0 lg:border-r">
+                <div className="mb-3 rounded-lg border border-ui-line bg-ui-selected px-3 py-2 text-sm text-ui-positive">
                   {labels.presetSafeHint}
                 </div>
                 <div className="space-y-2">
@@ -832,17 +755,15 @@ const LlamaConfigPage = () => {
                       <button
                         key={template.id}
                         type="button"
+                        aria-pressed={isSelected}
+                        data-selected={isSelected}
                         onClick={() => setSelectedTemplateId(template.id)}
-                        className={`w-full rounded-lg border p-3 text-left transition ${
-                          isSelected
-                            ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-400/30 dark:border-blue-500/60 dark:bg-blue-500/10'
-                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:border-slate-700 dark:hover:bg-slate-800/70'
-                        }`}
+                        className="console-list-row w-full rounded-lg border border-ui-line p-3 text-left"
                       >
                         <span className="flex items-start justify-between gap-3">
                           <span className="min-w-0">
-                            <span className="block text-sm font-semibold text-slate-900 dark:text-slate-100">{template.title}</span>
-                            <span className="mt-1 block text-xs leading-5 text-slate-500">{template.subtitle}</span>
+                            <span className="block text-sm font-semibold text-ui-ink">{template.title}</span>
+                            <span className="mt-1 block text-xs leading-5 text-ui-muted">{template.subtitle}</span>
                           </span>
                           <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${template.tone}`}>
                             {isApplied ? labels.appliedTemplate : changeCount}
@@ -858,22 +779,22 @@ const LlamaConfigPage = () => {
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-xl font-semibold text-slate-950 dark:text-slate-50">{selectedTemplate.title}</h4>
+                      <h4 className="text-xl font-semibold text-ui-ink">{selectedTemplate.title}</h4>
                       <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${selectedTemplate.tone}`}>
                         {selectedTemplate.subtitle}
                       </span>
                     </div>
-                    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{selectedTemplate.description}</p>
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-ui-muted">{selectedTemplate.description}</p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300">
-                    <ListChecks className="h-4 w-4 text-blue-400" />
+                  <div className="flex shrink-0 items-center gap-2 rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-sm text-ui-muted">
+                    <ListChecks className="h-4 w-4 text-ui-info" />
                     <span>{selectedTemplateChanges.length} {labels.templateChangeCount}</span>
                   </div>
                 </div>
 
                 <div className="mt-5 grid gap-4 lg:grid-cols-2">
                   <InsetSurface className="p-4">
-                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateBestFor}</p>
+                    <p className="text-sm font-medium text-ui-ink">{labels.templateBestFor}</p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {selectedTemplate.bestFor.map(item => (
                         <Badge key={item} tone="blue" className="px-2.5 py-1 text-xs">{item}</Badge>
@@ -881,11 +802,11 @@ const LlamaConfigPage = () => {
                     </div>
                   </InsetSurface>
                   <InsetSurface className="p-4">
-                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateHighlights}</p>
-                    <ul className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                    <p className="text-sm font-medium text-ui-ink">{labels.templateHighlights}</p>
+                    <ul className="mt-3 space-y-2 text-sm text-ui-muted">
                       {selectedTemplate.highlights.map(item => (
                         <li key={item} className="flex gap-2">
-                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ui-positive" />
                           <span>{item}</span>
                         </li>
                       ))}
@@ -896,13 +817,13 @@ const LlamaConfigPage = () => {
                 {(inst?.status === 'running' || overwrittenChanges.length > 0) && (
                   <div className="mt-4 space-y-2">
                     {inst?.status === 'running' && (
-                      <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+                      <div className="flex gap-2 rounded-lg border border-ui-line bg-ui-warn-bg px-3 py-2 text-sm text-ui-warn">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                         <span>{labels.templateRunningWarning}</span>
                       </div>
                     )}
                     {overwrittenChanges.length > 0 && (
-                      <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+                      <div className="flex gap-2 rounded-lg border border-ui-line bg-ui-warn-bg px-3 py-2 text-sm text-ui-warn">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                         <span>{labels.templateOverwriteWarning}</span>
                       </div>
@@ -913,26 +834,26 @@ const LlamaConfigPage = () => {
                 <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
                   <InsetSurface className="p-4">
                     <div className="mb-4">
-                      <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateDiff}</p>
-                      <p className="mt-1 text-sm text-slate-500">{labels.templateDiffDesc}</p>
+                      <p className="text-sm font-medium text-ui-ink">{labels.templateDiff}</p>
+                      <p className="mt-1 text-sm text-ui-muted">{labels.templateDiffDesc}</p>
                     </div>
                     {selectedTemplateChanges.length === 0 ? (
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/40">
+                      <div className="rounded-lg border border-ui-line bg-ui-inset px-3 py-3 text-sm text-ui-muted">
                         {labels.templateNoDiff}
                       </div>
                     ) : (
                       <div className="space-y-4">
                         {selectedTemplateGroups.map(group => (
-                          <div key={group.id} className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950/40">
-                            <div className="border-b border-slate-200 px-3 py-2 text-sm font-medium text-slate-800 dark:border-slate-800 dark:text-slate-200">
+                          <div key={group.id} className="rounded-lg border border-ui-line bg-ui-surface">
+                            <div className="border-b border-ui-line px-3 py-2 text-sm font-medium text-ui-ink">
                               {group.title}
                             </div>
-                            <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                            <div className="divide-y divide-ui-line">
                               {group.changes.map(change => (
                                 <div key={change.key} className="grid min-w-0 gap-2 px-3 py-2 text-sm md:grid-cols-[140px_minmax(0,1fr)_minmax(0,1fr)]">
-                                  <span className="min-w-0 truncate font-medium text-slate-700 dark:text-slate-200" title={change.label}>{change.label}</span>
-                                  <span className="min-w-0 truncate text-slate-500" title={change.before}>{change.before}</span>
-                                  <span className="min-w-0 truncate text-emerald-700 dark:text-emerald-200" title={change.after}>{change.after}</span>
+                                  <span className="min-w-0 truncate font-medium text-ui-body" title={change.label}>{change.label}</span>
+                                  <span className="min-w-0 truncate text-ui-muted" title={change.before}>{change.before}</span>
+                                  <span className="min-w-0 truncate text-ui-positive" title={change.after}>{change.after}</span>
                                 </div>
                               ))}
                             </div>
@@ -943,11 +864,11 @@ const LlamaConfigPage = () => {
                   </InsetSurface>
 
                   <InsetSurface className="h-fit p-4">
-                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateRisks}</p>
+                    <p className="text-sm font-medium text-ui-ink">{labels.templateRisks}</p>
                     <div className="mt-3 space-y-2">
                       {selectedTemplate.risks.map(risk => (
-                        <div key={risk} className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                        <div key={risk} className="flex gap-2 rounded-lg border border-ui-line bg-ui-inset px-3 py-2 text-sm text-ui-muted">
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-ui-warn" />
                           <span>{risk}</span>
                         </div>
                       ))}
@@ -957,8 +878,8 @@ const LlamaConfigPage = () => {
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/90 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-sm text-slate-500">
+            <div className="flex flex-col gap-3 border-t border-ui-line bg-ui-inset px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-ui-muted">
                 {selectedTemplateChanges.length === 0 ? labels.templateNoDiff : `${selectedTemplateChanges.length} ${labels.templateChangeCount}`}
               </div>
               <div className="flex gap-2">
@@ -979,16 +900,12 @@ const LlamaConfigPage = () => {
           target={pickerTarget}
           models={models}
           modelDirs={modelDirs}
+          selectedPath={pickerTarget === 'model' ? primaryModelPath : pickerTarget === 'draft' ? draftModelPath : local.mmproj_path}
           collapsed={pickerCollapsed}
           description={`${labels.pickDesc}${labels.pickSeparator}${pickerTarget === 'model' ? labels.pickPrimary : pickerTarget === 'draft' ? labels.pickDraft : labels.pickMmproj}${labels.pickSuffix}`}
           emptyLabel={pickerTarget === 'mmproj' ? labels.noProjectors : t.modelRepo.noModels}
-          onToggle={path => {
-            const next = new Set(pickerCollapsed)
-            if (next.has(path)) next.delete(path)
-            else next.add(path)
-            setPickerCollapsed(next)
-          }}
-          onPick={pickModel}
+          onCollapsedChange={setPickerCollapsed}
+          onPick={model => pickModel(model.path)}
           onClose={() => setShowPicker(false)}
         />
       )}

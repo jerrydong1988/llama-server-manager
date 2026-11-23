@@ -741,7 +741,7 @@ export default function ProxyPage() {
             data-testid="proxy-floating-save"
             role="region"
             aria-label={labels.unsaved}
-            className="pointer-events-auto flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+            className="pointer-events-auto flex items-center gap-3 rounded-xl border border-ui-line bg-ui-surface p-2.5 shadow-lg"
           >
             <div className="min-w-0">
               <p className="text-xs font-semibold">{labels.unsaved}</p>
@@ -764,19 +764,19 @@ export default function ProxyPage() {
       )}
       {stopRuntimeConfirmOpen ? (
         <div
-          className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-ui-scrim px-4 backdrop-blur-sm"
           role="presentation"
         >
           <div
-            className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-950"
+            className="w-full max-w-lg rounded-xl border border-ui-line bg-ui-surface p-6 shadow-2xl"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="stop-background-runtime-title"
           >
-            <h2 id="stop-background-runtime-title" className="text-xl font-semibold text-slate-950 dark:text-slate-50">
+            <h2 id="stop-background-runtime-title" className="text-xl font-semibold text-ui-ink">
               {labels.stopRuntimeConfirmTitle}
             </h2>
-            <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">{labels.stopRuntimeConfirmDesc}</p>
+            <p className="mt-3 text-sm leading-6 text-ui-body">{labels.stopRuntimeConfirmDesc}</p>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <Button disabled={stoppingRuntime} onClick={() => setStopRuntimeConfirmOpen(false)}>
                 {labels.cancel}

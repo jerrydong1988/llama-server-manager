@@ -61,6 +61,8 @@ pub struct InferenceTask {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceThroughput {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_prefill: Vec<super::prefill::InstancePrefill>,
     pub prefill: RateReading,
     pub decode: RateReading,
     pub tasks: Vec<InferenceTask>,
@@ -497,6 +499,7 @@ impl InferenceTracker {
             result
         };
         InferenceThroughput {
+            instance_prefill: Vec::new(),
             prefill: aggregate(true),
             decode: aggregate(false),
             tasks,

@@ -85,7 +85,7 @@ for (const exit of ['escape', 'close', 'during-navigation']) {
 test('selected instance is retained and the previous configuration context is restored on exit', async ({ page }) => {
   await openGuide(page)
   await page.locator('[data-nav-id="instances"]').click()
-  await page.locator('[role="button"]').filter({ hasText: 'Qwen3 VL 7B' }).click()
+  await page.locator('.instance-list-row').getByText('Qwen3 VL 7B', { exact: true }).click()
   await page.getByRole('button', { name: '配置参数', exact: true }).click()
   await page.locator('[data-nav-id="guide"]').click()
   await reachInstances(page)

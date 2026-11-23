@@ -1,54 +1,6 @@
-import type { InstanceConfig, ModelInfo } from '../../store'
+import type { InstanceConfig } from '../../store'
 import type { Translations } from '../../i18n'
 import { maskStartupCommandSecrets } from '../../store/commandFormatting'
-import { isPathWithinRoot, normalizePath, pathJoin } from '../../utils/path'
-
-export interface PickerNode {
-  name: string
-  path: string
-  isDir: boolean
-  children?: Map<string, PickerNode>
-  model?: ModelInfo
-}
-
-export const buildPickerTree = (rootDir: string, models: ModelInfo[]): PickerNode => {
-  const normalizedRoot = normalizePath(rootDir)
-  const root: PickerNode = { name: rootDir, path: normalizedRoot, isDir: true, children: new Map() }
-
-  for (const model of models) {
-    const normalizedPath = normalizePath(model.path)
-    if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
-      continue
-    }
-
-    const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, '')
-    if (!relative) {
-      continue
-    }
-
-    const parts = relative.split('/')
-    let cursor = root
-
-    for (let index = 0; index < parts.length; index += 1) {
-      const part = parts[index]
-      if (index === parts.length - 1) {
-        cursor.children!.set(part, { name: part, path: model.path, isDir: false, model })
-      } else {
-        if (!cursor.children!.has(part)) {
-          cursor.children!.set(part, {
-            name: part,
-            path: pathJoin(cursor.path, part),
-            isDir: true,
-            children: new Map(),
-          })
-        }
-        cursor = cursor.children!.get(part)!
-      }
-    }
-  }
-
-  return root
-}
 
 export const countActive = (activeParams: Set<keyof InstanceConfig>, keys: Array<keyof InstanceConfig>) =>
   keys.filter(key => activeParams.has(key)).length

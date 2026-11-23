@@ -877,18 +877,22 @@ impl RuntimeSupervisor {
                         break;
                     }
 
+                    crate::commands::monitoring::update_metrics(
+                        &instance_id,
+                        telemetry_session_id.as_deref(),
+                        workload,
+                        sample.system.clone(),
+                        sample.llama.clone(),
+                    );
+                    crate::commands::monitoring::observe_prefill_counters(
+                        &instance_id, telemetry_session_id.as_deref(), config.engine_kind,
+                        sample.metrics_clock, sample.metrics_ts, sample.prefill_counters,
+                    );
                     let _ = crate::commands::telemetry::record_metric_sample(
                         telemetry_session_id.as_deref(),
                         &instance_id,
                         &sample.system,
                         sample.llama.as_ref(),
-                    );
-                    crate::commands::monitoring::update_metrics(
-                        &instance_id,
-                        telemetry_session_id.as_deref(),
-                        workload,
-                        sample.system,
-                        sample.llama,
                     );
                     if let Some(slots) = sample.slots {
                         let completed = supervisor.perf_trackers.lock().unwrap().get(&instance_id)
@@ -932,6 +936,7 @@ impl RuntimeSupervisor {
                         &instance_id,
                         telemetry_session_id.as_deref(),
                         workload,
+                        config.engine_kind,
                         iteration_started,
                         || {
                             supervisor
@@ -1146,6 +1151,7 @@ impl RuntimeSupervisor {
             spec.instance_id.clone(),
             running.telemetry_session_id.clone(),
             workload,
+            spec.config.engine_kind,
         )));
         let stdout_pump = spawn_runtime_log_pump(stdout, log_writer.clone(), perf_tracker.clone());
         let stderr_pump = spawn_runtime_log_pump(stderr, log_writer, perf_tracker.clone());

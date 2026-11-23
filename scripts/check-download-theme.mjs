@@ -8,9 +8,9 @@ const match = source.match(browseButtonPattern)
 const failures = []
 
 const requiredClasses = [
-  'bg-blue-600',
-  'text-white',
-  'hover:bg-blue-700',
+  'bg-ui-action',
+  'text-ui-action-ink',
+  'hover:bg-ui-action-hover',
 ]
 
 if (!match) {

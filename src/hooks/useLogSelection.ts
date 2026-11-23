@@ -22,9 +22,11 @@ function selectedRow(node: Node | null, container: HTMLElement): number | null {
 export function useLogSelection(entries: LogEntry[], containerRef: RefObject<HTMLDivElement>) {
   const [session, setSession] = useState<SelectionSession | null>(null)
   const draggingRef = useRef(false)
+  const dragAnchor = useRef<{ node: Node; offset: number } | null>(null)
 
   const clearSelection = useCallback(() => {
     draggingRef.current = false
+    dragAnchor.current = null
     const selection = window.getSelection()
     const container = containerRef.current
     if (container && selection && (
@@ -38,6 +40,11 @@ export function useLogSelection(entries: LogEntry[], containerRef: RefObject<HTM
     const row = selectedRow(event.target, event.currentTarget)
     if (row === null) return false
     draggingRef.current = true
+    const existing = window.getSelection()
+    const caret = document.caretRangeFromPoint?.(event.clientX, event.clientY)
+    dragAnchor.current = event.shiftKey && existing?.anchorNode && event.currentTarget.contains(existing.anchorNode)
+      ? { node: existing.anchorNode, offset: existing.anchorOffset }
+      : caret ? { node: caret.startContainer, offset: caret.startOffset } : null
     setSession(previous => event.shiftKey && previous ? previous : {
       entries: previous?.entries ?? entries,
       start: row,
@@ -47,6 +54,37 @@ export function useLogSelection(entries: LogEntry[], containerRef: RefObject<HTM
   }, [entries])
 
   useEffect(() => {
+    let pointer: { x: number; y: number } | null = null
+    let frame = 0
+    const container = containerRef.current
+    // When the console ends at the window edge, native autoscroll can move the
+    // selection into the surrounding workspace. Keep its end in the visible log.
+    const extendAtEdge = () => {
+      frame = 0
+      const anchor = dragAnchor.current
+      if (!draggingRef.current || !pointer || !container || !anchor || !container.contains(anchor.node)) return
+      const rect = container.getBoundingClientRect()
+      const top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom)
+      if (bottom <= top || (pointer.y >= top && pointer.y < bottom)) return
+      const down = pointer.y >= bottom
+      const x = Math.max(rect.left + 1, Math.min(pointer.x, rect.right - 1))
+      const row = document.elementFromPoint(x, down ? bottom - 2 : top + 2)?.closest('[data-log-row]')
+      const text = row?.querySelector('span:last-child')?.firstChild
+      const selection = window.getSelection()
+      if (!selection || !text || !container.contains(text)) return
+      const offset = down ? text.textContent?.length ?? 0 : 0
+      if (selection.focusNode !== text || selection.focusOffset !== offset) {
+        selection.setBaseAndExtent(anchor.node, anchor.offset, text, offset)
+      }
+    }
+    const scheduleEdge = () => {
+      if (draggingRef.current && pointer && !frame) frame = requestAnimationFrame(extendAtEdge)
+    }
+    const trackPointer = (event: globalThis.MouseEvent) => {
+      if (!draggingRef.current) return
+      pointer = { x: event.clientX, y: event.clientY }
+      scheduleEdge()
+    }
     const synchronizeSelection = () => {
       const container = containerRef.current
       const selection = window.getSelection()
@@ -69,12 +107,19 @@ export function useLogSelection(entries: LogEntry[], containerRef: RefObject<HTM
     }
     const finishDrag = () => {
       draggingRef.current = false
+      dragAnchor.current = null
+      pointer = null
       synchronizeSelection()
     }
+    container?.addEventListener('scroll', scheduleEdge, { passive: true })
+    window.addEventListener('mousemove', trackPointer)
     document.addEventListener('selectionchange', synchronizeSelection)
     window.addEventListener('mouseup', finishDrag)
     window.addEventListener('blur', finishDrag)
     return () => {
+      cancelAnimationFrame(frame)
+      container?.removeEventListener('scroll', scheduleEdge)
+      window.removeEventListener('mousemove', trackPointer)
       document.removeEventListener('selectionchange', synchronizeSelection)
       window.removeEventListener('mouseup', finishDrag)
       window.removeEventListener('blur', finishDrag)

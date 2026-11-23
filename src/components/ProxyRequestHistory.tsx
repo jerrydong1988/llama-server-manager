@@ -77,7 +77,7 @@ export default function ProxyRequestHistory({ query }: { query: Filters }) {
   }
 
   return <Surface as="section" className="p-5" data-testid="router-request-history">
-    <h3 className="font-semibold">{l.history}</h3><p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{l.historyHint}</p>
+    <h3 className="font-semibold">{l.history}</h3><p className="mt-2 text-xs text-ui-muted">{l.historyHint}</p>
     <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       <label className="text-xs">{l.startTime}<TextInput type="datetime-local" aria-label={l.startTime} className="mt-1 w-full" value={from} onChange={e => { setFrom(e.target.value); reset() }} /></label>
       <label className="text-xs">{l.endTime}<TextInput type="datetime-local" aria-label={l.endTime} className="mt-1 w-full" value={to} onChange={e => { setTo(e.target.value); reset() }} /></label>
@@ -99,22 +99,22 @@ export default function ProxyRequestHistory({ query }: { query: Filters }) {
     {error ? <p role="alert" className="mt-4 text-sm text-red-700 dark:text-red-300">{error}</p> : null}
     {loading ? <p role="status" className="mt-4 text-sm">{l.loading}</p> : null}
     {page ? <div className="mt-4 max-h-[440px] overflow-auto"><table className="w-full text-xs">
-      <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800"><tr>{[l.lastUsed, l.key, l.model, l.outcome, l.errorType, l.quality, l.view].map(h => <th key={h} className={cell}>{h}</th>)}</tr></thead>
-      <tbody>{page.records.map(r => <tr key={r.requestId} className="border-b border-slate-200 dark:border-slate-800">
+      <thead className="sticky top-0 bg-ui-inset"><tr>{[l.lastUsed, l.key, l.model, l.outcome, l.errorType, l.quality, l.view].map(h => <th key={h} className={cell}>{h}</th>)}</tr></thead>
+      <tbody>{page.records.map(r => <tr key={r.requestId} data-selected={selected?.requestId === r.requestId} className="console-list-row border-b border-ui-line">
         <td className={cell}>{time(r.completedAt)}</td><td className={cell}>{r.keyName}</td><td className={`${cell} max-w-48 truncate`}>{r.model || '—'}</td>
         <td className={cell}>{label(r.outcome)} {r.httpStatus || ''}</td><td className={cell}>{r.failure ? failureText(r.failure.code, lang).title : '—'}</td><td className={cell}>{label(r.quality)}</td>
         <td className={cell}><Button aria-label={`${l.view} ${r.requestId}`} onClick={() => { setSelected(r); setCopied('') }}>{l.view}</Button></td>
       </tr>)}</tbody>
     </table>{!page.records.length ? <p className="py-4 text-sm">{l.empty}</p> : null}</div> : null}
-    {selected ? <div ref={detailRef} className="mt-5 scroll-mt-24 border-t border-slate-200 pt-5 dark:border-slate-700" data-testid="request-diagnostic-detail">
+    {selected ? <div ref={detailRef} className="mt-5 scroll-mt-24 border-t border-ui-line pt-5" data-testid="request-diagnostic-detail">
       <div className="flex flex-wrap items-center justify-between gap-3"><h4 className="font-semibold">{l.view}</h4><div className="flex gap-2"><Button onClick={() => void copy()}>{l.copy}</Button><Button onClick={() => setSelected(null)}>{l.close}</Button></div></div>
       {copied ? <p role="status" className="mt-2 text-sm">{copied}</p> : null}
       {failure ? <div className="mt-4 space-y-2 text-sm"><p>{l.reason}: {failure.title}</p><p>{l.advice}: {failure.advice}</p></div> : null}
-      {budget ? <div className="mt-5"><h4 className="font-semibold">{l.budget}</h4><p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{l.budgetHint}</p>
-        <dl className="mt-3 grid gap-3 sm:grid-cols-2">{budgetRows.map(([k, v]) => <div key={k}><dt className="text-xs text-slate-500 dark:text-slate-400">{k}</dt><dd className="mt-1 text-sm">{v}</dd></div>)}</dl>
+      {budget ? <div className="mt-5"><h4 className="font-semibold">{l.budget}</h4><p className="mt-2 text-xs text-ui-muted">{l.budgetHint}</p>
+        <dl className="mt-3 grid gap-3 sm:grid-cols-2">{budgetRows.map(([k, v]) => <div key={k}><dt className="text-xs text-ui-muted">{k}</dt><dd className="mt-1 text-sm">{v}</dd></div>)}</dl>
       </div> : null}
       {!selected.forwarded && selected.kind === 'generation' ? <p className="mt-4 text-sm">{l.noGeneration}</p> : null}
-      <dl className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2">{detailRows.filter(([k]) => k !== l.reason && k !== l.advice).map(([k, v]) => <div key={k} className="min-w-0"><dt className="text-xs text-slate-500 dark:text-slate-400">{k}</dt><dd className="mt-1 break-words text-sm">{v}</dd></div>)}</dl>
+      <dl className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2">{detailRows.filter(([k]) => k !== l.reason && k !== l.advice).map(([k, v]) => <div key={k} className="min-w-0"><dt className="text-xs text-ui-muted">{k}</dt><dd className="mt-1 break-words text-sm">{v}</dd></div>)}</dl>
     </div> : null}
   </Surface>
 }

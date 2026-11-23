@@ -6,8 +6,8 @@ export default function SysResourceBar({ metrics }: { metrics: SystemMetrics | n
 
   if (!metrics) {
     return (
-      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
-        <div className="text-sm text-slate-400 text-center py-4">{t.perfBlock.waitingMetrics}</div>
+      <div className="bg-ui-surface rounded-xl border border-ui-line p-5">
+        <div className="text-sm text-ui-muted text-center py-4">{t.perfBlock.waitingMetrics}</div>
       </div>
     )
   }
@@ -36,15 +36,15 @@ export default function SysResourceBar({ metrics }: { metrics: SystemMetrics | n
   ]
 
   return (
-      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
+      <div className="bg-ui-surface rounded-xl border border-ui-line p-5 space-y-3">
         {items.map(item => (
         <div key={item.label} className="flex items-center gap-3">
-          <span className="w-10 text-xs font-medium text-slate-500 dark:text-slate-400 shrink-0">{item.label}</span>
-          <div className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+          <span className="w-10 text-xs font-medium text-ui-muted shrink-0">{item.label}</span>
+          <div className="flex-1 h-2 bg-ui-line rounded-full overflow-hidden">
             <div className={`h-full rounded-full ${item.color} transition-all duration-700`}
               style={{ width: `${Math.min(100, item.pct * 100).toFixed(0)}%` }} />
           </div>
-          <span className="text-xs text-slate-400 w-64 text-right shrink-0">{item.detail}</span>
+          <span className="text-xs text-ui-muted w-64 text-right shrink-0">{item.detail}</span>
         </div>
       ))}
     </div>

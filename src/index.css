@@ -41,22 +41,6 @@
   }
 }
 
-:root {
-  --app-radius-panel: 8px;
-  --app-radius-control: 8px;
-  --app-radius-chip: 6px;
-  --color-app-bg: #edf2f7;
-  --color-app-bg-dark: #020617;
-  --color-app-panel: #f8fafc;
-  --color-app-panel-dark: #020617;
-  --color-app-surface: #ffffff;
-  --color-app-surface-dark: #0f172a;
-  --color-app-border: #cbd5e1;
-  --color-app-border-dark: #1e293b;
-  --color-app-muted: #64748b;
-  --color-app-accent: #2563eb;
-  --shadow-app-panel: 0 16px 40px rgba(15, 23, 42, 0.08);
-}
 
 * {
   margin: 0;
@@ -68,8 +52,9 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--color-app-bg);
-  color: #0f172a;
+  background: var(--ui-canvas);
+  color: var(--ui-ink);
+  accent-color: var(--ui-positive);
 }
 
 button,
@@ -96,95 +81,12 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #94a3b8;
+  background: var(--ui-control);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
-}
-
-html.dark {
-  color-scheme: dark;
-}
-
-html.dark body {
-  background: var(--color-app-bg-dark);
-  color: #e2e8f0;
-}
-
-:not(.dark) > .app-shell {
-  color-scheme: light;
-}
-
-:not(.dark) > .app-shell .bg-slate-950:not(.text-white),
-:not(.dark) > .app-shell .bg-slate-950\/95,
-:not(.dark) > .app-shell .bg-slate-950\/90,
-:not(.dark) > .app-shell .bg-slate-950\/80,
-:not(.dark) > .app-shell .bg-slate-950\/70,
-:not(.dark) > .app-shell .bg-slate-950\/60,
-:not(.dark) > .app-shell .bg-slate-950\/50,
-:not(.dark) > .app-shell .bg-slate-950\/40,
-:not(.dark) > .app-shell .bg-slate-950\/35,
-:not(.dark) > .app-shell .bg-slate-950\/30,
-:not(.dark) > .app-shell .bg-slate-900,
-:not(.dark) > .app-shell .bg-slate-900\/95,
-:not(.dark) > .app-shell .bg-slate-900\/90,
-:not(.dark) > .app-shell .bg-slate-900\/80,
-:not(.dark) > .app-shell .bg-slate-900\/70,
-:not(.dark) > .app-shell .bg-slate-900\/60 {
-  background-color: #ffffff;
-}
-
-:not(.dark) > .app-shell .bg-slate-800,
-:not(.dark) > .app-shell .bg-slate-800\/80,
-:not(.dark) > .app-shell .bg-slate-800\/70,
-:not(.dark) > .app-shell .bg-slate-800\/60 {
-  background-color: #f1f5f9;
-}
-
-:not(.dark) > .app-shell .hover\:bg-slate-950:hover,
-:not(.dark) > .app-shell .hover\:bg-slate-950\/35:hover,
-:not(.dark) > .app-shell .hover\:bg-slate-900:hover,
-:not(.dark) > .app-shell .hover\:bg-slate-900\/80:hover,
-:not(.dark) > .app-shell .hover\:bg-slate-800:hover,
-:not(.dark) > .app-shell .hover\:bg-slate-800\/80:hover {
-  background-color: #f8fafc;
-}
-
-:not(.dark) > .app-shell .border-slate-800,
-:not(.dark) > .app-shell .border-slate-800\/80,
-:not(.dark) > .app-shell .border-slate-700,
-:not(.dark) > .app-shell .border-slate-700\/80 {
-  border-color: #cbd5e1;
-}
-
-:not(.dark) > .app-shell .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
-  border-color: #e2e8f0;
-}
-
-:not(.dark) > .app-shell .text-slate-50,
-:not(.dark) > .app-shell .text-slate-100 {
-  color: #0f172a;
-}
-
-:not(.dark) > .app-shell .text-slate-200,
-:not(.dark) > .app-shell .text-slate-300 {
-  color: #334155;
-}
-
-:not(.dark) > .app-shell .text-slate-400 {
-  color: #64748b;
-}
-
-:not(.dark) > .app-shell .hover\:text-slate-100:hover,
-:not(.dark) > .app-shell .hover\:text-slate-200:hover,
-:not(.dark) > .app-shell .hover\:text-white:hover {
-  color: #0f172a;
-}
-
-:not(.dark) > .app-shell .ring-blue-500\/40 {
-  --tw-ring-color: rgb(37 99 235 / 0.24);
+  background: var(--ui-muted);
 }
 
 .select-custom {
@@ -208,26 +110,19 @@ html.dark body {
 .guide-content p { margin-bottom: 0.5rem; line-height: 1.6; }
 .guide-content ul, .guide-content ol { padding-left: 1.5rem; margin-bottom: 0.5rem; }
 .guide-content li { margin-bottom: 0.125rem; }
-.guide-content code { background: #f1f5f9; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-size: 0.8rem; font-family: monospace; }
-.dark .guide-content code { background: #334155; }
-.guide-content pre { background: #1e293b; color: #e2e8f0; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 0.5rem; font-size: 0.8rem; }
+.guide-content code { background: var(--ui-inset); padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-size: 0.8rem; font-family: monospace; }
+.guide-content pre { background: var(--ui-inset); color: var(--ui-ink); padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 0.5rem; font-size: 0.8rem; }
 .guide-content pre code { background: transparent; padding: 0; }
 .guide-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin-bottom: 0.5rem; font-size: 0.8rem; }
-.guide-content th, .guide-content td { border: 1px solid #cbd5e1; padding: 0.25rem 0.5rem; }
-.dark .guide-content th, .dark .guide-content td { border-color: #475569; }
-.guide-content th { background: #f1f5f9; font-weight: 600; }
-.dark .guide-content th { background: #334155; }
-.guide-content blockquote { border-left: 3px solid #94a3b8; padding-left: 0.75rem; color: #64748b; margin-bottom: 0.5rem; }
-.dark .guide-content blockquote { color: #94a3b8; }
-.guide-content hr { border: none; border-top: 1px solid #e2e8f0; margin: 1rem 0; }
-.dark .guide-content hr { border-color: #475569; }
-.guide-content a { color: #2563eb; text-decoration: underline; }
-.dark .guide-content a { color: #93c5fd; }
+.guide-content th, .guide-content td { border: 1px solid var(--ui-line); padding: 0.25rem 0.5rem; }
+.guide-content th { background: var(--ui-inset); font-weight: 600; }
+.guide-content blockquote { border-left: 3px solid var(--ui-control); padding-left: 0.75rem; color: var(--ui-muted); margin-bottom: 0.5rem; }
+.guide-content hr { border: none; border-top: 1px solid var(--ui-line); margin: 1rem 0; }
+.guide-content a { color: var(--ui-action-ink); text-decoration: underline; text-underline-offset: 2px; }
 .guide-content strong { font-weight: 600; }
-.guide-content img { display: block; width: 100%; height: auto; margin: 1rem 0 1.5rem; border: 1px solid #cbd5e1; border-radius: 0.5rem; background: #f8fafc; color: #475569; }
+.guide-content img { display: block; width: 100%; height: auto; margin: 1rem 0 1.5rem; border: 1px solid var(--ui-line); border-radius: 0.5rem; background: var(--ui-inset); color: var(--ui-muted); }
 /* Bundled captures are 8:5; reserve their space before lazy loading for stable chapter jumps. */
 .guide-content img[src^="/docs/guide/"] { aspect-ratio: 8 / 5; }
-.dark .guide-content img { border-color: #334155; background: #0f172a; color: #cbd5e1; }
 
 /* Config search highlight */
 @keyframes search-flash {
@@ -241,13 +136,13 @@ html.dark body {
 
 [data-config-search-current="true"] {
   border-radius: 0.5rem;
-  outline: 2px solid rgb(59 130 246 / 0.9);
+  outline: 2px solid var(--ui-focus);
   outline-offset: 5px;
 }
 
 /* Non-modal tour emphasis keeps forms, pickers and page actions interactive. */
 .guide-tour-target {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid var(--ui-focus);
   outline-offset: 4px;
   scroll-margin: 12px;
 }

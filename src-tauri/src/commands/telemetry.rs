@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 9;
+const VECTOR_SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -66,6 +67,7 @@ pub struct TelemetrySessionSummary {
     pub stopped_at: Option<i64>,
     pub duration_secs: Option<i64>,
     pub avg_tokens_per_sec: f64,
+    pub avg_items_per_sec: Option<f64>,
     pub peak_vram_mb: f64,
     pub sample_count: u32,
     pub stop_reason: Option<String>,
@@ -89,6 +91,7 @@ pub struct TelemetrySampleSummary {
     pub gpu_name: Option<String>,
     pub tokens_per_sec: Option<f64>,
     pub prompt_tokens_per_sec: Option<f64>,
+    pub prompt_seconds_total: Option<f64>,
     pub prompt_tokens_total: Option<i64>,
     pub generated_tokens_total: Option<i64>,
     pub requests_total: Option<i64>,
@@ -196,9 +199,31 @@ pub struct DiagnosticFinding {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SlotContextUsage {
+    pub ts: i64,
+    pub used: i64,
+    pub capacity: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentVectorActivity {
+    pub id: i64,
+    pub source: String,
+    pub completed_at: i64,
+    pub duration_ms: f64,
+    pub item_count: i64,
+    pub input_tokens: Option<i64>,
+    pub http_status: Option<u16>,
+    pub error_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TelemetrySessionDetail {
     pub samples: Vec<TelemetrySampleSummary>,
     pub requests: Vec<InferenceRequestSummary>,
+    pub vector_activity: Vec<RecentVectorActivity>,
+    pub request_prefill: super::prefill::RequestPrefillWindow,
+    pub context_usage: Option<SlotContextUsage>,
     pub analysis: TelemetrySessionAnalysis,
     pub diagnostics: Vec<DiagnosticFinding>,
 }
@@ -266,6 +291,7 @@ pub struct LlamaMetricSample {
     pub decode_calls_total: Option<u64>,
     pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
+    pub prompt_seconds_total: Option<f64>,
     pub requests_processing: u64,
     pub requests_deferred: u64,
     pub busy_slots_per_decode: Option<f64>,
@@ -285,6 +311,7 @@ enum TelemetryWrite {
         completed_at: i64,
         record: InferenceRequestRecord,
     },
+    GufoPrefill { session_id: String, timestamp: i64, record: super::prefill::GufoCompletion },
     Proxy {
         session_id: String,
         completed_at: i64,
@@ -450,7 +477,11 @@ fn open_connection() -> Result<Connection, String> {
 }
 
 fn init_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
+    // The desktop and the detached service can open the same database on startup.
+    // Read the version and advance it under the same SQLite write lock.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法开始遥测数据库升级: {e}"))?;
+    tx.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS run_sessions (
             id TEXT PRIMARY KEY,
@@ -583,22 +614,26 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
-    let stored_version = conn
+    let stored_version = tx
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .map_err(|e| format!("无法读取遥测 schema 版本: {e}"))?;
-    if stored_version < SCHEMA_VERSION {
-        migrate_inference_request_columns(conn)?;
-        migrate_vector_schema(conn)?;
+    if stored_version < VECTOR_SCHEMA_VERSION {
+        migrate_inference_request_columns(&tx)?;
+        migrate_vector_schema(&tx)?;
     }
-    conn.execute(
+    tx.execute(
         "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
             ON inference_requests(source, completed_at DESC)",
         [],
     )
     .map_err(|e| format!("无法创建推理请求来源索引: {}", e))?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
-        .map_err(|e| format!("无法写入遥测 schema 版本: {}", e))?;
-    Ok(())
+    if stored_version < SCHEMA_VERSION {
+        migrate_prefill_schema(&tx)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(|e| format!("无法写入遥测 schema 版本: {e}"))?;
+    }
+    tx.commit()
+        .map_err(|e| format!("无法提交遥测数据库升级: {e}"))
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -709,6 +744,19 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn migrate_prefill_schema(conn: &Connection) -> Result<(), String> {
+    // Some v9 preview databases already contain Prefill measurements.
+    let columns = table_columns(conn, "metric_samples")?;
+    if !columns.iter().any(|name| name == "prompt_seconds_total") {
+        conn.execute(
+            "ALTER TABLE metric_samples ADD COLUMN prompt_seconds_total REAL",
+            [],
+        )
+        .map_err(|e| format!("无法添加 Prefill 采样字段: {e}"))?;
+    }
+    super::prefill::init_schema(conn).map_err(|e| format!("无法初始化 Gufo Prefill 记录: {e}"))
 }
 
 struct RunSessionStart<'a> {
@@ -1064,6 +1112,7 @@ fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<()
                 params![inference]).map_err(|e| format!("failed to save inference throughput: {e}"))?;
             Ok(())
         }
+        TelemetryWrite::GufoPrefill { session_id, timestamp, record } => super::prefill::insert_gufo(conn, session_id, *timestamp, record).map_err(|e| e.to_string()),
         TelemetryWrite::Inference {
             session_id,
             completed_at,
@@ -1146,9 +1195,9 @@ fn insert_metric_sample(
              system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
              prompt_tokens_total, generated_tokens_total, requests_total, decode_calls_total,
              max_tokens_observed, prompt_tokens_per_sec, requests_processing, requests_deferred,
-             busy_slots_per_decode)
+             busy_slots_per_decode, prompt_seconds_total)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         params![
             session_id,
             instance_id,
@@ -1173,10 +1222,22 @@ fn insert_metric_sample(
             llama.map(|m| m.requests_processing as i64),
             llama.map(|m| m.requests_deferred as i64),
             llama.and_then(|m| m.busy_slots_per_decode),
+            llama.and_then(|m| m.prompt_seconds_total),
         ],
     )
     .map_err(|e| format!("无法写入遥测采样: {}", e))?;
     Ok(())
+}
+
+pub(super) fn record_gufo_prefill(
+    session_id: &str,
+    record: super::prefill::GufoCompletion,
+) -> Result<(), String> {
+    enqueue_telemetry(TelemetryWrite::GufoPrefill {
+        session_id: session_id.into(),
+        timestamp: now_ms(),
+        record,
+    })
 }
 
 pub fn record_inference_request(
@@ -1498,6 +1559,12 @@ fn query_telemetry_sessions(
         .prepare(
             "WITH recent_sessions AS MATERIALIZED (
                 SELECT * FROM run_sessions ORDER BY started_at DESC LIMIT ?2
+             ), vector_stats AS (
+                SELECT session_id, SUM(item_count) * 1000.0 /
+                    MAX(1000, MAX(completed_at) - MIN(started_at)) AS avg_items
+                FROM vector_activity_events WHERE source = 'log'
+                  AND session_id IN (SELECT id FROM recent_sessions WHERE workload IN ('embedding','reranker'))
+                GROUP BY session_id
              ), metric_stats AS (
                 SELECT session_id,
                     AVG(CASE WHEN tokens_per_sec > 0 THEN tokens_per_sec END) AS avg_tps,
@@ -1517,8 +1584,9 @@ fn query_telemetry_sessions(
                 COALESCE(m.avg_tps, 0),
                 COALESCE(m.peak_vram, 0),
                 COALESCE(m.sample_count, 0),
-                s.stop_reason
+                s.stop_reason, v.avg_items
              FROM recent_sessions s
+             LEFT JOIN vector_stats v ON v.session_id = s.id
              LEFT JOIN metric_stats m ON m.session_id = s.id
              ORDER BY s.started_at DESC
              ",
@@ -1543,6 +1611,7 @@ fn query_telemetry_sessions(
                 peak_vram_mb: row.get(13)?,
                 sample_count: row.get::<_, i64>(14)?.max(0) as u32,
                 stop_reason: row.get(15)?,
+                avg_items_per_sec: row.get(16)?,
             })
         })
         .map_err(|e| format!("无法查询遥测会话: {e}"))?;
@@ -1578,16 +1647,54 @@ pub async fn get_telemetry_session_detail(
         let samples = samples_for_session(&conn, &session_id, sample_limit)?;
         let requests = inference_requests_for_session(&conn, &session_id, request_limit)?;
         let analysis = query_session_analysis(&conn, &session_id)?;
+        let vector_activity = if analysis.vector_analysis.is_some() {
+            recent_vector_activity(&conn, &session_id, request_limit).map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        };
+        let request_prefill = if analysis.vector_analysis.is_none() {
+            super::prefill::request_window(&conn, &session_id, now_ms()).map_err(|e| e.to_string())?
+        } else { Default::default() };
+        let context_usage = latest_slot_context(&conn, &session_id).map_err(|e| e.to_string())?;
         let diagnostics = query_session_diagnostics_with_analysis(&conn, &session_id, &analysis)?;
         Ok(TelemetrySessionDetail {
             samples,
             requests,
+            vector_activity,
+            request_prefill,
+            context_usage,
             analysis,
             diagnostics,
         })
     })
     .await
     .map_err(|e| format!("遥测会话详情查询失败: {e}"))?
+}
+
+fn latest_slot_context(conn: &Connection, session: &str) -> rusqlite::Result<Option<SlotContextUsage>> {
+    conn.query_row(
+        "SELECT ts, SUM(n_past), SUM(n_ctx) FROM slot_snapshots
+         WHERE session_id = ?1 AND ts = (SELECT MAX(ts) FROM slot_snapshots WHERE session_id = ?1)
+         GROUP BY ts HAVING COUNT(n_past) = COUNT(*) AND MIN(n_ctx) > 0 AND MIN(n_past) >= 0",
+        [session],
+        |row| Ok(SlotContextUsage { ts: row.get(0)?, used: row.get(1)?, capacity: row.get(2)? }),
+    ).optional()
+}
+
+fn recent_vector_activity(conn: &Connection, session: &str, limit: u32) -> rusqlite::Result<Vec<RecentVectorActivity>> {
+    // Proxy calls and engine batches can describe the same work. Show the latest
+    // reporting source and return its name with every row.
+    let mut query = conn.prepare(
+        "SELECT id, source, completed_at, duration_ms, item_count, input_tokens, http_status, error_text
+         FROM vector_activity_events WHERE session_id = ?1 AND source = (
+             SELECT source FROM vector_activity_events WHERE session_id = ?1 ORDER BY completed_at DESC, id DESC LIMIT 1
+         ) ORDER BY completed_at DESC, id DESC LIMIT ?2",
+    )?;
+    let rows = query.query_map(params![session, limit], |row| Ok(RecentVectorActivity {
+        id: row.get(0)?, source: row.get(1)?, completed_at: row.get(2)?, duration_ms: row.get(3)?,
+        item_count: row.get(4)?, input_tokens: row.get(5)?, http_status: row.get(6)?, error_text: row.get(7)?,
+    }))?;
+    rows.collect()
 }
 
 pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String> {
@@ -1680,6 +1787,7 @@ fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
         ("metric_samples", "ts"),
         ("slot_snapshots", "ts"),
         ("inference_requests", "completed_at"),
+        ("gufo_prefill_requests", "completed_at"),
         ("vector_activity_events", "completed_at"),
     ] {
         affected += tx
@@ -3074,7 +3182,7 @@ fn latest_samples(conn: &Connection, limit: u32) -> Result<Vec<TelemetrySampleSu
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
-                    busy_slots_per_decode, inference_throughput
+                    busy_slots_per_decode, inference_throughput, prompt_seconds_total
              FROM metric_samples
              ORDER BY ts DESC
              LIMIT ?1",
@@ -3101,7 +3209,7 @@ fn samples_for_session(
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
-                    busy_slots_per_decode, inference_throughput
+                    busy_slots_per_decode, inference_throughput, prompt_seconds_total
              FROM metric_samples
              WHERE session_id = ?1
              ORDER BY ts DESC
@@ -3139,6 +3247,7 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
         gpu_name: row.get(12)?,
         tokens_per_sec: row.get(13)?,
         prompt_tokens_per_sec: row.get(14)?,
+        prompt_seconds_total: row.get(24)?,
         prompt_tokens_total: row.get(15)?,
         generated_tokens_total: row.get(16)?,
         requests_total: row.get(17)?,
@@ -3381,6 +3490,9 @@ mod tests {
             instance_id: "instance".into(),
             timestamp: 2,
             system: SystemMetrics {
+                gpu_temperature_c: None,
+                gpu_power_w: None,
+                gpu_board_power_w: None,
                 cpu_percent: 1.0,
                 memory_mb: 2.0,
                 uptime_secs: 3,
@@ -3410,6 +3522,24 @@ mod tests {
     }
 
     #[test]
+    fn context_usage_requires_a_complete_latest_slot_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        seed_vector_session(&conn, "context", "model", "cpu", ModelWorkload::Inference);
+        let insert = |ts: i64, slot: i64, used: Option<i64>| {
+            conn.execute("INSERT INTO slot_snapshots(session_id, instance_id, ts, slot_id, is_processing, n_ctx, n_past)
+                          VALUES ('context', 'context', ?1, ?2, 1, 2048, ?3)", params![ts, slot, used]).unwrap();
+        };
+        insert(1, 0, Some(0));
+        insert(1, 1, Some(256));
+        let snapshot = latest_slot_context(&conn, "context").unwrap().unwrap();
+        assert_eq!((snapshot.used, snapshot.capacity), (256, 4096));
+        insert(2, 0, Some(512));
+        insert(2, 1, None);
+        assert!(latest_slot_context(&conn, "context").unwrap().is_none());
+    }
+
+    #[test]
     fn metric_sample_persists_decode_calls_and_max_tokens() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
@@ -3430,6 +3560,9 @@ mod tests {
         )
         .unwrap();
         let system = SystemMetrics {
+            gpu_temperature_c: None,
+            gpu_power_w: None,
+            gpu_board_power_w: None,
             cpu_percent: 1.0,
             memory_mb: 2.0,
             uptime_secs: 3,
@@ -3449,6 +3582,7 @@ mod tests {
             decode_calls_total: Some(17),
             max_tokens_observed: 4096,
             prompt_tokens_per_sec: 7.0,
+            prompt_seconds_total: Some(1.25),
             requests_processing: 1,
             requests_deferred: 0,
             busy_slots_per_decode: Some(1.0),
@@ -3474,6 +3608,8 @@ mod tests {
             .unwrap();
         assert_eq!(values, (None, 17, 4096));
         let sample = samples_for_session(&conn, "session-metrics", 1).unwrap();
+        assert_eq!(sample[0].prompt_seconds_total, Some(1.25));
+        assert_eq!(latest_samples(&conn, 1).unwrap()[0].prompt_seconds_total, Some(1.25));
         assert!(
             sample[0].inference.is_none(),
             "legacy gauge samples are not live phase samples"
@@ -3524,6 +3660,9 @@ mod tests {
         )
         .unwrap();
         let system = SystemMetrics {
+            gpu_temperature_c: None,
+            gpu_power_w: None,
+            gpu_board_power_w: None,
             cpu_percent: 1.0,
             memory_mb: 2.0,
             uptime_secs: 3,
@@ -3543,6 +3682,7 @@ mod tests {
             decode_calls_total: Some(17),
             max_tokens_observed: 4096,
             prompt_tokens_per_sec: 140.0,
+            prompt_seconds_total: None,
             requests_processing: 0,
             requests_deferred: 0,
             busy_slots_per_decode: Some(0.0),
@@ -3571,6 +3711,7 @@ mod tests {
         let active_llama = LlamaMetricSample {
             tokens_per_sec: 45.0,
             prompt_tokens_per_sec: 90.0,
+            prompt_seconds_total: None,
             requests_processing: 1,
             busy_slots_per_decode: Some(1.0),
             ..llama
@@ -3773,6 +3914,13 @@ mod tests {
         };
         record_vector_activity_in_connection(&conn, "analysis-vector", &log).unwrap();
         record_vector_activity_in_connection(&conn, "analysis-vector", &proxy).unwrap();
+        let recent = recent_vector_activity(&conn, "analysis-vector", 18).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].source, "proxy");
+        assert_eq!(recent[0].item_count, 4);
+        let sessions = query_telemetry_sessions(&conn, 10_000, 10).unwrap();
+        assert_eq!(sessions.iter().find(|s| s.id == "analysis-vector").unwrap().avg_items_per_sec, Some(1.0));
+
 
         let analysis = query_session_analysis(&conn, "analysis-vector").unwrap();
         let vector = analysis
@@ -4287,6 +4435,82 @@ mod tests {
             })
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn version_nine_prefill_upgrade_preserves_existing_samples_and_requests() {
+        for (had_column, had_table) in [(false, false), (true, false), (false, true), (true, true)] {
+            let conn = Connection::open_in_memory().unwrap();
+            init_schema(&conn).unwrap();
+            seed_vector_session(&conn, "s", "model.gguf", "cpu", ModelWorkload::Inference);
+            conn.execute_batch(
+                "INSERT INTO metric_samples(session_id, instance_id, ts, prompt_seconds_total)
+                     VALUES ('s', 's', 10, 1.25);
+                 INSERT INTO gufo_prefill_requests VALUES ('s', 1, 10, 8, 4.0, 2000);
+                 INSERT INTO inference_requests(session_id, task_id, slot_id, completed_at, prompt_tokens, prompt_time_ms)
+                     VALUES ('s', 2, 0, 20, 9, 1000);
+                 CREATE TRIGGER reject_workload_rescan BEFORE UPDATE OF workload ON run_sessions
+                     BEGIN SELECT RAISE(ABORT, 'v9 workload backfill reran'); END;
+                 PRAGMA user_version = 9;",
+            )
+            .unwrap();
+            if !had_column {
+                conn.execute_batch("ALTER TABLE metric_samples DROP COLUMN prompt_seconds_total")
+                    .unwrap();
+                assert!(latest_samples(&conn, 1).is_err());
+            }
+            if !had_table {
+                conn.execute_batch("DROP TABLE gufo_prefill_requests").unwrap();
+            }
+
+            init_schema(&conn).unwrap();
+            init_schema(&conn).unwrap();
+            let version: i64 = conn
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+            let sample = latest_samples(&conn, 1).unwrap().pop().unwrap();
+            assert_eq!(sample.prompt_seconds_total, had_column.then_some(1.25));
+            assert_eq!(samples_for_session(&conn, "s", 2).unwrap().len(), 1);
+            let window = crate::commands::prefill::request_window(&conn, "s", 25).unwrap();
+            assert_eq!(window.points.len(), if had_table { 2 } else { 1 });
+            assert_eq!(window.latest.unwrap().tokens, 9);
+            conn.execute_batch(
+                "INSERT INTO metric_samples(session_id, instance_id, ts, prompt_seconds_total) VALUES ('s', 's', 30, 2.5);
+                 INSERT INTO gufo_prefill_requests VALUES ('s', 3, 30, 16, 8.0, 2000);",
+            )
+            .unwrap();
+            let sample = latest_samples(&conn, 1).unwrap().pop().unwrap();
+            let window = crate::commands::prefill::request_window(&conn, "s", 30).unwrap();
+            assert_eq!(sample.prompt_seconds_total, Some(2.5));
+            assert_eq!(window.latest.unwrap().tokens, 16);
+        }
+    }
+
+    #[test]
+    fn failed_prefill_upgrade_rolls_back_and_can_be_retried() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 9;
+             ALTER TABLE metric_samples DROP COLUMN prompt_seconds_total;
+             DROP TABLE gufo_prefill_requests;
+             CREATE VIEW gufo_prefill_requests AS SELECT 1;",
+        )
+        .unwrap();
+        assert!(init_schema(&conn).is_err());
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 9);
+        assert!(!column_names(&conn, "metric_samples")
+            .iter()
+            .any(|n| n == "prompt_seconds_total"));
+        conn.execute_batch("DROP VIEW gufo_prefill_requests").unwrap();
+        init_schema(&conn).unwrap();
+        assert!(latest_samples(&conn, 1).unwrap().is_empty());
+        let window = crate::commands::prefill::request_window(&conn, "s", 25).unwrap();
+        assert!(window.points.is_empty());
     }
 
     #[test]

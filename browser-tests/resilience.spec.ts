@@ -117,14 +117,17 @@ test('instance start reports an immediate transient state while the backend is p
   await page.goto('/?scenario=delayed-instance-start')
 
   const start = page.getByRole('button', { name: '启动', exact: true }).first()
+  const status = page.locator('.instance-list-row .instance-process-status').first()
   await start.click()
   await expect(page.getByRole('button', { name: '启动中...', exact: true }).first()).toBeDisabled()
+  await expect(status).toHaveAttribute('data-state', 'starting')
   await expect.poll(() => page.evaluate(() => (
     window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'start_server').length
   ))).toBe(1)
 
   await page.evaluate(() => window.__TAURI_BROWSER_TEST__.releaseStart())
   await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeEnabled()
+  await expect(status).toHaveAttribute('data-state', 'running')
 })
 
 test('legacy unbound instances persist the host-selected engine before starting', async ({ page }) => {

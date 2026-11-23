@@ -505,7 +505,7 @@ const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
 const configWorkspaceSource = readSource('src', 'components', 'ConfigPage', 'configWorkspace.ts')
 const inventorySource = readSource('src-tauri', 'src', 'commands', 'model_inventory.rs')
 const ggufParserSource = readSource('src-tauri', 'src', 'utils.rs')
-const modelAssetPickerSource = readSource('src', 'components', 'ConfigPage', 'ModelAssetPicker.tsx')
+const modelAssetPickerSource = readSource('src', 'components', 'ModelAssetPicker.tsx')
 const applyPrimaryModelSource = section(configPageSource, 'const applyPrimaryModelPath', 'const pickModel')
 assert.match(applyPrimaryModelSource, /normalizeConfigForSelectedModel\(/, 'all primary model path commits must use atomic workload selection')
 assert.match(applyPrimaryModelSource, /setVectorCleanupChanges\(/, 'manual primary model paths must retain cleanup feedback')
@@ -518,7 +518,7 @@ assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switchi
 assert.match(pickModelSource, /set\('mmproj_path', modelPath\)/, 'manual projector selection must update the managed mmproj path')
 assert.match(configPageSource, /setPickerTarget\('mmproj'\)/, 'the parameter page must expose a dedicated projector picker target')
 assert.match(modelAssetPickerSource, /target === 'mmproj'[\s\S]*model\.file_type === 'mmproj'/, 'projector picker mode must filter the inventory to projector files')
-assert.match(modelAssetPickerSource, /target === 'mmproj'[\s\S]*onPick\(model\.path\)/, 'projector rows must be selectable only in projector picker mode')
+assert.match(modelAssetPickerSource, /canSelect=\{model => target === 'mmproj' \|\| model\.file_type !== 'mmproj'\}/, 'projector rows must be selectable only in projector picker mode')
 
 const configDiffSource = section(configPageSource, 'const savedBaseline', 'const liveWarnings')
 assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
@@ -543,7 +543,7 @@ assert.ok(
   'cleanup summary must clear after persistence succeeds',
 )
 assert.match(configPageSource, /\{!isEmbedding && <ReasoningSection/, 'reasoning section must be absent in vector mode')
-assert.match(configPageSource, /\{!manualMode && !isEmbedding && \(\s*<Surface[^>]*data-guide="config-presets"/s, 'inference presets must be absent in vector and manual modes')
+assert.match(configPageSource, /\{!manualMode && !isEmbedding &&\s*<Button[^>]*data-guide="config-presets"/s, 'the inference preset action must be absent in vector and manual modes')
 assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset assistant must not render in vector mode')
 
 const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')

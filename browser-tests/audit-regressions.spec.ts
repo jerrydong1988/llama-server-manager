@@ -137,7 +137,9 @@ test('filtered instance reordering swaps adjacent visible instances', async ({ p
 
   await page.locator('input[placeholder*="搜索实例"]').fill('Group')
   await page.getByText('Group Beta', { exact: true }).click()
-  await page.getByRole('button', { name: '上移', exact: true }).last().click()
+  const inspector = page.locator('.instance-inspector')
+  await inspector.locator('details').filter({ has: page.getByText('更多', { exact: true }) }).locator('summary').click()
+  await inspector.getByRole('button', { name: '上移', exact: true }).click()
 
   await expect.poll(() => page.evaluate(() => {
     const calls = window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'save_config')

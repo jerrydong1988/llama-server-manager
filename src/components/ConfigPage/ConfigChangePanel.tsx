@@ -55,13 +55,13 @@ export function ConfigChangePanel({
     <InsetSurface className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.changeReview}</p>
-          <p className="mt-1 text-sm text-slate-500">{labels.changeReviewDesc}</p>
+          <p className="text-sm font-medium text-ui-ink">{labels.changeReview}</p>
+          <p className="mt-1 text-sm text-ui-muted">{labels.changeReviewDesc}</p>
         </div>
-        {previewing && <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-blue-400" />}
+        {previewing && <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-ui-info" />}
       </div>
 
-      <div className="mt-4 grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950/60">
+      <div className="mt-4 grid grid-cols-2 rounded-lg border border-ui-line bg-ui-inset p-1">
         {([
           ['changes', labels.changeTab, changes.length],
           ['emitted', labels.emittedTab, emittedKeys.length],
@@ -69,8 +69,9 @@ export function ConfigChangePanel({
           <button
             key={value}
             type="button"
+            aria-pressed={tab === value}
             onClick={() => setTab(value)}
-            className={`rounded-md px-2 py-2 text-xs font-medium transition ${tab === value ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
+            className={`rounded-md px-2 py-2 text-xs font-medium transition ${tab === value ? 'bg-ui-selected text-ui-action-ink' : 'text-ui-muted hover:text-ui-ink'}`}
           >
             {title} {count}
           </button>
@@ -79,23 +80,23 @@ export function ConfigChangePanel({
 
       <div className="mt-3 max-h-[430px] space-y-2 overflow-y-auto pr-1">
         {tab === 'changes' && (changes.length === 0 ? (
-          <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/40">{labels.noConfigDiff}</p>
+          <p className="rounded-lg border border-ui-line bg-ui-inset px-3 py-3 text-sm text-ui-muted">{labels.noConfigDiff}</p>
         ) : changes.map(change => {
           const status = statusFor(change.key)
           return (
-            <div key={change.key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-950/40">
+            <div key={change.key} className="rounded-lg border border-ui-line bg-ui-inset px-3 py-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-slate-800 dark:text-slate-200" title={change.label}>{change.label}</p>
-                  <p className="mt-1 truncate font-mono text-[11px] text-slate-500" title={String(change.key)}>{String(change.key)}</p>
+                  <p className="truncate text-sm font-medium text-ui-ink" title={change.label}>{change.label}</p>
+                  <p className="mt-1 truncate font-mono text-[11px] text-ui-muted" title={String(change.key)}>{String(change.key)}</p>
                 </div>
                 <Badge tone={status.tone} className="shrink-0 px-2 py-0.5 text-[10px]">{status.text}</Badge>
               </div>
               <div className="mt-2 grid min-w-0 grid-cols-[44px_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-                <span className="text-slate-500">{labels.before}</span>
-                <span className="min-w-0 truncate text-slate-500" title={change.before}>{change.before}</span>
-                <span className="text-slate-500">{labels.after}</span>
-                <span className="min-w-0 truncate text-slate-800 dark:text-slate-200" title={change.after}>{change.after}</span>
+                <span className="text-ui-muted">{labels.before}</span>
+                <span className="min-w-0 truncate text-ui-muted" title={change.before}>{change.before}</span>
+                <span className="text-ui-muted">{labels.after}</span>
+                <span className="min-w-0 truncate text-ui-ink" title={change.after}>{change.after}</span>
               </div>
               <div className="mt-3 flex justify-end gap-2">
                 <Button onClick={() => onLocate(change.key)} variant="subtle" size="sm" icon={<Crosshair className="h-3.5 w-3.5" />}>{labels.locateParameter}</Button>
@@ -106,24 +107,24 @@ export function ConfigChangePanel({
         }))}
 
         {tab === 'emitted' && (emittedRows.length === 0 ? (
-          <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/40">{labels.noEmittedOverrides}</p>
+          <p className="rounded-lg border border-ui-line bg-ui-inset px-3 py-3 text-sm text-ui-muted">{labels.noEmittedOverrides}</p>
         ) : emittedRows.map(row => (
           <button
             key={row.key}
             type="button"
             onClick={() => onLocate(row.key)}
-            className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-blue-300 hover:bg-blue-50/50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:border-blue-500/30 dark:hover:bg-blue-500/5"
+            className="flex w-full items-center justify-between gap-3 rounded-lg border border-ui-line bg-ui-inset px-3 py-3 text-left transition hover:border-ui-control hover:bg-ui-hover"
           >
             <span className="min-w-0">
-              <span className="block truncate text-sm font-medium text-slate-800 dark:text-slate-200">{row.label}</span>
-              <span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{String(row.key)}</span>
+              <span className="block truncate text-sm font-medium text-ui-ink">{row.label}</span>
+              <span className="mt-1 block truncate font-mono text-[11px] text-ui-muted">{String(row.key)}</span>
             </span>
-            <span className="shrink-0 text-xs text-blue-600 dark:text-blue-300">{labels.locateParameter}</span>
+            <span className="shrink-0 text-xs text-ui-info">{labels.locateParameter}</span>
           </button>
         )))}
       </div>
 
-      <p className="mt-3 text-xs leading-5 text-slate-500">{labels.emittedSystemHint}</p>
+      <p className="mt-3 text-xs leading-5 text-ui-muted">{labels.emittedSystemHint}</p>
     </InsetSurface>
   )
 }

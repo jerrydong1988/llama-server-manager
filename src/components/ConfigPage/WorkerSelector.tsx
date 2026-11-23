@@ -69,7 +69,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
   if (manualMode) {
     return (
       <div>
-        {!hideLabel && <label className="mb-1 block text-xs font-medium text-slate-400">{`${t.configPage.rpcServers} (--rpc)`}</label>}
+        {!hideLabel && <label className="mb-1 block text-xs font-medium text-ui-muted">{`${t.configPage.rpcServers} (--rpc)`}</label>}
         <TextInput
           type="text"
           value={manualValue}
@@ -86,7 +86,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
           {t.clusterPage.switchToVisual}
         </Button>
         {value && (
-          <div className="mt-2 break-all rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
+          <div className="mt-2 break-all rounded-lg border border-ui-line bg-ui-inset px-3 py-2 font-mono text-xs text-ui-muted">
             {t.clusterPage.cmdPreview}: --rpc {value}
           </div>
         )}
@@ -96,10 +96,10 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
 
   return (
     <div>
-      {!hideLabel && <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.workerSelector} (--rpc)</label>}
+      {!hideLabel && <label className="mb-1 block text-xs font-medium text-ui-muted">{t.clusterPage.workerSelector} (--rpc)</label>}
 
       {onlineWorkers.length === 0 ? (
-        <InsetSurface className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-slate-500">
+        <InsetSurface className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-ui-muted">
           {t.clusterPage.noWorkers}
           <Button onClick={syncFromCluster} variant="subtle" size="sm">{t.clusterPage.syncFromCluster}</Button>
         </InsetSurface>
@@ -108,9 +108,9 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
           {onlineWorkers.map(w => {
             const addr = formatHostPort(w.host, w.port)
             const isChecked = selected.has(addr)
-            const statusColor = w.status === 'Online' ? 'bg-emerald-400' : 'bg-slate-500'
+            const statusColor = w.status === 'Online' ? 'bg-ui-positive' : 'bg-ui-muted'
             return (
-              <label key={w.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-slate-200 transition hover:bg-slate-900">
+              <label key={w.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-ui-body transition hover:bg-ui-hover">
                 <input
                   type="checkbox"
                   checked={isChecked}
@@ -119,7 +119,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
                 />
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${statusColor}`} />
                 <span className="min-w-0 flex-1 truncate text-xs">{w.name}</span>
-                <span className="min-w-0 max-w-[60%] break-all text-xs text-slate-500">{addr}</span>
+                <span className="min-w-0 max-w-[60%] break-all text-xs text-ui-muted">{addr}</span>
               </label>
             )
           })}
@@ -130,9 +130,9 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
       {selectedList.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {selectedList.map(s => (
-            <span key={s.addr} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">
+            <span key={s.addr} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-ui-line bg-ui-info-bg px-2 py-0.5 text-xs text-ui-info">
               <span className="min-w-0 truncate" title={s.name}>{s.name}</span>
-              <Button onClick={() => toggleWorker(s.host, s.port)} variant="subtle" size="sm" className="h-5 shrink-0 px-1 py-0 text-blue-300 hover:text-red-300">&times;</Button>
+              <Button onClick={() => toggleWorker(s.host, s.port)} variant="subtle" size="sm" className="h-5 shrink-0 px-1 py-0 text-ui-info hover:text-ui-danger">&times;</Button>
             </span>
           ))}
         </div>
@@ -154,7 +154,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
 
       {/* Command preview */}
       {value && (
-        <div className="mt-2 break-all rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
+        <div className="mt-2 break-all rounded-lg border border-ui-line bg-ui-inset px-3 py-2 font-mono text-xs text-ui-muted">
           {t.clusterPage.cmdPreview}: --rpc {value}
         </div>
       )}

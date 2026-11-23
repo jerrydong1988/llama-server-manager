@@ -1,14 +1,14 @@
 .router-workspace { container: routing / inline-size; min-width: 0; }
-.router-panel { @apply min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700/70 dark:bg-slate-900; }
+.router-panel { @apply min-w-0 rounded-lg border border-ui-line bg-ui-surface; }
 .router-section-header { @apply mb-5 flex flex-wrap items-center justify-between gap-3; }
-.router-section-header h2 { @apply text-xl font-semibold tracking-tight text-slate-950 dark:text-slate-50; }
-.router-section-header p, .router-hint { @apply mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400; }
-.router-muted { @apply text-xs text-slate-600 dark:text-slate-400; }
-.router-label { @apply mb-1.5 block text-xs font-medium text-slate-700 dark:text-slate-300; }
-.router-input { @apply h-9 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100; }
-.router-tabs, .router-editor-tabs { @apply flex flex-wrap gap-x-6 border-b border-slate-200 dark:border-slate-700/70; }
-.router-tabs button, .router-editor-tabs button { @apply relative inline-flex items-center justify-center gap-2 py-3 text-sm font-medium text-slate-600 hover:text-blue-700 dark:text-slate-400 dark:hover:text-blue-300; }
-.router-tabs button[aria-selected=true], .router-editor-tabs button[aria-pressed=true] { @apply text-blue-700 dark:text-blue-300; }
+.router-section-header h2 { @apply text-xl font-semibold tracking-tight text-ui-ink; }
+.router-section-header p, .router-hint { @apply mt-1 text-xs leading-5 text-ui-muted; }
+.router-muted { @apply text-xs text-ui-muted; }
+.router-label { @apply mb-1.5 block text-xs font-medium text-ui-body; }
+.router-input { @apply h-9 w-full min-w-0 rounded-lg border border-ui-control bg-ui-surface px-3 text-sm text-ui-ink focus:border-ui-focus; }
+.router-tabs, .router-editor-tabs { @apply flex flex-wrap gap-x-6 border-b border-ui-line; }
+.router-tabs button, .router-editor-tabs button { @apply relative inline-flex items-center justify-center gap-2 py-3 text-sm font-medium text-ui-muted hover:text-ui-action-ink; }
+.router-tabs button[aria-selected=true], .router-editor-tabs button[aria-pressed=true] { @apply text-ui-action-ink; }
 .router-tabs button[aria-selected=true]::after, .router-editor-tabs button[aria-pressed=true]::after { content: ''; background: currentColor; @apply absolute inset-x-0 bottom-0 h-0.5; }
 .router-key-split { display: grid; grid-template-columns: minmax(0,1fr); gap: 1rem; align-items: start; }
 .router-key-split.is-editing { grid-template-columns: minmax(0,1fr) clamp(20rem,34%,28rem); }
@@ -16,12 +16,12 @@
 .router-key-tools { @apply mb-3 flex flex-wrap items-center justify-between gap-2; }
 .router-key-search { width: 12.5rem; max-width: 100%; }
 .router-filters { @apply flex flex-wrap items-center gap-1; }
-.router-filters button { @apply inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800; }
-.router-filters button[aria-pressed=true], .router-pager button[aria-current] { @apply bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-300; }
+.router-filters button { @apply inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-ui-muted hover:bg-ui-hover; }
+.router-filters button[aria-pressed=true], .router-pager button[aria-current] { @apply bg-ui-action font-semibold text-ui-action-ink; }
 .router-key-rows { min-height: calc(2.25rem + 8 * 2.875rem); }
 .router-table { @apply w-full border-collapse text-left text-sm; }
-.router-table th { @apply h-9 bg-slate-50 px-3 text-xs font-medium text-slate-600 dark:bg-slate-800/70 dark:text-slate-300; }
-.router-table td { @apply border-t border-slate-200 px-3 py-2 dark:border-slate-800; }
+.router-table th { @apply h-9 bg-ui-inset px-3 text-xs font-medium text-ui-body; }
+.router-table td { @apply border-t border-ui-line px-3 py-2; }
 .router-key-table { table-layout: fixed; }
 .router-key-table td { height: 2.875rem; }
 .router-key-table th:first-child { width: 24%; }
@@ -29,37 +29,33 @@
 .router-key-table .key-rate { width: 16%; }
 .router-key-table .key-limit { width: 14%; }
 .router-key-table .key-arrow { width: 2rem; padding-left: 0; }
-.router-key-table .key-arrow svg { @apply ml-auto text-slate-400; }
+.router-key-table .key-arrow svg { @apply ml-auto text-ui-muted; }
 .router-key-table .numeric { @apply text-right tabular-nums; }
-.router-key-table tr { @apply cursor-pointer; }
-.router-key-table thead tr { cursor: default; }
-.router-key-table tbody tr:hover { @apply bg-slate-50 dark:bg-slate-800/60; }
-.router-key-table tr[data-selected=true] { @apply bg-blue-50 dark:bg-blue-500/15; }
 .router-key-table td:first-child button { @apply block max-w-full truncate py-1 text-left font-semibold; }
-.router-key-table tr[data-selected=true] td:first-child { @apply text-blue-700 dark:text-blue-300; }
-.router-key-state { @apply inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-slate-600 dark:text-slate-400; }
+.router-key-table tr[data-selected=true] td:first-child { @apply text-ui-action-ink; }
+.router-key-state { @apply inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-ui-muted; }
 .router-key-state > span { @apply h-1.5 w-1.5 rounded-full border border-current; }
-.router-key-state[data-enabled=true] { @apply text-emerald-700 dark:text-emerald-300; }
+.router-key-state[data-enabled=true] { @apply text-ui-positive; }
 .router-key-state[data-enabled=true] > span { background: currentColor; }
-.router-pager { @apply flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-3 py-2 text-xs tabular-nums text-slate-600 dark:border-slate-700 dark:text-slate-400; }
+.router-pager { @apply flex flex-wrap items-center justify-between gap-2 border-t border-ui-line px-3 py-2 text-xs tabular-nums text-ui-muted; }
 .router-pager nav, .router-pager nav > span { @apply flex items-center gap-1; }
-.router-pager button { @apply grid h-7 min-w-7 place-items-center rounded px-1 hover:bg-slate-100 disabled:opacity-35 dark:hover:bg-slate-800; }
-.router-empty { @apply grid min-h-48 place-content-center justify-items-center gap-2 p-4 text-center text-sm text-slate-600 dark:text-slate-400; }
+.router-pager button { @apply grid h-7 min-w-7 place-items-center rounded px-1 hover:bg-ui-hover disabled:opacity-35; }
+.router-empty { @apply grid min-h-48 place-content-center justify-items-center gap-2 p-4 text-center text-sm text-ui-muted; }
 .router-editor { @apply sticky top-0 flex flex-col; }
 .router-editor-tabs { @apply gap-4 px-4; }
 .router-editor-tabs button { @apply py-2 text-xs; }
 .router-editor-form { @apply flex min-h-0 flex-1 flex-col; }
 .router-editor-fields { @apply grid content-start gap-4 p-4; }
-.router-divider { @apply border-t border-slate-200 pt-3 dark:border-slate-700/70; }
-.router-editor-footer { @apply sticky bottom-0 z-[1] mt-auto flex flex-wrap justify-end gap-2 rounded-b-lg border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700/70 dark:bg-slate-900; }
-.router-workspace button:focus-visible, .router-workspace summary:focus-visible, .router-workspace input:focus-visible { @apply outline outline-2 outline-offset-2 outline-blue-500; }
-.router-switch { @apply relative m-0 h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-slate-400 checked:bg-emerald-600 dark:bg-slate-600 dark:checked:bg-emerald-600; }
-.router-switch::after { content: ''; @apply absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white; }
+.router-divider { @apply border-t border-ui-line pt-3; }
+.router-editor-footer { @apply sticky bottom-0 z-[1] mt-auto flex flex-wrap justify-end gap-2 rounded-b-lg border-t border-ui-line bg-ui-surface px-4 py-3; }
+.router-workspace button:focus-visible, .router-workspace summary:focus-visible, .router-workspace input:focus-visible { @apply outline outline-2 outline-offset-2 outline-ui-focus; }
+.router-switch { @apply relative m-0 h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-ui-control checked:bg-ui-positive; }
+.router-switch::after { content: ''; @apply absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-ui-surface; }
 .router-switch:checked::after { transform: translateX(1rem); }
-.router-setting { @apply border-b border-slate-200 last:border-b-0 dark:border-slate-700/70; }
+.router-setting { @apply border-b border-ui-line last:border-b-0; }
 .router-setting > summary { @apply flex cursor-pointer list-none items-center gap-2 px-4 py-3.5 text-sm font-semibold; }
 .router-setting > summary::-webkit-details-marker { display: none; }
-.router-setting > summary .router-chevron { @apply ml-1 shrink-0 text-slate-500; }
+.router-setting > summary .router-chevron { @apply ml-1 shrink-0 text-ui-muted; }
 .router-setting[open] > summary .router-chevron { transform: rotate(90deg); }
 .router-setting-body { @apply space-y-3 px-4 pb-4; }
 .is-editing .key-limit { display: none; }

@@ -1,3 +1,4 @@
+import { fixtureIntervals, fixturePrefill, replayRequests } from './prefillFixtures'
 import { routerPerformanceMock, routerBudgetsMock } from './routerManagementMock'
 import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
@@ -47,10 +48,13 @@ const QWEN_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Qwen-BF16.gguf'
 const LLAVA_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Llava-BF16.gguf'
 const DOCS_MODEL_ROOT = 'C:\\AI\\Models'
 const DOCS_ENGINE_ROOT = 'C:\\AI\\Engines'
-const DOCS_CHAT_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Qwen3-8B-Q4_K_M.gguf`
-const DOCS_VISION_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Qwen3-VL-7B-Q5_K_M.gguf`
-const DOCS_EMBEDDING_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Embedding-Mini-Q8_0.gguf`
-const DOCS_PROJECTOR_PATH = `${DOCS_MODEL_ROOT}\\mmproj-Qwen3-VL-F16.gguf`
+const nestedGuideInventory = IS_DOCS_SCENARIO && new URLSearchParams(location.search).get('tree') === 'branches'
+const guideModelPath = (folder: string, name: string) =>
+  nestedGuideInventory ? `${DOCS_MODEL_ROOT}\\${folder}\\${name}` : `${DOCS_MODEL_ROOT}\\${name}`
+const DOCS_CHAT_MODEL_PATH = guideModelPath('Qwen\\Qwen3-8B', 'Qwen3-8B-Q4_K_M.gguf')
+const DOCS_VISION_MODEL_PATH = guideModelPath('Qwen\\Qwen3-VL-7B', 'Qwen3-VL-7B-Q5_K_M.gguf')
+const DOCS_EMBEDDING_MODEL_PATH = guideModelPath('Embeddings', 'Embedding-Mini-Q8_0.gguf')
+const DOCS_PROJECTOR_PATH = guideModelPath('Qwen\\Qwen3-VL-7B', 'mmproj-Qwen3-VL-F16.gguf')
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
@@ -169,7 +173,29 @@ const docsModels: ModelInfo[] = [
   },
 ]
 
-const models = BROWSER_SCENARIO === 'guide-assets-only' ? [qwenProjector, { ...model, file_type: 'imatrix' }] : BROWSER_SCENARIO === 'guide-empty' ? [] : IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
+function modelTreeLayoutFixture(): ModelInfo[] {
+  return ['gemma-4-12b-it', 'gemma-4-26B-A4B-it'].flatMap(family => {
+    const files = [
+      { relative: 'MTP/mtp-' + family + '-Q8_0.gguf', asset: model, quant: 'Q8_0' },
+      { relative: family + '-UD-Q8_K_XL.gguf', asset: model, quant: 'Q8_K_XL' },
+      { relative: 'mmproj-BF16.gguf', asset: qwenProjector, quant: 'BF16' },
+      { relative: 'mmproj-F16.gguf', asset: qwenProjector, quant: 'F16' },
+      { relative: 'mtp-' + family + '.gguf', asset: model, quant: 'Q8_0' },
+    ]
+    return files.map(({ relative, asset, quant }) => {
+      const name = relative.slice(relative.lastIndexOf('/') + 1)
+      const path = ['C:\\browser-test\\models', family + '-GGUF', ...relative.split('/')].join('\\')
+      return { ...asset, id: path, name, path, quant_type: quant }
+    })
+  })
+}
+
+const models = (() => {
+  if (BROWSER_SCENARIO === 'model-tree-layout') return modelTreeLayoutFixture()
+  if (BROWSER_SCENARIO === 'guide-assets-only') return [qwenProjector, { ...model, file_type: 'imatrix' }]
+  if (BROWSER_SCENARIO === 'guide-empty') return []
+  return IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
+})()
 
 const engine: EngineInfo = {
   id: ENGINE_ID,
@@ -881,7 +907,11 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
   return { command, unsupportedFlags, emittedOverrideKeys: emitted }
 }
 
+const missingSensors = new URLSearchParams(location.search).get('sensors') === 'missing'
 const systemMetrics: SystemMetrics = {
+  gpu_temperature_c: HAS_MONITORING_DATA && !missingSensors ? 48 : null,
+  gpu_power_w: HAS_MONITORING_DATA && !missingSensors ? (IS_DOCS_SCENARIO ? 76 : 36) : null,
+  gpu_board_power_w: null,
   cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 24 : 8) : 0,
   memory_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 11 * 1024 : 14 * 1024) : 128,
   uptime_secs: 30,
@@ -891,27 +921,29 @@ const systemMetrics: SystemMetrics = {
   system_cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 31 : 9) : 0,
   system_memory_total_mb: IS_DOCS_SCENARIO ? 65_536 : 32_768,
   system_memory_used_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 27 * 1024 : 14 * 1024) : 8_192,
-  gpu_vendor: IS_DOCS_SCENARIO ? 'NVIDIA' : 'Mock',
+  gpu_vendor: IS_DOCS_SCENARIO ? 'NVIDIA' : 'AMD',
   gpu_name: IS_DOCS_SCENARIO ? 'NVIDIA GeForce RTX 5080' : 'Browser Test GPU',
 }
 
+const prefillDemo = new URLSearchParams(location.search).get('prefill')
 const monitoringNow = Date.now()
 const monitoringSessionId = 'browser-monitoring-session'
 const stoppedMonitoringSessionId = 'browser-stopped-monitoring-session'
+const vectorDemo = new URLSearchParams(location.search).get('workload') === 'vector'
 const monitoringFrame: MonitoringFrame = {
   instanceId: INSTANCE_ID,
   sessionId: monitoringSessionId,
   sessionStartedAt: monitoringNow - 120_000,
   ts: monitoringNow,
-  workload: 'inference',
+  workload: vectorDemo ? 'embedding' : 'inference',
   state: 'active',
   throughput: IS_DOCS_SCENARIO ? 47.6 : 25.8,
   throughputUnit: 'tok/s',
   outputTokensPerSecond: IS_DOCS_SCENARIO ? 47.6 : 25.8,
   inputTokensPerSecond: 0,
-  itemsPerSecond: null,
+  itemsPerSecond: vectorDemo ? 12 : null,
   activeRequests: 1,
-  queuedRequests: 0,
+  queuedRequests: vectorDemo ? 2 : 0,
   slotCapacity: 1,
   busySlots: 1,
   averageLatencyMs: null,
@@ -936,10 +968,11 @@ const monitoringSessions = [
     config_hash: 'browser-active-config',
     engine_id: ENGINE_ID,
     backend: IS_DOCS_SCENARIO ? 'CUDA' : 'Vulkan',
-    workload: 'inference',
+    workload: vectorDemo ? 'embedding' : 'inference',
     started_at: monitoringNow - 120_000,
     stopped_at: null,
     duration_secs: null,
+    avg_items_per_sec: vectorDemo ? 12 : null,
     avg_tokens_per_second: IS_DOCS_SCENARIO ? 47.6 : 25.8,
     avg_tokens_per_sec: IS_DOCS_SCENARIO ? 47.6 : 25.8,
     peak_vram_mb: IS_DOCS_SCENARIO ? 9_420 : 31 * 1024,
@@ -1018,7 +1051,8 @@ const monitoringSeries = Array.from({ length: 101 }, (_, index) => {
     throughput,
     outputTokensPerSecond: throughput,
     inference: {
-      prefill: phaseRate(800 + (index % 6) * 100, step === 1 || step === 13, 'log'),
+      instancePrefill: fixtureIntervals(ts, prefillDemo, index),
+      prefill: phaseRate(800 + (index % 6) * 100, prefillDemo !== 'replay' && (step === 1 || step === 13), 'log'),
       decode: phaseRate(throughput, step === 1 || (step >= 3 && step <= 9) || (step >= 15 && step <= 22), 'slots'),
       tasks: [],
     },
@@ -1426,8 +1460,19 @@ mockIPC((command, payload) => {
       return HAS_MONITORING_DATA ? clone(monitoringSessions) : []
     case 'get_telemetry_session_detail':
       return {
-        samples: HAS_MONITORING_DATA ? clone(monitoringSamples) : [],
-        requests: [],
+        samples: HAS_MONITORING_DATA ? clone(monitoringSamples.filter(s => s.session_id === args.sessionId)) : [],
+        request_prefill: HAS_MONITORING_DATA && !vectorDemo && args.sessionId === monitoringSessionId
+          ? fixturePrefill(monitoringNow, prefillDemo) : {asOf:monitoringNow,points:[],latest:null,bucketed:false},
+        requests: prefillDemo === 'replay' && args.sessionId === monitoringSessionId
+          ? replayRequests(monitoringNow,monitoringSessionId)
+          : HAS_MONITORING_DATA && args.sessionId === monitoringSessionId ? Array.from({length: 5}, (_,i) => ({
+          task_id: 784-i, completed_at: monitoringNow - (i+1)*18000, source:'log', prompt_tokens: 1800+i*64, generated_tokens: 192+i,
+          prompt_tps: 510+i*5, generation_tps: 25+i/10, total_time_ms: 8200+i*150, http_status: 200,
+        })) : [],
+        vector_activity: vectorDemo && args.sessionId === monitoringSessionId ? [
+          {id:42,source:'log',completed_at:monitoringNow-5000,duration_ms:2000,item_count:24,input_tokens:48,http_status:null,error_text:null}
+        ] : [],
+        context_usage: HAS_MONITORING_DATA && args.sessionId === monitoringSessionId ? {ts:monitoringNow, used:8960, capacity:32768} : null,
         analysis: clone(emptyMonitoringAnalysis),
         diagnostics: [],
       }

@@ -45,14 +45,14 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
 
   return <section aria-label={copy.title} className="space-y-4 p-5" data-testid="background-tasks">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <p className="max-w-2xl text-sm text-slate-600 dark:text-slate-300">{copy.description}</p>
+      <p className="max-w-2xl text-sm text-ui-muted">{copy.description}</p>
       <div className="flex flex-wrap gap-2"><Button variant="danger" disabled={busy || !!model.listError || !model.tasks.some(task => isFinishedTask(task.status))}
         onClick={() => void removeHistory()}><Trash2 aria-hidden="true" className="h-4 w-4" />{model.removing === '*' ? copy.removing : copy.clear}</Button>
       <Button onClick={model.refresh} disabled={model.loading}>
         <RefreshCw aria-hidden="true" className={`h-4 w-4 ${model.loading ? 'animate-spin motion-reduce:animate-none' : ''}`} />{copy.refresh}
       </Button></div>
     </div>
-    <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{copy.scope}</p>
+    <p className="text-xs leading-5 text-ui-muted">{copy.scope}</p>
     <div className="flex flex-col gap-3 sm:flex-row">
       <TextInput aria-label={copy.search} placeholder={copy.search} value={query} onChange={event => setQuery(event.target.value)} />
       <SelectInput aria-label={copy.filter} value={status} onChange={event => setStatus(event.target.value)}>
@@ -60,35 +60,35 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
         {Object.entries(copy.states).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </SelectInput>
     </div>
-    {model.listError && <p role="alert" className="break-words text-sm text-red-700 dark:text-red-300">{copy.stale} {model.listError}</p>}
+    {model.listError && <p role="alert" className="break-words text-sm text-ui-danger">{copy.stale} {model.listError}</p>}
     {model.historyFeedback && <p role={model.historyFeedback.error && model.historyFeedback.code !== 'NOT_FOUND' ? 'alert' : 'status'} className="break-words text-sm">
       {model.historyFeedback.code === 'TASK_ACTIVE' ? copy.activeProtected : model.historyFeedback.code === 'NOT_FOUND' ? copy.alreadyDeleted
         : model.historyFeedback.error ? `${model.historyFeedback.code}: ${model.historyFeedback.error}` : `${copy.deleted} ${model.historyFeedback.count}`}
     </p>}
-    <div className="text-xs text-slate-600 dark:text-slate-400">{rows.length} / {model.tasks.length} {copy.records}</div>
+    <div className="text-xs text-ui-muted">{rows.length} / {model.tasks.length} {copy.records}</div>
     <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <div className="max-h-[48vh] min-w-0 space-y-2 overflow-y-auto p-1" aria-busy={model.loading}>
-        {!rows.length && <p role="status" className="p-4 text-sm text-slate-600 dark:text-slate-300">{model.loading ? copy.loading : model.tasks.length ? copy.noMatches : copy.empty}</p>}
-        {rows.map(task => <button type="button" key={task.id} data-testid={`task-${task.id}`} aria-pressed={model.selectedId === task.id}
+        {!rows.length && <p role="status" className="p-4 text-sm text-ui-muted">{model.loading ? copy.loading : model.tasks.length ? copy.noMatches : copy.empty}</p>}
+        {rows.map(task => <button type="button" key={task.id} data-testid={`task-${task.id}`} aria-pressed={model.selectedId === task.id} data-selected={model.selectedId === task.id}
           onClick={() => model.selectTask(task.id)}
-          className={`w-full rounded-lg border p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${model.selectedId === task.id ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900'}`}>
+          className="console-list-row w-full rounded-lg border border-ui-line p-3 text-left">
           <span className="flex flex-wrap items-center justify-between gap-2"><span className="break-all text-sm font-semibold">{task.operation}</span>{badge(task.status)}</span>
-          <span className="mt-2 block break-all font-mono text-xs text-slate-600 dark:text-slate-400">{task.id}</span>
-          <span className="mt-1 block text-xs text-slate-600 dark:text-slate-400">{copy.updated}: {date(task.updated_at)}</span>
+          <span className="mt-2 block break-all font-mono text-xs text-ui-muted">{task.id}</span>
+          <span className="mt-1 block text-xs text-ui-muted">{copy.updated}: {date(task.updated_at)}</span>
         </button>)}
       </div>
-      <div className="min-w-0 space-y-4 rounded-lg border border-slate-200 p-4 dark:border-slate-700" data-testid="task-detail">
-        {model.detailError && <p role="alert" className="break-words text-sm text-red-700 dark:text-red-300">{model.detailError}</p>}
+      <div className="min-w-0 space-y-4 rounded-lg border border-ui-line p-4" data-testid="task-detail">
+        {model.detailError && <p role="alert" className="break-words text-sm text-ui-danger">{model.detailError}</p>}
         {!detail && !model.detailError && <p className="text-sm">{model.selectedId ? copy.loading : copy.select}</p>}
         {detail && <>
           <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="break-all font-semibold">{detail.operation}</h3>{badge(detail.status)}</div>
           <dl className="space-y-2 text-xs">
-            <div><dt className="text-slate-600 dark:text-slate-400">{copy.id}</dt><dd className="select-text break-all font-mono">{detail.id}</dd></div>
-            <div><dt className="text-slate-600 dark:text-slate-400">{copy.created}</dt><dd>{date(detail.created_at)}</dd></div>
-            <div><dt className="text-slate-600 dark:text-slate-400">{copy.updated}</dt><dd>{date(detail.updated_at)}</dd></div>
+            <div><dt className="text-ui-muted">{copy.id}</dt><dd className="select-text break-all font-mono">{detail.id}</dd></div>
+            <div><dt className="text-ui-muted">{copy.created}</dt><dd>{date(detail.created_at)}</dd></div>
+            <div><dt className="text-ui-muted">{copy.updated}</dt><dd>{date(detail.updated_at)}</dd></div>
           </dl>
-          <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{copy.cancelHint}</p>
-          <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{copy.cleanupHint}</p>
+          <p className="text-xs leading-5 text-ui-muted">{copy.cancelHint}</p>
+          <p className="text-xs leading-5 text-ui-muted">{copy.cleanupHint}</p>
           <div className="flex flex-wrap gap-2">
             <Button disabled={detail.status !== 'queued' || busy || !!model.listError}
               onClick={() => void model.cancel(detail.id)}>{model.cancelling === detail.id ? copy.cancelling : copy.cancel}</Button>
@@ -100,7 +100,7 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
             {feedback.code === 'TASK_RUNNING' ? copy.runningRace : feedback.error
               ? `${feedback.code}: ${feedback.error}` : feedback.status === 'cancelled' ? copy.cancelled : copy.alreadyFinished}
           </p>}
-          {detail.status === 'interrupted' && <p className="text-sm text-amber-800 dark:text-amber-200">{copy.interrupted}</p>}
+          {detail.status === 'interrupted' && <p className="text-sm text-ui-warn">{copy.interrupted}</p>}
           {detail.error && <section className="space-y-2 break-words text-sm" aria-label={copy.error}>
             <h4 className="font-semibold">{copy.error}</h4>
             <p className="font-mono">{detail.error.code}</p><p>{detail.error.message}</p>
@@ -111,8 +111,8 @@ export function BackgroundTasksPanel({ onClose }: { onClose: () => void }) {
             {detail.result && typeof detail.result === 'object' && 'result_omitted' in detail.result && detail.result.result_omitted === true
               ? <p className="text-sm">{copy.omitted}</p>
               : detail.result !== null && detail.result !== undefined
-                ? <pre tabIndex={0} className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-100 p-3 text-xs dark:bg-slate-900">{JSON.stringify(detail.result, null, 2)}</pre>
-                : <p className="text-xs text-slate-600 dark:text-slate-400">{copy.noResult}</p>}
+                ? <pre tabIndex={0} className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-ui-inset p-3 text-xs">{JSON.stringify(detail.result, null, 2)}</pre>
+                : <p className="text-xs text-ui-muted">{copy.noResult}</p>}
           </section>
         </>}
       </div>

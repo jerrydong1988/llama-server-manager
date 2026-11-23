@@ -10,12 +10,12 @@ export default function InstanceRow({ instance }: { instance: Instance }) {
   const isRunning = instance.status === 'running'
 
   return (
-    <div className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-lg transition-colors">
+    <div className="flex items-center justify-between px-4 py-2.5 hover:bg-ui-hover rounded-lg transition-colors">
       <div className="flex items-center gap-3 min-w-0">
-        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isRunning ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isRunning ? 'bg-emerald-500 animate-pulse' : 'bg-ui-control'}`} />
         <div className="min-w-0">
-          <span className="font-medium text-sm text-slate-900 dark:text-slate-100">{instance.name}</span>
-          <span className="ml-3 text-xs text-slate-400 truncate">{instance.model} · :{instance.config.port}</span>
+          <span className="font-medium text-sm text-ui-ink">{instance.name}</span>
+          <span className="ml-3 text-xs text-ui-muted truncate">{instance.model} · :{instance.config.port}</span>
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0 ml-2">

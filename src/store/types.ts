@@ -354,6 +354,9 @@ export interface DownloadManagerSnapshot {
 }
 
 export interface SystemMetrics {
+  gpu_temperature_c?: number | null
+  gpu_power_w?: number | null
+  gpu_board_power_w?: number | null
   cpu_percent: number
   memory_mb: number
   uptime_secs: number
@@ -390,6 +393,7 @@ export interface TelemetrySampleSummary {
   gpu_name: string | null
   tokens_per_sec: number | null
   prompt_tokens_per_sec: number | null
+  prompt_seconds_total?: number | null
   prompt_tokens_total: number | null
   generated_tokens_total: number | null
   requests_total: number | null
@@ -424,6 +428,7 @@ export interface TelemetrySessionSummary {
   started_at: number
   stopped_at: number | null
   duration_secs: number | null
+  avg_items_per_sec?: number | null
   avg_tokens_per_second?: number
   avg_tokens_per_sec: number
   peak_vram_mb: number
@@ -535,7 +540,16 @@ export interface InferencePhaseTask {
   decode: InferenceRate
 }
 
+export interface InstancePrefillInterval {
+  ts: number
+  wallMs: number
+  tokens: number | null
+  rate: number | null
+  basis: 'engine_time' | 'wall_time'
+}
+
 export interface InferenceThroughput {
+  instancePrefill?: InstancePrefillInterval[]
   prefill: InferenceRate
   decode: InferenceRate
   tasks: InferencePhaseTask[]
@@ -610,11 +624,41 @@ export interface DiagnosticFinding {
   recommendation: string[]
 }
 
+export interface CompletedPrefill {
+  ts: number
+  request: string | null
+  tokens: number
+  elapsedMs: number
+  count: number
+  estimated: boolean
+}
+
+export interface RequestPrefillWindow {
+  asOf: number
+  points: CompletedPrefill[]
+  latest: CompletedPrefill | null
+  bucketed: boolean
+}
+
 export interface TelemetrySessionDetail {
+  request_prefill?: RequestPrefillWindow
   samples: TelemetrySampleSummary[]
   requests: InferenceRequestSummary[]
+  vector_activity?: RecentVectorActivity[]
+  context_usage?: { ts: number; used: number; capacity: number } | null
   analysis: TelemetrySessionAnalysis
   diagnostics: DiagnosticFinding[]
+}
+
+export interface RecentVectorActivity {
+  id: number
+  source: 'log' | 'proxy'
+  completed_at: number
+  duration_ms: number
+  item_count: number
+  input_tokens: number | null
+  http_status: number | null
+  error_text: string | null
 }
 
 export interface AppState {
@@ -622,7 +666,7 @@ export interface AppState {
   engines: EngineInfo[]
   instances: Instance[]
   instancesHydrated: boolean
-  instanceLifecycle: Record<string, InstanceLifecyclePhase>
+  instanceLifecycle: Partial<Record<string, InstanceLifecyclePhase>>
   checkpointStatuses: Record<string, CheckpointStatus>
   logs: Record<string, LogEntry[]>
   recentLogs: LogEntry[]
@@ -639,6 +683,7 @@ export interface AppState {
     statusFilter: 'all' | 'running' | 'stopped'
     engineFilter: string
   }
+  monitoringInstanceId: string
   activeConfigInstanceId: string | null
   activeTab: string
   darkMode: boolean
@@ -654,6 +699,7 @@ export interface AppState {
   lastCompletedTaskByInstance: Record<string, RunningInferenceTask | null>
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
+  setMonitoringInstanceId: (id: string) => void
   setActiveConfigInstanceId: (id: string | null) => void
   setSysMetrics: (m: SystemMetrics | null) => void
   addRuntimeWarning: (message: string) => void
