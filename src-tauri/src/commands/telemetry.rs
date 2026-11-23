@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 9;
+const VECTOR_SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -476,7 +477,11 @@ fn open_connection() -> Result<Connection, String> {
 }
 
 fn init_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
+    // The desktop and the detached service can open the same database on startup.
+    // Read the version and advance it under the same SQLite write lock.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法开始遥测数据库升级: {e}"))?;
+    tx.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS run_sessions (
             id TEXT PRIMARY KEY,
@@ -609,22 +614,26 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
-    let stored_version = conn
+    let stored_version = tx
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .map_err(|e| format!("无法读取遥测 schema 版本: {e}"))?;
-    if stored_version < SCHEMA_VERSION {
-        migrate_inference_request_columns(conn)?;
-        migrate_vector_schema(conn)?;
+    if stored_version < VECTOR_SCHEMA_VERSION {
+        migrate_inference_request_columns(&tx)?;
+        migrate_vector_schema(&tx)?;
     }
-    conn.execute(
+    tx.execute(
         "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
             ON inference_requests(source, completed_at DESC)",
         [],
     )
     .map_err(|e| format!("无法创建推理请求来源索引: {}", e))?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
-        .map_err(|e| format!("无法写入遥测 schema 版本: {}", e))?;
-    Ok(())
+    if stored_version < SCHEMA_VERSION {
+        migrate_prefill_schema(&tx)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(|e| format!("无法写入遥测 schema 版本: {e}"))?;
+    }
+    tx.commit()
+        .map_err(|e| format!("无法提交遥测数据库升级: {e}"))
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -719,14 +728,12 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
         }
     }
 
-    super::prefill::init_schema(conn).map_err(|e| e.to_string())?;
     let sample_columns = table_columns(conn, "metric_samples")?;
     for (name, definition) in [
         ("decode_calls_total", "INTEGER"),
         ("max_tokens_observed", "INTEGER"),
         ("gpu_name", "TEXT"),
         ("inference_throughput", "TEXT"),
-        ("prompt_seconds_total", "REAL"),
     ] {
         if !sample_columns.iter().any(|column| column == name) {
             conn.execute(
@@ -737,6 +744,19 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn migrate_prefill_schema(conn: &Connection) -> Result<(), String> {
+    // Some v9 preview databases already contain Prefill measurements.
+    let columns = table_columns(conn, "metric_samples")?;
+    if !columns.iter().any(|name| name == "prompt_seconds_total") {
+        conn.execute(
+            "ALTER TABLE metric_samples ADD COLUMN prompt_seconds_total REAL",
+            [],
+        )
+        .map_err(|e| format!("无法添加 Prefill 采样字段: {e}"))?;
+    }
+    super::prefill::init_schema(conn).map_err(|e| format!("无法初始化 Gufo Prefill 记录: {e}"))
 }
 
 struct RunSessionStart<'a> {
@@ -4415,6 +4435,82 @@ mod tests {
             })
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn version_nine_prefill_upgrade_preserves_existing_samples_and_requests() {
+        for (had_column, had_table) in [(false, false), (true, false), (false, true), (true, true)] {
+            let conn = Connection::open_in_memory().unwrap();
+            init_schema(&conn).unwrap();
+            seed_vector_session(&conn, "s", "model.gguf", "cpu", ModelWorkload::Inference);
+            conn.execute_batch(
+                "INSERT INTO metric_samples(session_id, instance_id, ts, prompt_seconds_total)
+                     VALUES ('s', 's', 10, 1.25);
+                 INSERT INTO gufo_prefill_requests VALUES ('s', 1, 10, 8, 4.0, 2000);
+                 INSERT INTO inference_requests(session_id, task_id, slot_id, completed_at, prompt_tokens, prompt_time_ms)
+                     VALUES ('s', 2, 0, 20, 9, 1000);
+                 CREATE TRIGGER reject_workload_rescan BEFORE UPDATE OF workload ON run_sessions
+                     BEGIN SELECT RAISE(ABORT, 'v9 workload backfill reran'); END;
+                 PRAGMA user_version = 9;",
+            )
+            .unwrap();
+            if !had_column {
+                conn.execute_batch("ALTER TABLE metric_samples DROP COLUMN prompt_seconds_total")
+                    .unwrap();
+                assert!(latest_samples(&conn, 1).is_err());
+            }
+            if !had_table {
+                conn.execute_batch("DROP TABLE gufo_prefill_requests").unwrap();
+            }
+
+            init_schema(&conn).unwrap();
+            init_schema(&conn).unwrap();
+            let version: i64 = conn
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+            let sample = latest_samples(&conn, 1).unwrap().pop().unwrap();
+            assert_eq!(sample.prompt_seconds_total, had_column.then_some(1.25));
+            assert_eq!(samples_for_session(&conn, "s", 2).unwrap().len(), 1);
+            let window = crate::commands::prefill::request_window(&conn, "s", 25).unwrap();
+            assert_eq!(window.points.len(), if had_table { 2 } else { 1 });
+            assert_eq!(window.latest.unwrap().tokens, 9);
+            conn.execute_batch(
+                "INSERT INTO metric_samples(session_id, instance_id, ts, prompt_seconds_total) VALUES ('s', 's', 30, 2.5);
+                 INSERT INTO gufo_prefill_requests VALUES ('s', 3, 30, 16, 8.0, 2000);",
+            )
+            .unwrap();
+            let sample = latest_samples(&conn, 1).unwrap().pop().unwrap();
+            let window = crate::commands::prefill::request_window(&conn, "s", 30).unwrap();
+            assert_eq!(sample.prompt_seconds_total, Some(2.5));
+            assert_eq!(window.latest.unwrap().tokens, 16);
+        }
+    }
+
+    #[test]
+    fn failed_prefill_upgrade_rolls_back_and_can_be_retried() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 9;
+             ALTER TABLE metric_samples DROP COLUMN prompt_seconds_total;
+             DROP TABLE gufo_prefill_requests;
+             CREATE VIEW gufo_prefill_requests AS SELECT 1;",
+        )
+        .unwrap();
+        assert!(init_schema(&conn).is_err());
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 9);
+        assert!(!column_names(&conn, "metric_samples")
+            .iter()
+            .any(|n| n == "prompt_seconds_total"));
+        conn.execute_batch("DROP VIEW gufo_prefill_requests").unwrap();
+        init_schema(&conn).unwrap();
+        assert!(latest_samples(&conn, 1).unwrap().is_empty());
+        let window = crate::commands::prefill::request_window(&conn, "s", 25).unwrap();
+        assert!(window.points.is_empty());
     }
 
     #[test]
