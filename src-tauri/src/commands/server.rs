@@ -7392,6 +7392,8 @@ mod perf_parser_tests {
                     std::thread::sleep(Duration::from_millis(3));
                     continue;
                 };
+                // Winsock can inherit the listener's nonblocking mode before the request arrives.
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();
