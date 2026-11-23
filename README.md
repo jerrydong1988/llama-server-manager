@@ -46,9 +46,9 @@ Use the [Download Center](https://download.cnzone.net/) for the recommended plat
 
 ## 界面预览 / Interface Preview
 
-截图使用隔离的演示数据展示当前界面。实际模型支持、参数能力和性能以所选引擎及运行结果为准。
+截图来自使用隔离演示数据的 v2.9.60 前端。使用顶栏的主题按钮切换明暗外观。侧栏“实例管理”和“下载管理”分别显示正在运行的实例数和正在传输的文件数。
 
-Screenshots use isolated demonstration data. Model support, parameter availability, and performance depend on the selected engine and actual workload.
+The screenshots show v2.9.60 with isolated demonstration data. Switch between light and dark themes in the header. The sidebar shows running instances beside Instances and active file transfers beside Downloads.
 
 ### 系统总览 / Dashboard
 
@@ -60,15 +60,21 @@ System resources, instances, models, engines, downloads, and actionable issues i
 
 ### 模型与下载 / Models and Downloads
 
-递归扫描 GGUF 目录，识别模型、分片和投影器；支持 ModelScope 与 HuggingFace 队列下载、断点续传、并发和限速策略。
+模型仓库扫描本地 GGUF 目录，按树形层级展示模型、分片和投影器。创建实例和配置参数时也可在这棵树中搜索文件，并查看量化、类型和大小。下载管理支持 ModelScope 与 Hugging Face 的队列下载、续传、并发和限速。
 
-Scan GGUF models, shards, and projectors; manage ModelScope and HuggingFace queues with resume, concurrency, and bandwidth policies.
+Browse scanned GGUF models, shards and projectors in the repository tree. The same tree lets you search files and inspect quantization, type and size when creating or configuring an instance. Downloads manages ModelScope and Hugging Face queues, resume, concurrency and bandwidth limits.
 
 ![模型仓库 / Model Repository](public/docs/guide/02-model-repository.png)
 
 ![下载管理 / Download Manager](public/docs/guide/03-download-manager.png)
 
 ### 实例配置 / Instance Configuration
+
+实例名称下的“运行中”标签标记正在运行的服务，整行底色标记当前操作对象。从参数配置点击“返回实例列表”，可回到该实例及其原有筛选位置。
+
+The Running label beneath an instance name identifies an active service. The row highlight identifies the selected instance. Back to instances restores that selection and the applicable filters after configuration.
+
+![实例列表中的运行状态与当前选择 / Instance status and selection](public/docs/guide/05-instance-manager.png)
 
 为每个 llama.cpp 实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整结构化选项，并依据所选 `llama-server --help` 进行运行时能力协商。当前上游稳定版 v1.0.0 基线跟踪 266 个参数条目。
 
@@ -92,7 +98,17 @@ Expose running instances through one production OpenAI / Anthropic-compatible ga
 
 ![实例路由 / Instance Routing](public/docs/guide/08-instance-routing.png)
 
+在“路由与实例”的路由表中点击对应行的对外模型名，即可更换目标或删除这一条路由。“API Key”页按调用方搜索、按状态筛选，每页显示八项。选择名称后可单独保存该 Key 的权限、限流和 Token 额度。
+
+In Routes & instances, select the public model name in the relevant row to change its target or delete that rule. The API Key tab supports caller search, status filters and eight keys per page. Select a name to edit and save its permissions, rate limits and token quotas.
+
+![API Key 分页列表和单个调用方的编辑区域 / Paged API key list and caller editor](public/docs/guide/15-routing-api-keys.png)
+
 ### 性能监控 / Performance Monitoring
+
+“实时概览”显示最近五分钟的趋势。展开“解码速度”并选择“预填充速度”，即可查看已完成请求的加权均速、实例实时速率和任务实时速率。大屏汇总服务健康与吞吐，驱动可提供时显示本机 GPU 温度和功率。
+
+Live overview shows the last five minutes. Open Decode speed and select Prefill speed for a weighted rate across completed requests, live instance counters or live task readings. The monitoring wall shows fleet health and throughput alongside host GPU temperature and power when the driver supplies them.
 
 查看 CPU、内存、GPU、显存、历史会话和诊断建议；生成模型分别显示 Prefill 输入速度、Decode 输出 tokens/s 与 slots，Embedding 输入 tokens/s、向量项/s，Reranker 输入 tokens/s、文档项/s。任务日志覆盖直连请求和应用内流量，代理请求统计补充 HTTP 请求数、耗时和失败率；未取得的来源会明确显示为不可用。
 
@@ -100,18 +116,20 @@ Inspect resources, history, and diagnostics with workload-aware metrics: separat
 
 ![性能监控 / Performance Monitoring](public/docs/guide/09-performance.png)
 
+![监控大屏的五分钟吞吐与本机 GPU 读数 / Fleet throughput and host GPU readings on the monitoring wall](public/docs/guide/10-monitoring-wall.png)
+
 ## 功能地图 / Feature Map
 
 | 页面 | 主要能力 | Page | Main capability |
 |---|---|---|---|
-| 系统总览 | 系统健康、实例控制、关注中心、近期活动 | Dashboard | Health, instance controls, attention items, recent activity |
+| 系统总览 | 资源总览、下一步建议、实例控制、今日路由与近期下载 | Dashboard | Resources, next steps, instance controls, today's routing and recent downloads |
 | 模型仓库 | GGUF 递归扫描、元信息、分片与投影器识别 | Models | Recursive inventory, metadata, shards, and projectors |
 | 下载管理 | 双源浏览、队列、暂停恢复、并发、限速 | Downloads | Dual-source browsing, queues, resume, concurrency, throttling |
 | 引擎管理 | 多版本扫描、后端识别、默认引擎 | Engines | Multi-version scanning, backend detection, defaults |
 | 实例管理 | 多实例、端口检查、启停、连接测试、命令预览 | Instances | Multi-instance lifecycle, port checks, health, command preview |
 | 参数配置 | 搜索、预设、校验、鉴权、缓存和推测解码 | Configuration | Search, presets, validation, auth, cache, speculative decoding |
 | 集群管理 | Worker 发现、本地与 SSH 启动、RPC 配置 | Cluster | Worker discovery, local or SSH launch, RPC configuration |
-| 实例路由 | 双协议 API、严格路由、调度、熔断、限流、可观测性 | Routing | Dual-protocol API, strict routing, scheduling, resilience, observability |
+| 实例路由 | 双协议 API、路由表、调用方密钥、调度与流量治理 | Routing | Dual-protocol API, route table, caller keys, scheduling and traffic controls |
 | 路由使用统计 | 请求诊断、Token 用量、Key 预算与强制额度、CSV 导出 | Router Usage | Request diagnostics, tokens, key budgets, hard quotas, CSV export |
 | 性能监控 | 生成与向量吞吐、双来源遥测、历史基线和诊断 | Performance | Generation and vector throughput, dual-source telemetry, baselines, diagnostics |
 | 监控大屏 | 服务健康、吞吐、压力、下载和告警 | Monitoring Wall | Health, throughput, pressure, downloads, alerts |

@@ -12,7 +12,7 @@ const publishedDir = path.join(projectRoot, 'public', 'docs', 'guide')
 const temporaryRoot = path.resolve(tmpdir())
 const outputDir = await mkdtemp(path.join(temporaryRoot, 'lsm-guide-capture-'))
 const baseUrl = 'http://127.0.0.1:4173'
-const appUrl = `${baseUrl}/?scenario=docs-screenshots`
+const appUrl = `${baseUrl}/?scenario=docs-screenshots&tree=branches`
 const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'))
 const version = packageJson.version
 
@@ -31,6 +31,8 @@ const pageShots = [
   { id: 'config', file: '12-gufo-configuration.png', target: '[data-testid="gufo-config-page"]', scenario: 'gufo' },
   { id: 'instances', file: '13-background-tasks.png', target: '[data-testid="background-tasks"]', scenario: 'default', tasks: true },
   { id: 'storage', file: '14-storage-maintenance.png', target: '[data-storage-group="private-scratch"]', scenario: 'storage-maintenance' },
+  { id: 'proxy', file: '15-routing-api-keys.png', target: '[role="tabpanel"][aria-labelledby="router-tab-keys"]', scenario: 'docs-screenshots', detail: 'keys' },
+  { id: 'instances', file: '16-model-picker.png', target: 'dialog.model-picker-dialog[open]', scenario: 'docs-screenshots', detail: 'picker' },
 ]
 
 const flows = [
@@ -122,6 +124,7 @@ async function waitForStableLayout(page) {
 
 async function assertCaptureState(page, expectedId) {
   const state = await page.evaluate(() => ({
+    version: document.querySelector('.shell-brand-copy small')?.textContent,
     marker: document.documentElement.dataset.tauriBrowserTest,
     unhandled: document.documentElement.dataset.tauriMockUnhandled,
     activeIds: [...document.querySelectorAll('[data-nav-id][aria-current="page"]')]
@@ -132,6 +135,7 @@ async function assertCaptureState(page, expectedId) {
   if (state.marker !== '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__') {
     throw new Error('documentation capture did not load the isolated browser-test backend')
   }
+  if (state.version !== `v${version}`) throw new Error(`Expected v${version} in the captured application, saw ${state.version}`)
   if (state.unhandled !== '[]') {
     throw new Error(`documentation capture has unhandled Tauri calls: ${state.unhandled}`)
   }
@@ -141,6 +145,39 @@ async function assertCaptureState(page, expectedId) {
   if (state.hoveredIds.length > 0) {
     throw new Error(`navigation hover residue detected: ${state.hoveredIds.join(', ')}`)
   }
+}
+
+async function openExampleKey(page) {
+  const refresh = page.locator('[data-guide="proxy-overview"]').getByRole('button', { name: '刷新' })
+  await refresh.waitFor()
+  await page.evaluate(async () => {
+    if (!window.__TAURI_BROWSER_TEST__) throw new Error('Expected the isolated documentation fixture')
+    const api = window.__TAURI_INTERNALS__
+    const config = await api.invoke('get_proxy_config')
+    const callers = ['桌面助手', '文档检索', '开发环境', '自动化测试', '编辑器', '团队应用', '数据分析', '临时演示', '归档任务', '移动客户端']
+    config.api_keys = callers.map((name, index) => ({
+      id: `guide-caller-${index}`, name, key: `sha256:${'a'.repeat(43)}`,
+      enabled: index !== 3 && index !== 7, scopes: ['inference', 'discovery'],
+      requests_per_minute: index % 2 ? 30 : 60, max_concurrent_requests: index % 2 ? 1 : 2,
+      daily_token_budget: 0, monthly_token_budget: 0, daily_token_limit: 0, monthly_token_limit: 0,
+      quota_default_output_tokens: 32768,
+    }))
+    await api.invoke('save_proxy_config', { config })
+  })
+  await refresh.click()
+  await page.getByRole('tab', { name: 'API Key', exact: true }).click()
+  await page.getByRole('button', { name: '编辑 桌面助手', exact: true }).click()
+  await page.getByRole('heading', { name: '编辑 API Key' }).waitFor()
+}
+
+async function openExampleModelTree(page) {
+  await page.locator('[data-guide=instance-create]').click()
+  const open = page.locator('[data-guide-dialog=create-instance]').getByRole('button', { name: '从模型仓库选择' })
+  await open.click()
+  const dialog = page.getByRole('dialog', { name: '从模型仓库选择' })
+  await dialog.getByText('Qwen3 VL 7B · Q5_K_M', { exact: true }).click()
+  await open.click()
+  await dialog.locator('[aria-pressed=true]').waitFor()
 }
 
 async function seedLogs(page) {
@@ -258,6 +295,11 @@ try {
     localStorage.setItem('lastTab', 'dashboard')
   })
   const page = await context.newPage()
+  // The sample series and the monitoring clock must describe the same instant
+  // even when capturing earlier chapters takes longer than the live-rate window.
+  const sampleTime = new Date()
+  sampleTime.setUTCHours(2, 30, 0, 0)
+  await page.clock.setFixedTime(sampleTime)
   await page.goto(appUrl, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => document.documentElement.dataset.tauriBrowserTest === '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__')
   await page.locator('[data-guide="dashboard"]').waitFor({ state: 'visible' })
@@ -265,7 +307,7 @@ try {
 
   for (const shot of pageShots) {
     if (shot.scenario) {
-      await page.goto(`${baseUrl}/?scenario=${shot.scenario}`, { waitUntil: 'domcontentloaded' })
+      await page.goto(shot.scenario === 'docs-screenshots' ? appUrl : `${baseUrl}/?scenario=${shot.scenario}`, { waitUntil: 'domcontentloaded' })
       await page.locator('[data-nav-id="instances"]').click()
     }
     if (shot.id === 'config') {
@@ -295,6 +337,13 @@ try {
       await page.getByRole('combobox', { name: '推测解码', exact: true }).selectOption('mtp')
       await page.getByLabel('匹配的 MTP 模型', { exact: true }).fill('C:\\Models\\Qwen3.8-Flash-Next-MTP-Q4_0.gguf')
     }
+    if (shot.detail) {
+      if (await page.locator('html').evaluate(el => el.classList.contains('dark'))) {
+        await page.getByRole('button', { name: '切换到明亮模式' }).click()
+      }
+      if (shot.detail === 'keys') await openExampleKey(page)
+      if (shot.detail === 'picker') await openExampleModelTree(page)
+    }
     if (shot.tasks) {
       await page.evaluate(() => {
         const task = window.__MANAGEMENT_TASK_TEST__.tasks.find(item => item.id === 'task-succeeded')
@@ -306,11 +355,16 @@ try {
     }
     await page.waitForFunction(id => document.querySelector(`[data-nav-id="${id}"]`)?.getAttribute('aria-current') === 'page', shot.id)
     await page.locator(shot.target).waitFor({ state: 'visible' })
+    if (shot.id === 'model-repo') {
+      await page.locator('[data-guide="model-search"]').getByText('Qwen3 VL 7B · Q5_K_M', { exact: true }).click()
+    }
     if (shot.id === 'perf') {
+      await page.locator('[data-reading="speed"] .monitor-value small').waitFor()
       await page.locator('[data-reading="speed"]').click()
       await page.getByRole('button', { name: '预填充速度', exact: true }).click()
       await page.locator('[data-prefill-summary]').waitFor({ state: 'visible' })
     }
+    if (shot.id === 'bigscreen') await page.locator('[data-wall-rate="live"]').waitFor()
     await waitForStableLayout(page)
     await assertCaptureState(page, shot.id)
     await page.screenshot({ path: path.join(outputDir, shot.file), animations: 'disabled' })

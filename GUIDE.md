@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.59 · Windows / macOS / Linux
+> v2.9.60 · Windows / macOS / Linux
 
 本说明介绍 llama.cpp 与 Windows Gufo 的模型、引擎、实例、路由、监控、后台任务和存储维护。应用内“使用说明”随安装包离线提供本文件和图片；更新应用后才会获得新版内置手册。截图使用隔离的演示数据。
 
@@ -120,17 +120,13 @@ Dashboard is the launch-time control surface. It shows system CPU, memory, and a
 
 ### 主要区域 / Main Areas
 
-- 顶部指标：运行实例、已登记模型与引擎、活动下载。
-- 系统健康：CPU、内存、GPU 和显存的实时压力。
-- 实例控制：直接查看状态并启动或停止实例。
-- 关注中心：引擎缺失、模型为空、实例异常或下载失败等可操作提示。
-- 最近活动：请求、下载和日志摘要。
+- 资源总览显示 CPU、内存、GPU 和显存读数，以及运行实例、传输和排队数量。
+- “下一步建议”列出当前可处理的问题。实例列表可按状态、模型或引擎筛选，并直接启动或停止实例。
+- “今日路由概览”按 UTC 展示请求结果。底部的“资源统计”和“近期下载”汇总本地资源与传输进展。
 
-- Top metrics for running instances, registered models and engines, and active downloads.
-- System health for CPU, memory, GPU, and VRAM pressure.
-- Instance controls for status and start or stop actions.
-- Actionable attention items for missing resources, unhealthy instances, or failed downloads.
-- Recent request, download, and log activity.
+- Resource Overview shows CPU, RAM, GPU and VRAM readings with running instance, transfer and queue counts.
+- Next Steps lists actionable issues. Filter the instance list by state, model or engine and start or stop an instance from its row.
+- Today's routing summary uses UTC. Resource counts and recent downloads appear together at the bottom.
 
 如果总览提示“未登记运行引擎”或“模型仓库为空”，先按提示按钮跳转并完成资源扫描，不要直接在实例页反复启动。
 
@@ -163,6 +159,8 @@ Model Repository recursively scans local folders for GGUF models, shards, `mmpro
 创建实例和配置参数时，“从模型仓库选择”使用同一棵目录树。搜索可以展开匹配文件所在的目录，清除搜索会恢复原来的折叠状态。点击可选文件即可填入当前字段。
 
 The file picker in Instance Management and Configuration uses the same repository tree. Searching expands matching branches. Clearing the search restores the previous folder layout. Choose a file to fill the current field.
+
+![浅色主题中的模型文件选择器、目录分支及当前选项 / Model picker in light mode with branches and the current selection](public/docs/guide/16-model-picker.png)
 
 ### 管理操作 / Management
 
@@ -260,14 +258,14 @@ An instance combines a model, engine, port, and independent configuration into a
 
 1. 点击“创建实例”。
 2. 输入实例名称。
-3. 从模型树选择主模型，并确认需要的 `mmproj`。
+3. 点击“从模型仓库选择”，在目录树中选择主模型。应用会尝试匹配同目录投影器，可在参数配置中核对或更换 `mmproj`。
 4. 选择引擎；留空时使用默认引擎。
 5. 输入端口并等待端口可用性检查。
 6. 创建后进入参数配置检查详细参数。
 
 1. Select Create Instance.
 2. Enter an instance name.
-3. Choose the main model and any required `mmproj`.
+3. Open the repository picker and choose the main model. The app looks for a matching projector in the same folder. Review or change the `mmproj` in Configuration.
 4. Select an engine or use the default.
 5. Enter a port and wait for availability validation.
 6. Open Configuration to review detailed parameters.
@@ -275,18 +273,24 @@ An instance combines a model, engine, port, and independent configuration into a
 ### 运行控制 / Runtime Controls
 
 - 启动前会生成命令、检查端口和必要路径。
-- 状态依次可能为已停止、启动中、运行中或错误。
+- 名称下方的实心“运行中”标签标记正在运行的进程。健康检查结果单独显示，整行底色表示当前操作对象。启动或停止期间，标签会显示相应进度。
+- 在参数配置中点击“返回实例列表”，可回到之前选中的行。搜索、状态和引擎筛选会随列表恢复。若刚修改的端口或引擎使该行被隐藏，应用会清除冲突的筛选条件。
 - “测试连接”使用实例鉴权设置检查健康或模型接口。
 - “打开 API 页面”会把通配监听地址转换为本机可访问地址。
 - 实例管理的“生成命令”按组展示实际启动参数。已保存的引擎能力缺失或过期时，会先重新检测该引擎；无法完整检测时显示错误，不把保守模式的最小命令当作完整预览。继承的默认值不会被强行写入命令。
 - 可重命名、排序或删除实例；删除前会原生确认。
 
 - Startup generates the command and validates ports and required paths.
-- Status may be stopped, starting, running, or error.
+- A filled Running label below the name identifies a live process. Its health check appears separately, and the row background marks the current selection. The label also shows when a start or stop is in progress.
+- Choose Back to instances in Configuration to reveal the selected row again. Search, status and engine filters are restored. A filter that would hide the row after an edit is cleared.
 - Test Connection checks health or model endpoints using the instance authentication settings.
 - Open API maps wildcard bind hosts to a local browser address.
 - In Instances, Command Preview groups actual launch arguments. If engine capability evidence is missing or stale, the manager probes the selected engine first. Incomplete detection produces an error rather than a misleading minimal command. Inherited defaults are not added to the command.
 - Instances can be renamed, reordered, or deleted with confirmation.
+
+桌面、CLI 和 MCP 使用同一套引擎选择和启动参数规则。如果启动过程中又修改了配置，新值会保留到下次启动。桌面重新连接后台服务时，会按进程身份恢复实例状态和日志连接。
+
+The desktop, CLI and MCP share engine selection and launch argument handling. An edit made during startup is retained for the next launch. When reconnecting to the background runtime, the desktop matches each process before reattaching its status and logs.
 
 ![启动、健康检查、性能和日志诊断流程 / Start, health, performance, and log diagnosis](public/docs/guide/flow-02-start-and-diagnose.png)
 
@@ -468,19 +472,21 @@ Instance Routing exposes native OpenAI and Anthropic formats on one listener, ro
 
 1. 先启动至少一个后端实例。
 2. 在「路由设置」展开「监听与 API 入口」设置主机和端口。在「模型调度」选择调度策略，按需调整流量治理、健康检查和浏览器来源。
-3. 在「路由与实例」添加公开模型名和目标实例。相同模型名可配置多个优先级层，点击模型名可调整权重与目标并发。保存后使用「测试路由」演练当前会命中的实例。
+3. 在「路由与实例」添加公开模型名和目标实例。要修改已有规则，在路由表中点击对应行的对外模型名，在「编辑路由」中更换目标、调整优先级或选择「删除路由」。同名规则按行编辑，点击页首「保存」使变更生效。「测试路由」可演练当前会命中的实例。
 4. 在「API Key」添加或搜索调用方，可按启用状态筛选。列表每页显示 8 个 Key。点击名称编辑权限、请求频率、并发和 Token 额度。「保存此 Key」仅提交本次密钥修改。
 5. 新增或轮换密钥时，请在保存前复制原文。临时显示持续 10 秒，保存后只保留不可逆摘要。可在「使用统计」查看调用量。
 6. 保存并启动路由，然后用 `/ready`、`/v1/models`、`/slots?model=<公开模型名>`、OpenAI 或 Anthropic 客户端验证。
 
 1. Start at least one backend instance.
 2. In Router settings, open Listener & API endpoints to set the host and port. Use Model scheduling for the scheduling policy and expand the traffic, health or browser origin sections as needed.
-3. In Routes & instances, add a public model ID and target instance. Select a model name to edit priority, weight and target concurrency. Save the configuration and use Test Route to see which instance would serve it.
+3. In Routes & instances, add a public model ID and target. To change an existing rule, select the public model name in its row. In Edit route, change the target or priority, or choose Delete route. Rules sharing a name are edited individually. Select Save in the header to apply the change, then Test route to preview target selection.
 4. In API Key, search by name or filter by status. Each page shows eight keys. Select a caller to edit its permissions, rate limits, concurrency or token quotas. Save this key applies only that credential’s changes.
 5. Copy newly created or rotated credentials before saving. Temporary reveal lasts ten seconds. Only a non-recoverable digest is stored. Usage statistics shows recorded traffic.
 6. Start routing and validate `/ready`, `/v1/models`, `/slots?model=<public-model>`, and the native OpenAI or Anthropic client path.
 
 ![实例、别名和统一 API 的请求路径 / Request path from instances and aliases to the unified API](public/docs/guide/flow-03-route-requests.png)
+
+![API Key 分页列表与单个调用方编辑器 / API Key workspace with pagination and the selected caller](public/docs/guide/15-routing-api-keys.png)
 
 ### API 格式与 Claude Code / API Formats and Claude Code
 
@@ -610,6 +616,10 @@ AMD 指标优先使用 ADLX，NVIDIA 使用 NVML，无法取得 GPU 指标时会
 
 AMD signals prefer ADLX and NVIDIA uses NVML; the app falls back to system metrics when GPU telemetry is unavailable. Stale live instance metrics are cleared when no instance is selected.
 
+升级至 v2.9.60 后，应用会在首次打开时补齐遥测库的 Prefill 字段，原有请求和采样继续可查。早期记录缺少的计算耗时及缺采时段在图中保留为空。
+
+On first use, v2.9.60 upgrades the telemetry database for Prefill measurements. Existing requests and samples remain available. Older records without a measured duration and intervals without samples appear as gaps.
+
 ### Prefill / Decode 双指标 / Dual Throughput
 
 实时概览 → 解码速度 → 预填充速度提供三种口径。
@@ -620,7 +630,7 @@ AMD signals prefer ADLX and NVIDIA uses NVML; the app falls back to system metri
 
 In Live overview, open Decode speed, then Prefill speed. **By request** plots completed engine work, weighted by processed tokens and phase duration across the five-minute window. Busy windows group more than 300 records by second. **Live instance** uses consecutive engine counters. llama.cpp uses the change in prefill compute seconds. Gufo counts new tokens per chunk and uses elapsed polling time across all requests, normally about one second. **Live tasks** uses consecutive log or slot observations. A ≈ marks a duration inferred from a rounded completion rate. A new process, broken sample chain or counter reset establishes a new baseline.
 
-「硬件与诊断」中的详细趋势用短柱显示 Prefill 输入速度，用折线显示 Decode 生成速度，孤立样本显示为点。两图纵轴独立，与请求活动带共用时间轴；并行处理和生成可以同时出现。大屏优先展示实例健康检查和当前生成吞吐，下方只保留 Decode 趋势及活动带。大屏折线取 15 秒窗口内连续活跃样本的均值，不跨越空闲、缺数或部分上报区间；顶部读数仍是最新观测。
+「硬件与诊断」的推理详情用短柱表示任务 Prefill，用折线表示 Decode。孤立样本显示为点，两图与请求活动带共用时间轴。大屏的主图显示最近五分钟的汇总吞吐，旁边列出本机 GPU 读数。
 
 近期速度来自连续任务日志或 `/slots` 计数采样，目标窗口约 3 秒，页面注明实际观察窗口和来源；缓存复用 Token 不计入 Prefill。日志的阶段平均只显示在“阶段平均”或请求统计中，`/metrics` 平均值不补成实时曲线。短请求可能没有连续实时样本，完成后仍可查看 Prefill 平均速度和耗时。
 
@@ -628,7 +638,7 @@ In Live overview, open Decode speed, then Prefill speed. **By request** plots co
 
 无需新增模型参数。保留引擎 INFO 进度日志，或启用 slots API，即可提供观测来源。后台运行时持续采集；重新打开窗口使用后台快照，进程/会话重建则重新建立计数基线，历史日志重放不会产生实时速度。槽位查询有超时限制、不会重叠：活跃时约每秒一次，空闲时约每 5 秒一次；GPU 指标和 SQLite 采样保持原有周期。
 
-Detailed diagnostics plot task Prefill as bars and Decode as line segments; isolated readings remain visible. Both share a time axis with a request activity strip that distinguishes concurrent phases, confirmed idle, and missing observations (hatching). Hollow points are reported subtotals, not complete rates. The wall emphasizes instance health and current Decode speed. Its trend averages consecutive active observations within 15-second windows, without bridging idle, missing or partial readings. Rates use recent log or slot observations; cached tokens and phase averages do not fill these charts.
+In Hardware & diagnostics, inference details plot task Prefill as bars and Decode as a line. Isolated observations appear as points. The two series share a timeline with the request activity strip. The wall’s main chart shows five minutes of fleet throughput beside the host GPU readings.
 
 Sampling, stale, unavailable, partial coverage, and observed zero are distinct states. Missing historical fields remain gaps. Background snapshots survive GUI reconnection; restarted processes establish fresh counter baselines, and replayed logs cannot manufacture live rates. Slot requests are bounded and serialized (about one second while active, five seconds while idle); GPU and SQLite sampling retain their existing cadence. No additional model parameter is required; INFO progress logs or the slots API provide observations.
 

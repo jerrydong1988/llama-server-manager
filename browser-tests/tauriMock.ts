@@ -48,10 +48,13 @@ const QWEN_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Qwen-BF16.gguf'
 const LLAVA_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Llava-BF16.gguf'
 const DOCS_MODEL_ROOT = 'C:\\AI\\Models'
 const DOCS_ENGINE_ROOT = 'C:\\AI\\Engines'
-const DOCS_CHAT_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Qwen3-8B-Q4_K_M.gguf`
-const DOCS_VISION_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Qwen3-VL-7B-Q5_K_M.gguf`
-const DOCS_EMBEDDING_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Embedding-Mini-Q8_0.gguf`
-const DOCS_PROJECTOR_PATH = `${DOCS_MODEL_ROOT}\\mmproj-Qwen3-VL-F16.gguf`
+const nestedGuideInventory = IS_DOCS_SCENARIO && new URLSearchParams(location.search).get('tree') === 'branches'
+const guideModelPath = (folder: string, name: string) =>
+  nestedGuideInventory ? `${DOCS_MODEL_ROOT}\\${folder}\\${name}` : `${DOCS_MODEL_ROOT}\\${name}`
+const DOCS_CHAT_MODEL_PATH = guideModelPath('Qwen\\Qwen3-8B', 'Qwen3-8B-Q4_K_M.gguf')
+const DOCS_VISION_MODEL_PATH = guideModelPath('Qwen\\Qwen3-VL-7B', 'Qwen3-VL-7B-Q5_K_M.gguf')
+const DOCS_EMBEDDING_MODEL_PATH = guideModelPath('Embeddings', 'Embedding-Mini-Q8_0.gguf')
+const DOCS_PROJECTOR_PATH = guideModelPath('Qwen\\Qwen3-VL-7B', 'mmproj-Qwen3-VL-F16.gguf')
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
